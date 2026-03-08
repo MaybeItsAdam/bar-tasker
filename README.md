@@ -1,4 +1,4 @@
-# Checkvist Focus
+# <img src="checkvist%20focus/Assets.xcassets/AppIcon.appiconset/ios-1024.png" alt="Checkvist Focus logo" width="28" /> Checkvist Focus
 
 A blazing-fast, keyboard-centric macOS Menu Bar application that seamlessly integrates with your [Checkvist](https://checkvist.com/) account to help you focus on your top priorities. It brings complex task management to your fingertips with advanced Vim-style navigation and editing.
 
@@ -25,6 +25,22 @@ A blazing-fast, keyboard-centric macOS Menu Bar application that seamlessly inte
   - Press `h` then `f` to toggle hiding/showing future tasks.
   - Due dates are color-coded (Red for overdue, Orange for due today).
 - **SwiftUI Native Settings:** Configure your Checkvist credentials and List ID directly in the macOS native Settings window.
+
+## Installation (Open Source Release)
+
+Because this app is open-source and not signed with a paid Apple Developer certificate, macOS Gatekeeper will prevent it from running initially. 
+
+To install and run Checkvist Focus:
+
+1. Download the latest `.dmg` from the [Releases page](https://github.com/yourusername/checkvist-focus/releases).
+2. Open the DMG and drag `Checkvist Focus.app` to your **Applications** folder.
+3. Open your Applications folder, **Right-Click (or Control-Click)** on the `Checkvist Focus` app icon, and select **"Open"**.
+4. A warning dialog will appear. Click **"Open"** again.
+
+*Alternatively, you can remove the quarantine flag via Terminal:*
+```bash
+xattr -cr /Applications/"Checkvist Focus.app"
+```
 
 ## Configuration
 
