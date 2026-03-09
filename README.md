@@ -145,6 +145,16 @@ Or via Terminal:
 xattr -cr /Applications/"Checkvist Focus.app"
 ```
 
+## Build DMG (Maintainers)
+
+Generate a polished drag-to-Applications installer DMG with Finder layout:
+
+```bash
+./scripts/build_dmg.sh 1.0.0
+```
+
+The output file is written to `build/checkvist-focus-v1.0.0.dmg`.
+
 ## Configuration
 
 Open **Settings** (right-click the menu bar icon → Settings):

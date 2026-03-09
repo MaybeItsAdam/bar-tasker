@@ -329,6 +329,7 @@ class CheckvistManager: ObservableObject {
   private var pendingReorderRequests: [(taskId: Int, position: Int)] = []
   private var reorderSyncTask: Task<Void, Never>? = nil
   private var reorderResyncTask: Task<Void, Never>? = nil
+  private var hasAttemptedRemoteKeyBootstrap = false
 
   // Bypass system PAC proxy scripts that cause -1003 errors
   private let session: URLSession = {
@@ -359,14 +360,22 @@ class CheckvistManager: ObservableObject {
       ?? .visible
     self.timerByTaskId = Self.timerDictionaryFromDefaults()
 
-    // Migrate remoteKey from UserDefaults to Keychain
+    // Migrate remoteKey from legacy UserDefaults storage to Keychain
     if let legacyKey = UserDefaults.standard.string(forKey: "checkvistRemoteKey"),
       !legacyKey.isEmpty
     {
       Self.setKeychainValue(legacyKey, forKey: "checkvistRemoteKey")
       UserDefaults.standard.removeObject(forKey: "checkvistRemoteKey")
     }
-    self.remoteKey = Self.keychainValue(forKey: "checkvistRemoteKey") ?? ""
+
+    // Delay keychain reads on very first launch to avoid immediate access prompts.
+    self.remoteKey = ""
+    let hasLaunchedBefore = UserDefaults.standard.bool(forKey: "didLaunchBefore")
+    if hasLaunchedBefore {
+      self.loadRemoteKeyFromKeychainIfNeeded()
+    } else {
+      UserDefaults.standard.set(true, forKey: "didLaunchBefore")
+    }
 
     setupBindings()
   }
@@ -374,8 +383,13 @@ class CheckvistManager: ObservableObject {
   private func setupBindings() {
     $username.sink { UserDefaults.standard.set($0, forKey: "checkvistUsername") }.store(
       in: &cancellables)
-    $remoteKey.sink { Self.setKeychainValue($0, forKey: "checkvistRemoteKey") }.store(
-      in: &cancellables)
+    $remoteKey
+      .dropFirst()
+      .removeDuplicates()
+      .sink { value in
+        guard !value.isEmpty else { return }
+        Self.setKeychainValue(value, forKey: "checkvistRemoteKey")
+      }.store(in: &cancellables)
     $listId.sink { UserDefaults.standard.set($0, forKey: "checkvistListId") }.store(
       in: &cancellables)
     $confirmBeforeDelete.sink { UserDefaults.standard.set($0, forKey: "confirmBeforeDelete") }
@@ -427,6 +441,14 @@ class CheckvistManager: ObservableObject {
   }
 
   // MARK: - Keychain
+
+  private func loadRemoteKeyFromKeychainIfNeeded() {
+    guard remoteKey.isEmpty, !hasAttemptedRemoteKeyBootstrap else { return }
+    hasAttemptedRemoteKeyBootstrap = true
+    if let stored = Self.keychainValue(forKey: "checkvistRemoteKey"), !stored.isEmpty {
+      remoteKey = stored
+    }
+  }
 
   private static func keychainValue(forKey key: String) -> String? {
     let query: [String: Any] = [
@@ -501,6 +523,7 @@ class CheckvistManager: ObservableObject {
   // MARK: - API
 
   @MainActor func login() async -> Bool {
+    loadRemoteKeyFromKeychainIfNeeded()
     guard !username.isEmpty, !remoteKey.isEmpty else {
       errorMessage = "Username or Remote Key is missing."
       return false
