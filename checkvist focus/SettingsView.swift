@@ -116,6 +116,8 @@ struct HotkeyRecorderField: NSViewRepresentable {
 
 struct SettingsView: View {
   @EnvironmentObject var checkvistManager: CheckvistManager
+  @State private var isLoadingLists = false
+  @State private var didAutoloadLists = false
 
   var body: some View {
     Form {
@@ -130,6 +132,38 @@ struct SettingsView: View {
         TextField("List ID", text: $checkvistManager.listId)
           .textFieldStyle(RoundedBorderTextFieldStyle())
           .autocorrectionDisabled()
+
+        #if DEBUG
+          Toggle("Ignore Keychain (dev only)", isOn: $checkvistManager.ignoreKeychainInDebug)
+        #endif
+
+        Button("Connect & Load Lists") {
+          Task { await loadLists(assignFirstIfMissing: true) }
+        }
+        .disabled(
+          checkvistManager.isLoading || isLoadingLists || !checkvistManager.canAttemptLogin)
+
+        if !checkvistManager.availableLists.isEmpty {
+          HStack {
+            Picker("Checklist", selection: $checkvistManager.listId) {
+              ForEach(checkvistManager.availableLists) { list in
+                Text("\(list.name) (\(list.id))").tag(String(list.id))
+              }
+            }
+            .pickerStyle(.menu)
+            Spacer(minLength: 8)
+            Button("Reload Lists") {
+              Task { await loadLists(assignFirstIfMissing: false) }
+            }
+            .disabled(checkvistManager.isLoading || isLoadingLists)
+          }
+        } else {
+          Text(
+            "Tip: Click \"Connect & Load Lists\" to choose a list by name. You only need List ID as fallback."
+          )
+          .font(.caption)
+          .foregroundColor(.secondary)
+        }
       }
       .padding(.bottom, 10)
 
@@ -142,17 +176,18 @@ struct SettingsView: View {
             .padding(.trailing, 8)
         }
 
-        Button("Test Connection & Save") {
+        Button("Save & Connect") {
           Task {
-            let success = await checkvistManager.login()
-            if success {
+            await loadLists(assignFirstIfMissing: true)
+            if !checkvistManager.listId.isEmpty {
+              checkvistManager.markOnboardingCompleted()
               await checkvistManager.fetchTopTask()
             }
           }
         }
         .disabled(
-          checkvistManager.isLoading || checkvistManager.username.isEmpty
-            || checkvistManager.remoteKey.isEmpty || checkvistManager.listId.isEmpty)
+          checkvistManager.isLoading || !checkvistManager.canAttemptLogin
+            || checkvistManager.listId.isEmpty)
       }
 
       if let errorMessage = checkvistManager.errorMessage {
@@ -198,24 +233,62 @@ struct SettingsView: View {
         }
         .padding(.top, 4)
 
-        Picker("Timer position in menu bar", selection: $checkvistManager.timerBarLeading) {
-          Text("After task").tag(false)
-          Text("Before task").tag(true)
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Timer position in menu bar")
+          Picker("", selection: $checkvistManager.timerBarLeading) {
+            Text("After task").tag(false)
+            Text("Before task").tag(true)
+          }
+          .labelsHidden()
+          .pickerStyle(.segmented)
+          .disabled(checkvistManager.timerMode != .visible)
         }
-        .pickerStyle(.segmented)
         .padding(.top, 4)
-        .disabled(checkvistManager.timerMode != .visible)
 
-        Picker("Timer mode", selection: $checkvistManager.timerMode) {
-          Text("Visible").tag(CheckvistManager.TimerMode.visible)
-          Text("Hidden").tag(CheckvistManager.TimerMode.hidden)
-          Text("Disabled").tag(CheckvistManager.TimerMode.disabled)
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Timer mode")
+          Picker("", selection: $checkvistManager.timerMode) {
+            Text("Visible").tag(CheckvistManager.TimerMode.visible)
+            Text("Hidden").tag(CheckvistManager.TimerMode.hidden)
+            Text("Disabled").tag(CheckvistManager.TimerMode.disabled)
+          }
+          .labelsHidden()
+          .pickerStyle(.segmented)
         }
-        .pickerStyle(.segmented)
         .padding(.top, 4)
       }
+
+      #if DEBUG
+        Section(header: Text("Debug")) {
+          Button("Reset onboarding state") {
+            checkvistManager.resetOnboardingForDebug()
+          }
+          .foregroundColor(.red)
+        }
+      #endif
     }
     .padding(20)
-    .frame(width: 400)
+    .frame(width: 520)
+    .task {
+      guard !didAutoloadLists else { return }
+      didAutoloadLists = true
+      if checkvistManager.canAttemptLogin && checkvistManager.availableLists.isEmpty {
+        await loadLists(assignFirstIfMissing: false)
+      }
+    }
+  }
+
+  @MainActor
+  private func loadLists(assignFirstIfMissing: Bool) async {
+    isLoadingLists = true
+    defer { isLoadingLists = false }
+    let success = await checkvistManager.login()
+    guard success else { return }
+    await checkvistManager.fetchLists()
+    if assignFirstIfMissing, checkvistManager.listId.isEmpty,
+      let first = checkvistManager.availableLists.first
+    {
+      checkvistManager.selectList(first)
+    }
   }
 }

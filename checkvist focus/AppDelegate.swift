@@ -64,6 +64,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     // Global key monitor for shortcuts not handled by onKeyPress (j/k, hf, Ctrl+↑↓)
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard let self, let w = self.window, w.isVisible else { return event }
+      guard event.window === w else { return event }
       return self.handleSupplementalKey(event: event) ? nil : event
     }
 
@@ -104,8 +105,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     Task { [weak self] in
       try? await Task.sleep(nanoseconds: 500_000_000)
-      await self?.checkvistManager.fetchTopTask()
-      self?.updateTitle()
+      guard let self else { return }
+      promptForMissingRemoteKeyIfNeeded()
+      if self.checkvistManager.needsInitialSetup {
+        self.togglePopover()
+      } else {
+        await self.checkvistManager.fetchTopTask()
+        self.updateTitle()
+      }
     }
   }
 
@@ -147,31 +154,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
       let pStyle = NSMutableParagraphStyle()
       pStyle.lineBreakMode = .byClipping
       let font = NSFont.menuBarFont(ofSize: 0)
-      let maxWidth: CGFloat = CGFloat(self.checkvistManager.maxTitleWidth)
       let horizontalPadding: CGFloat = 16
+      let timerStr = self.checkvistManager.timerBarString
+      let timerVisible = timerStr != nil
 
-      let timerVisible = self.checkvistManager.timerBarString != nil
-      let text: String
-      if let timerStr = self.checkvistManager.timerBarString {
-        let separator = "  "
-        let timerChunk = "\(timerStr)\(separator)"
-        let timerChunkWidth = NSAttributedString(
-          string: timerChunk, attributes: [.font: font]
+      let requestedMaxWidth: CGFloat = CGFloat(self.checkvistManager.maxTitleWidth)
+      let maxWidth: CGFloat
+      if let timerStr {
+        let timerOnlyWidth = NSAttributedString(
+          string: timerStr, attributes: [.font: font]
         ).size().width
-        let availableTaskWidth = max(24, maxWidth - horizontalPadding - timerChunkWidth)
-        let clippedTask = self.clippedMenuTitleTaskText(
-          taskText, maxWidth: availableTaskWidth, font: font)
-        text =
-          self.checkvistManager.timerBarLeading
-          ? "\(timerStr)\(separator)\(clippedTask)"
-          : "\(clippedTask)\(separator)\(timerStr)"
+        // Never allow settings width to hide an active timer.
+        maxWidth = max(requestedMaxWidth, timerOnlyWidth + horizontalPadding)
       } else {
-        let availableTaskWidth = max(24, maxWidth - horizontalPadding)
-        text = self.clippedMenuTitleTaskText(taskText, maxWidth: availableTaskWidth, font: font)
+        maxWidth = requestedMaxWidth
       }
 
+      let contentWidth = max(0, maxWidth - horizontalPadding)
+      let text = self.fittedMenuTitle(
+        taskText: taskText,
+        timerStr: timerStr,
+        maxContentWidth: contentWidth,
+        font: font,
+        timerLeading: self.checkvistManager.timerBarLeading
+      )
+      let displayText = text.isEmpty ? "…" : text
+
       let attrString = NSAttributedString(
-        string: text, attributes: [.paragraphStyle: pStyle, .font: font])
+        string: displayText, attributes: [.paragraphStyle: pStyle, .font: font])
 
       let textWidth = attrString.size().width
       let finalWidth = min(textWidth + horizontalPadding, maxWidth)
@@ -206,9 +216,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
       NSAttributedString(string: text, attributes: [.font: font]).size().width
     }
 
+    guard !taskText.isEmpty else { return "…" }
+    guard maxWidth > 0 else { return String(taskText.prefix(1)) }
+
     if width(of: taskText) <= maxWidth { return taskText }
     let ellipsis = "…"
-    if width(of: ellipsis) > maxWidth { return ellipsis }
+    if width(of: ellipsis) > maxWidth {
+      // At very tight widths, keep at least one visible character.
+      let chars = Array(taskText)
+      var low = 1
+      var high = chars.count
+      var best = String(chars.prefix(1))
+      while low <= high {
+        let mid = (low + high) / 2
+        let candidate = String(chars.prefix(mid))
+        if width(of: candidate) <= maxWidth {
+          best = candidate
+          low = mid + 1
+        } else {
+          high = mid - 1
+        }
+      }
+      return best
+    }
 
     let chars = Array(taskText)
     var low = 0
@@ -229,7 +259,69 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     return best
   }
 
+  private func fittedMenuTitle(
+    taskText: String,
+    timerStr: String?,
+    maxContentWidth: CGFloat,
+    font: NSFont,
+    timerLeading: Bool
+  ) -> String {
+    func width(of text: String) -> CGFloat {
+      NSAttributedString(string: text, attributes: [.font: font]).size().width
+    }
+
+    guard maxContentWidth > 0 else {
+      if let timerStr, !timerStr.isEmpty { return String(timerStr.prefix(1)) }
+      return String(taskText.prefix(1))
+    }
+    guard let timerStr, !timerStr.isEmpty else {
+      return clippedMenuTitleTaskText(taskText, maxWidth: maxContentWidth, font: font)
+    }
+
+    if width(of: timerStr) > maxContentWidth {
+      return clippedMenuTitleTaskText(timerStr, maxWidth: maxContentWidth, font: font)
+    }
+
+    let separator = " "
+    let full =
+      timerLeading ? "\(timerStr)\(separator)\(taskText)" : "\(taskText)\(separator)\(timerStr)"
+    if width(of: full) <= maxContentWidth { return full }
+
+    let chars = Array(taskText)
+    let ellipsis = "…"
+    var low = 0
+    var high = chars.count
+    var best: String = clippedMenuTitleTaskText(timerStr, maxWidth: maxContentWidth, font: font)
+
+    while low <= high {
+      let mid = (low + high) / 2
+      let candidateTask: String
+      if mid == chars.count {
+        candidateTask = taskText
+      } else if mid == 0 {
+        candidateTask = ellipsis
+      } else {
+        candidateTask = String(chars.prefix(mid)) + ellipsis
+      }
+
+      let candidate =
+        timerLeading
+        ? "\(timerStr)\(separator)\(candidateTask)"
+        : "\(candidateTask)\(separator)\(timerStr)"
+
+      if width(of: candidate) <= maxContentWidth {
+        best = candidate
+        low = mid + 1
+      } else {
+        high = mid - 1
+      }
+    }
+
+    return best
+  }
+
   @MainActor func handleSupplementalKey(event: NSEvent) -> Bool {
+    guard let popoverWindow = window, event.window === popoverWindow else { return false }
     let m = checkvistManager
     let shift = event.modifierFlags.contains(.shift)
     let ctrl = event.modifierFlags.contains(.control)
@@ -238,6 +330,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     // We consider the user "typing" if they are explicitly focused in the text box
     let isFocused = m.isQuickEntryFocused
+    let firstResponder = event.window?.firstResponder
+    let typingInNativeTextField = firstResponder is NSTextView
+    if m.needsInitialSetup {
+      // During onboarding, let all key events through to the setup form.
+      // Only handle Escape to close the window.
+      m.keyBuffer = ""
+      if event.keyCode == 53 {
+        closeWindow()
+        return true
+      }
+      return false
+    }
+    if typingInNativeTextField && !isFocused {
+      // Do not steal keystrokes from settings text inputs inside the popover.
+      m.keyBuffer = ""
+      return false
+    }
 
     let chars = event.charactersIgnoringModifiers ?? ""
 
@@ -639,7 +748,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
       if #available(macOS 14.0, *) {
         menu.addItem(makeSettingsMenuItem())
       } else {
-        menu.addItem(withTitle: "Settings...", action: #selector(menuSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(
+          title: "Settings...", action: #selector(menuSettings), keyEquivalent: ",")
+        settingsItem.keyEquivalentModifierMask = [.command]
+        menu.addItem(settingsItem)
       }
       menu.addItem(.separator())
       menu.addItem(withTitle: "Quit", action: #selector(menuQuit), keyEquivalent: "q")
@@ -663,6 +775,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
   }
 
   @objc func menuSettings() {
+    closeWindow()
+    if checkvistManager.remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      guard promptForMissingRemoteKey() else { return }
+    }
     if #available(macOS 13.0, *) {
       NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     } else {
@@ -677,17 +793,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     let hostingView = NSHostingView(
       rootView:
         SettingsLink {
-          Text("Settings...")
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+          HStack(spacing: 0) {
+            Text("Settings...")
+            Spacer(minLength: 0)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.leading, 16)
+          .padding(.trailing, 12)
+          .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
-        .frame(width: 180, alignment: .leading)
+        .frame(width: 220, alignment: .leading)
     )
     hostingView.frame.size = hostingView.fittingSize
     item.view = hostingView
     return item
+  }
+
+  private func promptForMissingRemoteKey() -> Bool {
+    let alert = NSAlert()
+    alert.alertStyle = .informational
+    alert.messageText = "OpenAPI Key Required"
+    alert.informativeText =
+      "Enter your Checkvist OpenAPI key to continue. You can edit it later in Settings."
+    alert.addButton(withTitle: "Save")
+    alert.addButton(withTitle: "Cancel")
+
+    let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+    field.placeholderString = "OpenAPI key"
+    alert.accessoryView = field
+
+    NSApp.activate(ignoringOtherApps: true)
+    let response = alert.runModal()
+    guard response == .alertFirstButtonReturn else { return false }
+
+    let entered = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !entered.isEmpty else { return false }
+    checkvistManager.remoteKey = entered
+    return true
+  }
+
+  private func promptForMissingRemoteKeyIfNeeded() {
+    let hasRemoteKey = !checkvistManager.remoteKey
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .isEmpty
+    guard !hasRemoteKey else { return }
+    _ = promptForMissingRemoteKey()
   }
 
   @objc func menuQuit() {

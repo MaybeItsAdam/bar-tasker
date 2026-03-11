@@ -213,7 +213,8 @@ class CheckvistManager: ObservableObject {
   var timerBarString: String? {
     guard timerMode == .visible, let currentTask else { return nil }
     let elapsed = totalElapsed(forTaskId: currentTask.id)
-    guard elapsed > 0 else { return nil }
+    let currentTaskHasActiveTimer = timedTaskId == currentTask.id
+    guard elapsed > 0 || currentTaskHasActiveTimer else { return nil }
     return CheckvistManager.formattedTimer(elapsed)
   }
 
@@ -247,6 +248,7 @@ class CheckvistManager: ObservableObject {
   // MARK: - Settings
   @Published var confirmBeforeDelete: Bool
   @Published var launchAtLogin: Bool
+  @Published var ignoreKeychainInDebug: Bool
   @Published var globalHotkeyEnabled: Bool
   /// Carbon keyCode for the global hotkey (default 49 = Space)
   @Published var globalHotkeyKeyCode: Int
@@ -255,6 +257,27 @@ class CheckvistManager: ObservableObject {
 
   /// Max width of the menu bar text
   @Published var maxTitleWidth: Double
+  @Published var onboardingCompleted: Bool
+
+  var hasCredentials: Bool {
+    !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  var canAttemptLogin: Bool {
+    let hasUsername = !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    guard hasUsername else { return false }
+    if hasCredentials { return true }
+    return usesKeychainStorage
+  }
+
+  var hasListSelection: Bool {
+    !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  var needsInitialSetup: Bool {
+    !onboardingCompleted || !canAttemptLogin || !hasListSelection
+  }
 
   /// Tasks visible at the current level, sorted by position
   var currentLevelTasks: [CheckvistTask] {
@@ -330,6 +353,16 @@ class CheckvistManager: ObservableObject {
   private var reorderSyncTask: Task<Void, Never>? = nil
   private var reorderResyncTask: Task<Void, Never>? = nil
   private var hasAttemptedRemoteKeyBootstrap = false
+  private static let remoteKeyDefaultsKey = "checkvistRemoteKey"
+  private static let ignoreKeychainInDebugDefaultsKey = "ignoreKeychainInDebug"
+  private static let onboardingCompletedDefaultsKey = "onboardingCompleted"
+  private var usesKeychainStorage: Bool {
+    #if DEBUG
+      !ignoreKeychainInDebug
+    #else
+      false
+    #endif
+  }
 
   // Bypass system PAC proxy scripts that cause -1003 errors
   private let session: URLSession = {
@@ -342,11 +375,20 @@ class CheckvistManager: ObservableObject {
   }()
 
   init() {
-    self.username = UserDefaults.standard.string(forKey: "checkvistUsername") ?? ""
-    self.listId = UserDefaults.standard.string(forKey: "checkvistListId") ?? ""
+    let storedUsername = UserDefaults.standard.string(forKey: "checkvistUsername") ?? ""
+    let storedListId = UserDefaults.standard.string(forKey: "checkvistListId") ?? ""
+    self.username = storedUsername
+    self.listId = storedListId
     self.confirmBeforeDelete =
       UserDefaults.standard.object(forKey: "confirmBeforeDelete") as? Bool ?? true
     self.launchAtLogin = UserDefaults.standard.object(forKey: "launchAtLogin") as? Bool ?? false
+    #if DEBUG
+      self.ignoreKeychainInDebug =
+        UserDefaults.standard.object(forKey: Self.ignoreKeychainInDebugDefaultsKey) as? Bool
+        ?? false
+    #else
+      self.ignoreKeychainInDebug = true
+    #endif
     self.globalHotkeyEnabled =
       UserDefaults.standard.object(forKey: "globalHotkeyEnabled") as? Bool ?? false
     self.globalHotkeyKeyCode =
@@ -354,44 +396,79 @@ class CheckvistManager: ObservableObject {
     self.globalHotkeyModifiers =
       UserDefaults.standard.object(forKey: "globalHotkeyModifiers") as? Int ?? 0x0800  // ⌥
     self.maxTitleWidth = UserDefaults.standard.object(forKey: "maxTitleWidth") as? Double ?? 150.0
+    if let storedOnboarding =
+      UserDefaults.standard.object(forKey: Self.onboardingCompletedDefaultsKey) as? Bool
+    {
+      self.onboardingCompleted = storedOnboarding
+    } else {
+      // Existing installs with saved account + list skip onboarding by default.
+      self.onboardingCompleted = !storedUsername.isEmpty && !storedListId.isEmpty
+    }
     self.timerBarLeading = UserDefaults.standard.object(forKey: "timerBarLeading") as? Bool ?? false
     self.timerMode =
       TimerMode(rawValue: UserDefaults.standard.object(forKey: "timerMode") as? Int ?? 0)
       ?? .visible
     self.timerByTaskId = Self.timerDictionaryFromDefaults()
 
-    // Migrate remoteKey from legacy UserDefaults storage to Keychain
-    if let legacyKey = UserDefaults.standard.string(forKey: "checkvistRemoteKey"),
-      !legacyKey.isEmpty
-    {
-      Self.setKeychainValue(legacyKey, forKey: "checkvistRemoteKey")
-      UserDefaults.standard.removeObject(forKey: "checkvistRemoteKey")
-    }
+    let useKeychainStorageAtInit: Bool
+    #if DEBUG
+      let ignoreAtInit =
+        UserDefaults.standard.object(forKey: Self.ignoreKeychainInDebugDefaultsKey) as? Bool
+        ?? false
+      useKeychainStorageAtInit = !ignoreAtInit
+    #else
+      useKeychainStorageAtInit = false
+    #endif
 
-    // Delay keychain reads on very first launch to avoid immediate access prompts.
-    self.remoteKey = ""
-    let hasLaunchedBefore = UserDefaults.standard.bool(forKey: "didLaunchBefore")
-    if hasLaunchedBefore {
-      self.loadRemoteKeyFromKeychainIfNeeded()
+    if useKeychainStorageAtInit {
+      // Migrate local key into keychain in DEBUG builds.
+      if let legacyKey = UserDefaults.standard.string(forKey: Self.remoteKeyDefaultsKey),
+        !legacyKey.isEmpty
+      {
+        Self.setKeychainValue(legacyKey, forKey: Self.remoteKeyDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: Self.remoteKeyDefaultsKey)
+      }
+      // Never read keychain during app bootstrap; defer until explicit login/action.
+      self.remoteKey = ""
     } else {
-      UserDefaults.standard.set(true, forKey: "didLaunchBefore")
+      // RELEASE builds keep credentials in app defaults to avoid keychain prompts.
+      self.remoteKey = UserDefaults.standard.string(forKey: Self.remoteKeyDefaultsKey) ?? ""
     }
 
     setupBindings()
   }
 
   private func setupBindings() {
-    $username.sink { UserDefaults.standard.set($0, forKey: "checkvistUsername") }.store(
-      in: &cancellables)
+    $username
+      .dropFirst()
+      .sink { [weak self] value in
+        UserDefaults.standard.set(value, forKey: "checkvistUsername")
+        self?.token = nil
+      }.store(in: &cancellables)
     $remoteKey
       .dropFirst()
       .removeDuplicates()
-      .sink { value in
-        guard !value.isEmpty else { return }
-        Self.setKeychainValue(value, forKey: "checkvistRemoteKey")
+      .sink { [weak self] value in
+        guard let self else { return }
+        self.token = nil
+        if self.usesKeychainStorage {
+          if !value.isEmpty {
+            Self.setKeychainValue(value, forKey: Self.remoteKeyDefaultsKey)
+          }
+        } else {
+          if value.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.remoteKeyDefaultsKey)
+          } else {
+            UserDefaults.standard.set(value, forKey: Self.remoteKeyDefaultsKey)
+          }
+        }
       }.store(in: &cancellables)
-    $listId.sink { UserDefaults.standard.set($0, forKey: "checkvistListId") }.store(
-      in: &cancellables)
+    $listId
+      .dropFirst()
+      .sink { [weak self] value in
+        UserDefaults.standard.set(value, forKey: "checkvistListId")
+        self?.token = nil
+      }.store(in: &cancellables)
     $confirmBeforeDelete.sink { UserDefaults.standard.set($0, forKey: "confirmBeforeDelete") }
       .store(in: &cancellables)
     $launchAtLogin.sink { newValue in
@@ -406,6 +483,15 @@ class CheckvistManager: ObservableObject {
         } catch { print("Launch at login error: \(error)") }
       }
     }.store(in: &cancellables)
+    #if DEBUG
+      $ignoreKeychainInDebug
+        .dropFirst()
+        .sink { [weak self] newValue in
+          guard let self else { return }
+          UserDefaults.standard.set(newValue, forKey: Self.ignoreKeychainInDebugDefaultsKey)
+          self.handleCredentialStorageModeChanged()
+        }.store(in: &cancellables)
+    #endif
     $globalHotkeyEnabled.sink { UserDefaults.standard.set($0, forKey: "globalHotkeyEnabled") }
       .store(in: &cancellables)
     $globalHotkeyKeyCode.sink { UserDefaults.standard.set($0, forKey: "globalHotkeyKeyCode") }
@@ -414,6 +500,9 @@ class CheckvistManager: ObservableObject {
       .store(in: &cancellables)
     $maxTitleWidth.sink { UserDefaults.standard.set($0, forKey: "maxTitleWidth") }.store(
       in: &cancellables)
+    $onboardingCompleted
+      .sink { UserDefaults.standard.set($0, forKey: Self.onboardingCompletedDefaultsKey) }
+      .store(in: &cancellables)
     $timerBarLeading.sink { UserDefaults.standard.set($0, forKey: "timerBarLeading") }.store(
       in: &cancellables)
     $timerMode.sink { [weak self] mode in
@@ -442,10 +531,25 @@ class CheckvistManager: ObservableObject {
 
   // MARK: - Keychain
 
+  private func handleCredentialStorageModeChanged() {
+    let current = remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    if usesKeychainStorage {
+      if !current.isEmpty {
+        Self.setKeychainValue(current, forKey: Self.remoteKeyDefaultsKey)
+      } else {
+        hasAttemptedRemoteKeyBootstrap = false
+        loadRemoteKeyFromKeychainIfNeeded()
+      }
+    } else {
+      UserDefaults.standard.set(current, forKey: Self.remoteKeyDefaultsKey)
+    }
+  }
+
   private func loadRemoteKeyFromKeychainIfNeeded() {
+    guard usesKeychainStorage else { return }
     guard remoteKey.isEmpty, !hasAttemptedRemoteKeyBootstrap else { return }
     hasAttemptedRemoteKeyBootstrap = true
-    if let stored = Self.keychainValue(forKey: "checkvistRemoteKey"), !stored.isEmpty {
+    if let stored = Self.keychainValue(forKey: Self.remoteKeyDefaultsKey), !stored.isEmpty {
       remoteKey = stored
     }
   }
@@ -476,6 +580,43 @@ class CheckvistManager: ObservableObject {
       add[kSecValueData as String] = data
       SecItemAdd(add as CFDictionary, nil)
     }
+  }
+
+  private static func deleteKeychainValue(forKey key: String) {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrAccount as String: key,
+    ]
+    SecItemDelete(query as CFDictionary)
+  }
+
+  @MainActor func resetOnboardingForDebug() {
+    #if DEBUG
+      token = nil
+      errorMessage = nil
+      onboardingCompleted = false
+      username = ""
+      remoteKey = ""
+      listId = ""
+      availableLists = []
+      tasks = []
+      currentParentId = 0
+      currentSiblingIndex = 0
+
+      UserDefaults.standard.removeObject(forKey: "checkvistUsername")
+      UserDefaults.standard.removeObject(forKey: "checkvistListId")
+      UserDefaults.standard.removeObject(forKey: Self.remoteKeyDefaultsKey)
+      UserDefaults.standard.removeObject(forKey: Self.onboardingCompletedDefaultsKey)
+      Self.deleteKeychainValue(forKey: Self.remoteKeyDefaultsKey)
+    #endif
+  }
+
+  @MainActor func markOnboardingCompleted() {
+    onboardingCompleted = true
+  }
+
+  @MainActor func markOnboardingRequired() {
+    onboardingCompleted = false
   }
 
   // MARK: - Navigation
@@ -582,6 +723,8 @@ class CheckvistManager: ObservableObject {
     guard !listId.isEmpty else { return }
 
     if token == nil {
+      // Avoid keychain prompt on launch/background refresh when no in-memory key exists yet.
+      if remoteKey.isEmpty { return }
       let success = await login()
       if !success { return }
     }
@@ -632,6 +775,9 @@ class CheckvistManager: ObservableObject {
       if currentSiblingIndex >= sortedForest.count { currentSiblingIndex = 0 }
       let validTaskIds = Set(sortedForest.map(\.id))
       self.timerByTaskId = self.timerByTaskId.filter { validTaskIds.contains($0.key) }
+      if !listId.isEmpty && canAttemptLogin {
+        onboardingCompleted = true
+      }
 
     } catch {
       errorMessage = "Failed to fetch tasks: \(error.localizedDescription)"
@@ -721,6 +867,10 @@ class CheckvistManager: ObservableObject {
     } catch {
       self.errorMessage = "Failed to fetch lists: \(error.localizedDescription)"
     }
+  }
+
+  @MainActor func selectList(_ list: CheckvistList) {
+    listId = String(list.id)
   }
 
   @MainActor func updateTask(

@@ -11,9 +11,15 @@ enum PopoverLayout {
   static let rowVerticalPadding: CGFloat = 7
   static let rowIconWidth: CGFloat = 16
   static let rowContentSpacing: CGFloat = 10
+  static let rowTextFadeWidth: CGFloat = 18
+  static let rowTextMinScale: CGFloat = 0.72
   static let inlineEntryVerticalPadding: CGFloat = 7
 
   static func preferredHeight(for manager: CheckvistManager) -> CGFloat {
+    if manager.needsInitialSetup {
+      return 360
+    }
+
     let dividerHeight: CGFloat = 1
 
     // Top strip + first divider.
@@ -183,6 +189,7 @@ struct QuickEntryField: NSViewRepresentable {
 
 struct PopoverView: View {
   @EnvironmentObject var manager: CheckvistManager
+  @State private var setupLoading = false
 
   var body: some View {
     let panelHeight = PopoverLayout.preferredHeight(for: manager)
@@ -201,9 +208,14 @@ struct PopoverView: View {
         Divider()
       }
 
-      // Task list — keyboard navigable
-      taskList
-        .frame(maxHeight: .infinity, alignment: .top)
+      if manager.needsInitialSetup {
+        setupView
+          .frame(maxHeight: .infinity, alignment: .top)
+      } else {
+        // Task list — keyboard navigable
+        taskList
+          .frame(maxHeight: .infinity, alignment: .top)
+      }
       Divider()
 
       // Delete confirmation banner
@@ -212,7 +224,7 @@ struct PopoverView: View {
       }
 
       // Prompt + autocomplete at bottom so tasks remain visible above.
-      if !manager.pendingDeleteConfirmation {
+      if !manager.pendingDeleteConfirmation && !manager.needsInitialSetup {
         if (manager.quickEntryMode == .search
           && (manager.isQuickEntryFocused || !manager.filterText.isEmpty))
           || (manager.quickEntryMode == .command
@@ -226,6 +238,60 @@ struct PopoverView: View {
     .frame(width: PopoverLayout.width, height: panelHeight, alignment: .top)
     .background(.regularMaterial)
     .clipShape(RoundedRectangle(cornerRadius: PopoverLayout.cornerRadius))
+  }
+
+  var setupView: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Welcome to Checkvist Focus")
+        .font(.headline)
+      Text("Set up your account once, then choose a checklist by name.")
+        .font(.caption)
+        .foregroundColor(.secondary)
+
+      TextField("Username (email)", text: $manager.username)
+        .textFieldStyle(.roundedBorder)
+        .autocorrectionDisabled()
+      SecureField("OpenAPI key", text: $manager.remoteKey)
+        .textFieldStyle(.roundedBorder)
+
+      Button("Connect & Load Lists") {
+        Task {
+          setupLoading = true
+          defer { setupLoading = false }
+          let ok = await manager.login()
+          guard ok else { return }
+          await manager.fetchLists()
+          if manager.listId.isEmpty, let first = manager.availableLists.first {
+            manager.selectList(first)
+          }
+        }
+      }
+      .disabled(setupLoading || !manager.canAttemptLogin)
+
+      if !manager.availableLists.isEmpty {
+        Picker("Checklist", selection: $manager.listId) {
+          ForEach(manager.availableLists) { list in
+            Text("\(list.name) (\(list.id))").tag(String(list.id))
+          }
+        }
+        .pickerStyle(.menu)
+
+        Button("Finish Setup") {
+          Task {
+            guard !manager.listId.isEmpty else { return }
+            manager.markOnboardingCompleted()
+            await manager.fetchTopTask()
+          }
+        }
+        .disabled(manager.listId.isEmpty)
+      } else {
+        Text("No lists loaded yet. You can also paste a List ID in Settings.")
+          .font(.caption2)
+          .foregroundColor(.secondary)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(14)
   }
 
   // MARK: - Subviews
@@ -527,16 +593,11 @@ struct PopoverView: View {
           .frame(height: 18)
           .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-          inlineTaskContent(task: task)
-            .lineLimit(4)
-            .truncationMode(.tail)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+          fadedTaskTitle(task: task)
         }
 
         let elapsed = manager.totalElapsed(for: task)
-        if manager.timerIsVisible && elapsed > 0 {
+        if manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id) {
           timerBadge(
             elapsed: elapsed, running: manager.timedTaskId == task.id && manager.timerRunning)
         }
@@ -545,6 +606,7 @@ struct PopoverView: View {
           dueBadge(due: due, overdue: task.isOverdue, today: task.isDueToday)
         }
       }
+      .layoutPriority(1)
       .overlay(alignment: .center) {
         // Strikethrough line that draws left-to-right when completing
         Rectangle()
@@ -775,6 +837,32 @@ struct PopoverView: View {
 
   func formattedTimer(_ elapsed: TimeInterval) -> String {
     CheckvistManager.formattedTimer(elapsed)
+  }
+
+  @ViewBuilder
+  func fadedTaskTitle(task: CheckvistTask) -> some View {
+    inlineTaskContent(task: task)
+      .lineLimit(1)
+      .truncationMode(.tail)
+      .allowsTightening(true)
+      .minimumScaleFactor(PopoverLayout.rowTextMinScale)
+      .multilineTextAlignment(.leading)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .mask {
+        GeometryReader { proxy in
+          let maxFade = PopoverLayout.rowTextFadeWidth
+          let safeFade = min(maxFade, max(0, proxy.size.width - 24))
+          HStack(spacing: 0) {
+            Rectangle()
+            LinearGradient(
+              colors: [.black, .black.opacity(0)],
+              startPoint: .leading,
+              endPoint: .trailing
+            )
+            .frame(width: safeFade)
+          }
+        }
+      }
   }
 
   func inlineTaskContent(task: CheckvistTask) -> Text {
