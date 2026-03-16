@@ -4,7 +4,7 @@ import OSLog
 import SwiftUI
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
+class AppDelegate: NSObject, NSApplicationDelegate {
   static private(set) var shared: AppDelegate!
 
   override init() {
@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
   private var cancellables = Set<AnyCancellable>()
   private var lastToggleTime: Date = Date.distantPast
   private var pendingPopoverResize: DispatchWorkItem?
+  private var explicitQuitRequested = false
   private let logger = Logger(subsystem: "uk.co.maybeitsadam.checkvist-focus", category: "keyboard")
 
   private var currentPopoverContentSize: NSSize {
@@ -106,7 +107,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     Task { [weak self] in
       try? await Task.sleep(nanoseconds: 500_000_000)
       guard let self else { return }
-      promptForMissingRemoteKeyIfNeeded()
       if self.checkvistManager.needsInitialSetup {
         self.togglePopover()
       } else {
@@ -321,371 +321,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
   }
 
   @MainActor func handleSupplementalKey(event: NSEvent) -> Bool {
-    guard let popoverWindow = window, event.window === popoverWindow else { return false }
-    let m = checkvistManager
-    let shift = event.modifierFlags.contains(.shift)
-    let ctrl = event.modifierFlags.contains(.control)
-    let cmd = event.modifierFlags.contains(.command)
-    let option = event.modifierFlags.contains(.option)
-
-    // We consider the user "typing" if they are explicitly focused in the text box
-    let isFocused = m.isQuickEntryFocused
-    let firstResponder = event.window?.firstResponder
-    let typingInNativeTextField = firstResponder is NSTextView
-    if m.needsInitialSetup {
-      // During onboarding, let all key events through to the setup form.
-      // Only handle Escape to close the window.
-      m.keyBuffer = ""
-      if event.keyCode == 53 {
-        closeWindow()
-        return true
-      }
-      return false
-    }
-    if typingInNativeTextField && !isFocused {
-      // Do not steal keystrokes from settings text inputs inside the popover.
-      m.keyBuffer = ""
-      return false
-    }
-
-    let chars = event.charactersIgnoringModifiers ?? ""
-
-    // Reliable fallback for command/actions prompt
-    if cmd && !shift && !ctrl && !option && chars.lowercased() == "k" && !isFocused {
-      m.keyBuffer = ""
-      m.quickEntryMode = .command
-      m.filterText = ""
-      m.isQuickEntryFocused = true
-      m.commandSuggestionIndex = 0
-      logger.log("Opened command palette via Cmd+K")
-      return true
-    }
-
-    if m.quickEntryMode == .command && isFocused {
-      if event.keyCode == 125 {
-        m.selectNextCommandSuggestion(for: m.filterText)
-        return true
-      }
-      if event.keyCode == 126 {
-        m.selectPreviousCommandSuggestion(for: m.filterText)
-        return true
-      }
-      if event.keyCode == 36 {
-        let suggestions = m.filteredCommandSuggestions(query: m.filterText)
-        if suggestions.indices.contains(m.commandSuggestionIndex) {
-          let selected = suggestions[m.commandSuggestionIndex]
-          if selected.submitImmediately {
-            m.isQuickEntryFocused = false
-            m.quickEntryMode = .search
-            m.filterText = ""
-            Task { await m.executeCommandInput(selected.command) }
-          } else {
-            m.filterText = selected.command
-            m.isQuickEntryFocused = true
-          }
-          return true
-        }
-      }
-    }
-
-    // Delete confirmation: Return confirms, anything else cancels
-    if m.pendingDeleteConfirmation {
-      if event.keyCode == 36 {  // Return — confirm delete
-        m.pendingDeleteConfirmation = false
-        Task {
-          if let t = m.currentTask {
-            await m.deleteTask(t)
-            self.updateTitle()
-          }
-        }
-        return true
-      } else {  // Any other key — cancel
-        m.pendingDeleteConfirmation = false
-        m.filterText = ""
-        m.quickEntryMode = .search
-        m.isQuickEntryFocused = false
-        if event.keyCode == 53 { return true }  // Escape just cancels
-      }
-    }
-
-    // Cmd+↑/↓ — reorder
-    if cmd && event.keyCode == 125 {
-      Task { if let t = m.currentTask { await m.moveTask(t, direction: 1) } }
-      return true
-    }
-    if cmd && event.keyCode == 126 {
-      Task { if let t = m.currentTask { await m.moveTask(t, direction: -1) } }
-      return true
-    }
-
-    // Up/Down arrows — navigate list ALWAYS (even if focused, to allow list navigation while typing)
-    if event.keyCode == 125 {
-      m.nextTask()
-      updateTitle()
-      return true
-    }
-    if event.keyCode == 126 {
-      m.previousTask()
-      updateTitle()
-      return true
-    }
-
-    // Shift+→ — focus/hoist (Checkvist), plain → — enter children
-    if event.keyCode == 124 {
-      if isFocused { return false }
-      m.enterChildren()
-      if !m.filterText.isEmpty {
-        m.filterText = ""
-        m.quickEntryMode = .search
-        m.isQuickEntryFocused = false
-      }
-      return true
-    }
-    // Shift+← — un-focus (Checkvist), plain ← — exit to parent
-    if event.keyCode == 123 {
-      if isFocused { return false }
-      if !m.filterText.isEmpty {
-        m.filterText = ""
-        m.quickEntryMode = .search
-        m.isQuickEntryFocused = false
-      }
-      m.exitToParent()
-      updateTitle()
-      return true
-    }
-
-    // Space — mark done; Shift+Space — invalidate (Checkvist)
-    if event.keyCode == 49 && !isFocused && !ctrl && !cmd {
-      if shift {
-        Task {
-          await m.invalidateCurrentTask()
-          self.updateTitle()
-        }
-      } else {
-        Task {
-          await m.markCurrentTaskDone()
-          self.updateTitle()
-        }
-      }
-      return true
-    }
-
-    // Shift+Enter — add sub-item (Checkvist); Enter — add sibling
-    if event.keyCode == 36 {
-      if isFocused { return false }
-      if shift {
-        m.quickEntryMode = .addChild
-      } else {
-        m.quickEntryMode = .addSibling
-      }
-      m.isQuickEntryFocused = true
-      return true
-    }
-
-    // Tab / Shift+Tab — indent/unindent OR add child
-    if event.keyCode == 48 {
-      if isFocused { return false }
-      if shift {
-        Task { if let t = m.currentTask { await m.unindentTask(t) } }
-      } else {
-        m.quickEntryMode = .addChild
-        m.isQuickEntryFocused = true
-      }
-      return true
-    }
-
-    // Escape — cancel input if active; otherwise close
-    if event.keyCode == 53 {
-      if isFocused || m.quickEntryMode != .search || !m.filterText.isEmpty {
-        m.isQuickEntryFocused = false
-        m.quickEntryMode = .search
-        m.filterText = ""
-        return true
-      }
-      closeWindow()
-      return true
-    }
-
-    // F2 — edit task (Checkvist), cursor at end
-    if event.keyCode == 120 && !isFocused {
-      m.quickEntryMode = .editTask
-      m.editCursorAtEnd = true
-      m.filterText = m.currentTask?.content ?? ""
-      m.isQuickEntryFocused = true
-      return true
-    }
-
-    // Del (forward delete / Fn+Backspace) — delete task (Checkvist)
-    if event.keyCode == 117 && !isFocused {
-      if m.confirmBeforeDelete {
-        m.pendingDeleteConfirmation = true
-        m.quickEntryMode = .command
-        m.commandSuggestionIndex = 0
-        m.filterText = ""
-        m.isQuickEntryFocused = false
-      } else {
-        Task {
-          if let t = m.currentTask {
-            await m.deleteTask(t)
-            self.updateTitle()
-          }
-        }
-      }
-      return true
-    }
-
-    // ── Two-key sequences ──
-    // Starter chars: e, d, g — swallow first press, dispatch on second
-    let seqStarters: Set<String> = ["e", "d", "g"]
-    if !m.keyBuffer.isEmpty {
-      let seq = m.keyBuffer + chars
-      m.keyBuffer = ""
-      if !isFocused {
-        switch seq {
-        case "ee", "ea":
-          m.quickEntryMode = .editTask
-          m.editCursorAtEnd = true
-          m.filterText = m.currentTask?.content ?? ""
-          m.isQuickEntryFocused = true
-          return true
-        case "ei":
-          m.quickEntryMode = .editTask
-          m.editCursorAtEnd = false
-          m.filterText = m.currentTask?.content ?? ""
-          m.isQuickEntryFocused = true
-          return true
-        case "dd":
-          m.quickEntryMode = .command
-          m.commandSuggestionIndex = 0
-          m.filterText = "due "
-          m.isQuickEntryFocused = true
-          return true
-        case "gg":
-          m.openTaskLink()
-          return true
-        case "gt":
-          m.quickEntryMode = .command
-          m.commandSuggestionIndex = 0
-          m.filterText = "tag "
-          m.isQuickEntryFocused = true
-          return true
-        case "gu":
-          m.quickEntryMode = .command
-          m.commandSuggestionIndex = 0
-          m.filterText = "untag "
-          m.isQuickEntryFocused = true
-          return true
-        default: break
-        }
-      }
-      return false  // no match — let second char through
-    }
-    if seqStarters.contains(chars) && !shift && !ctrl && !isFocused {
-      m.keyBuffer = chars
-      return true
-    }
-
-    // t — toggle timer for current task
-    if chars == "t" && !shift && !ctrl && !isFocused {
-      if m.timerIsEnabled {
-        m.toggleTimerForCurrentTask()
-      }
-      return true
-    }
-
-    // p — pause/resume timer
-    if chars == "p" && !shift && !ctrl && !isFocused {
-      if m.timerIsEnabled {
-        if m.timerRunning { m.pauseTimer() } else { m.resumeTimer() }
-      }
-      return true
-    }
-
-    // j/k/u — Vim up/down navigation, undo
-    if chars == "u" && !shift && !ctrl && !isFocused {
-      Task { await m.undoLastAction() }
-      return true
-    }
-    if chars == "j" && !shift && !ctrl && !isFocused {
-      m.nextTask()
-      updateTitle()
-      return true
-    }
-    if chars == "k" && !shift && !ctrl && !isFocused {
-      m.previousTask()
-      updateTitle()
-      return true
-    }
-
-    // h/l — Vim left/right navigation (parent / children)
-    if chars == "h" && !shift && !ctrl && !isFocused {
-      if !m.filterText.isEmpty {
-        m.filterText = ""
-        m.quickEntryMode = .search
-        m.isQuickEntryFocused = false
-      }
-      m.exitToParent()
-      updateTitle()
-      return true
-    }
-    if chars == "l" && !shift && !ctrl && !isFocused {
-      m.enterChildren()
-      if !m.filterText.isEmpty {
-        m.filterText = ""
-        m.quickEntryMode = .search
-        m.isQuickEntryFocused = false
-      }
-      return true
-    }
-
-    // H (Shift+h) — toggle hide future
-    if chars == "h" && shift && !ctrl && !isFocused {
-      m.hideFuture.toggle()
-      return true
-    }
-
-    // Shift+L — fast list switch prompt
-    if chars == "l" && shift && !ctrl && !cmd && !isFocused {
-      m.quickEntryMode = .command
-      m.commandSuggestionIndex = 0
-      m.filterText = "list "
-      m.isQuickEntryFocused = true
-      return true
-    }
-
-    // Forward-slash — focus search (Vim / Checkvist)
-    if chars == "/" && !shift && !ctrl && !isFocused {
-      m.quickEntryMode = .search
-      m.isQuickEntryFocused = true
-      return true
-    }
-
-    // i — insert (cursor at start), a — append (cursor at end)
-    if chars == "i" && !shift && !ctrl && !isFocused {
-      m.quickEntryMode = .editTask
-      m.editCursorAtEnd = false
-      m.filterText = m.currentTask?.content ?? ""
-      m.isQuickEntryFocused = true
-      return true
-    }
-    if chars == "a" && !shift && !ctrl && !isFocused {
-      m.quickEntryMode = .editTask
-      m.editCursorAtEnd = true
-      m.filterText = m.currentTask?.content ?? ""
-      m.isQuickEntryFocused = true
-      return true
-    }
-
-    // : or ; — command mode
-    if (chars == ":" || chars == ";") && !ctrl && !isFocused {
-      m.quickEntryMode = .command
-      m.commandSuggestionIndex = 0
-      m.filterText = ""
-      m.isQuickEntryFocused = true
-      return true
-    }
-
-    return false
+    let router = KeyboardShortcutRouter(
+      manager: checkvistManager,
+      logger: logger,
+      updateTitle: { [weak self] in self?.updateTitle() },
+      closeWindow: { [weak self] in self?.closeWindow() }
+    )
+    return router.handle(event: event, popoverWindow: window)
   }
 
   // MARK: - Window
@@ -776,9 +418,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
   @objc func menuSettings() {
     closeWindow()
-    if checkvistManager.remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      guard promptForMissingRemoteKey() else { return }
-    }
     if #available(macOS 13.0, *) {
       NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     } else {
@@ -810,39 +449,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     return item
   }
 
-  private func promptForMissingRemoteKey() -> Bool {
-    let alert = NSAlert()
-    alert.alertStyle = .informational
-    alert.messageText = "OpenAPI Key Required"
-    alert.informativeText =
-      "Enter your Checkvist OpenAPI key to continue. You can edit it later in Settings."
-    alert.addButton(withTitle: "Save")
-    alert.addButton(withTitle: "Cancel")
-
-    let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-    field.placeholderString = "OpenAPI key"
-    alert.accessoryView = field
-
-    NSApp.activate(ignoringOtherApps: true)
-    let response = alert.runModal()
-    guard response == .alertFirstButtonReturn else { return false }
-
-    let entered = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !entered.isEmpty else { return false }
-    checkvistManager.remoteKey = entered
-    return true
-  }
-
-  private func promptForMissingRemoteKeyIfNeeded() {
-    let hasRemoteKey = !checkvistManager.remoteKey
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .isEmpty
-    guard !hasRemoteKey else { return }
-    _ = promptForMissingRemoteKey()
-  }
-
   @objc func menuQuit() {
-    exit(0)
+    explicitQuitRequested = true
+    NSApp.terminate(nil)
   }
 
   func togglePopover() {
@@ -856,7 +465,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     } else if let button = statusItem.button {
       // Position the window directly below the button, aligned to its right edge
       let btnRect = button.convert(button.bounds, to: nil)  // To window coords
-      let screenRect = button.window!.convertToScreen(btnRect)  // To screen coords
+      guard let buttonWindow = button.window else { return }
+      let screenRect = buttonWindow.convertToScreen(btnRect)  // To screen coords
 
       let paddingY: CGFloat = 4  // Small gap below menu bar
       let trX = screenRect.maxX + 10  // Align right edges (slightly inset for aesthetics)
@@ -892,14 +502,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    switch AppTerminationPolicy.decision(explicitQuitRequested: explicitQuitRequested) {
+    case .terminateNow:
+      return .terminateNow
+    case .cancel:
+      break
+    }
     // SwiftUI will try to gracefully terminate the app when the Settings view is closed
     // since we don't use MenuBarExtra. We must explicitly cancel this auto-termination.
-    // Our explicit Quit button now uses exit(0) to bypass this hook.
     return .terminateCancel
   }
 
   func applicationWillTerminate(_ notification: Notification) {
     if let m = keyMonitor { NSEvent.removeMonitor(m) }
+    if let m = clickMonitor { NSEvent.removeMonitor(m) }
+    pendingPopoverResize?.cancel()
     unregisterGlobalHotkey()
   }
 }

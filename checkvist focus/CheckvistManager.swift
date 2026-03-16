@@ -1,7 +1,6 @@
 import Combine
 import Foundation
 import OSLog
-import Security
 import ServiceManagement
 import SwiftUI
 
@@ -111,82 +110,15 @@ class CheckvistManager: ObservableObject {
     let submitImmediately: Bool
   }
 
-  static let commandSuggestions: [CommandSuggestion] = [
+  static let commandSuggestions: [CommandSuggestion] = CheckvistCommandEngine.suggestions.map {
     .init(
-      label: "Mark done", command: "done", preview: "Close selected task", keybind: "Space",
-      submitImmediately: true),
-    .init(
-      label: "Mark undone", command: "undone", preview: "Undo last completion/action", keybind: "u",
-      submitImmediately: true),
-    .init(
-      label: "Invalidate task", command: "invalidate", preview: "Invalidate selected task",
-      keybind: "Shift+Space", submitImmediately: true),
-    .init(
-      label: "Due today", command: "due today", preview: "Set due date to today", keybind: "dd",
-      submitImmediately: true),
-    .init(
-      label: "Due tomorrow", command: "due tomorrow", preview: "Set due date to tomorrow",
-      keybind: "dd", submitImmediately: true),
-    .init(
-      label: "Due next week", command: "due next week", preview: "Set due date to next week",
-      keybind: "dd", submitImmediately: true),
-    .init(
-      label: "Clear due date", command: "clear due", preview: "Remove due date", keybind: "dd",
-      submitImmediately: true),
-    .init(
-      label: "Add tag", command: "tag ", preview: "Append #tag to task", keybind: "gt",
-      submitImmediately: false),
-    .init(
-      label: "Remove tag", command: "untag ", preview: "Remove #tag from task", keybind: "gu",
-      submitImmediately: false),
-    .init(
-      label: "Switch list", command: "list ", preview: "Find and switch list", keybind: "Shift+L",
-      submitImmediately: false),
-    .init(
-      label: "Edit task", command: "edit", preview: "Edit selected task",
-      keybind: "ee / i / a / F2",
-      submitImmediately: true),
-    .init(
-      label: "Focus search", command: "search", preview: "Search tasks", keybind: "/",
-      submitImmediately: true),
-    .init(
-      label: "Add sibling task", command: "add sibling", preview: "Create sibling below selection",
-      keybind: "Enter", submitImmediately: true),
-    .init(
-      label: "Add child task", command: "add child", preview: "Create child under selection",
-      keybind: "Shift+Enter / Tab", submitImmediately: true),
-    .init(
-      label: "Open first link", command: "open link", preview: "Open first URL in task text",
-      keybind: "gg", submitImmediately: true),
-    .init(
-      label: "Undo last action", command: "undo", preview: "Undo add/complete/edit", keybind: "u",
-      submitImmediately: true),
-    .init(
-      label: "Toggle timer", command: "toggle timer",
-      preview: "Start/switch timer on selected task",
-      keybind: "t", submitImmediately: true),
-    .init(
-      label: "Pause/resume timer", command: "pause timer", preview: "Pause or resume active timer",
-      keybind: "p", submitImmediately: true),
-    .init(
-      label: "Toggle hide future", command: "toggle hide future",
-      preview: "Show/hide future tasks", keybind: "Shift+H", submitImmediately: true),
-    .init(
-      label: "Delete selected task", command: "delete", preview: "Delete current task",
-      keybind: "Del", submitImmediately: true),
-    .init(
-      label: "Move task up", command: "move up", preview: "Reorder current task upward",
-      keybind: "Cmd+↑", submitImmediately: true),
-    .init(
-      label: "Move task down", command: "move down", preview: "Reorder current task downward",
-      keybind: "Cmd+↓", submitImmediately: true),
-    .init(
-      label: "Enter subtasks", command: "enter children", preview: "Go to child level",
-      keybind: "l / →", submitImmediately: true),
-    .init(
-      label: "Exit to parent", command: "exit parent", preview: "Go up one level",
-      keybind: "h / ←", submitImmediately: true),
-  ]
+      label: $0.label,
+      command: $0.command,
+      preview: $0.preview,
+      keybind: $0.keybind,
+      submitImmediately: $0.submitImmediately
+    )
+  }
 
   // MARK: - Timer
   @Published var timedTaskId: Int? = nil
@@ -198,15 +130,7 @@ class CheckvistManager: ObservableObject {
 
   /// Formatted elapsed time to 2 significant figures in the most readable unit.
   static func formattedTimer(_ elapsed: TimeInterval) -> String {
-    if elapsed < 60 {
-      return "\(Int(elapsed))s"
-    } else if elapsed < 3600 {
-      let m = elapsed / 60
-      return m < 10 ? String(format: "%.1fm", m) : "\(Int(m))m"
-    } else {
-      let h = elapsed / 3600
-      return h < 10 ? String(format: "%.1fh", h) : "\(Int(h))h"
-    }
+    CheckvistTimerStore.formatted(elapsed)
   }
 
   /// Timer string to show in the menu bar, nil when no timer is active.
@@ -222,15 +146,15 @@ class CheckvistManager: ObservableObject {
   var timerIsVisible: Bool { timerMode == .visible }
 
   func filteredCommandSuggestions(query: String) -> [CommandSuggestion] {
-    let q = query.lowercased().trimmingCharacters(in: .whitespaces)
-    let candidates = Self.commandSuggestions.filter { suggestion in
-      q.isEmpty
-        || suggestion.label.lowercased().contains(q)
-        || suggestion.command.lowercased().contains(q)
-        || suggestion.preview.lowercased().contains(q)
-        || (suggestion.keybind?.lowercased().contains(q) ?? false)
+    CheckvistCommandEngine.filteredSuggestions(query: query).map {
+      .init(
+        label: $0.label,
+        command: $0.command,
+        preview: $0.preview,
+        keybind: $0.keybind,
+        submitImmediately: $0.submitImmediately
+      )
     }
-    return Array(candidates.prefix(8))
   }
 
   @MainActor func selectNextCommandSuggestion(for query: String) {
@@ -287,10 +211,8 @@ class CheckvistManager: ObservableObject {
   var currentTask: CheckvistTask? {
     let level = visibleTasks
     guard !level.isEmpty else { return nil }
-    if currentSiblingIndex >= level.count {
-      currentSiblingIndex = level.count - 1
-    }
-    return level[currentSiblingIndex]
+    let clampedIndex = min(max(currentSiblingIndex, 0), level.count - 1)
+    return level[clampedIndex]
   }
 
   var currentTaskText: String { currentTask?.content ?? "" }
@@ -329,7 +251,9 @@ class CheckvistManager: ObservableObject {
     if hideFuture {
       result = result.filter { task in
         guard let d = task.dueDate else { return false }
-        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+        guard let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) else {
+          return false
+        }
         return d <= Calendar.current.startOfDay(for: tomorrow)
       }
     }
@@ -353,10 +277,8 @@ class CheckvistManager: ObservableObject {
   private var reorderSyncTask: Task<Void, Never>? = nil
   private var reorderResyncTask: Task<Void, Never>? = nil
   private var hasAttemptedRemoteKeyBootstrap = false
-  private static let keychainService = "uk.co.maybeitsadam.checkvist-focus"
-  private static let remoteKeyDefaultsKey = "checkvistRemoteKey"
-  private static let ignoreKeychainInDebugDefaultsKey = "ignoreKeychainInDebug"
-  private static let onboardingCompletedDefaultsKey = "onboardingCompleted"
+  private let credentialStore = CheckvistCredentialStore()
+  private let apiClient = CheckvistAPIClient()
   private var usesKeychainStorage: Bool {
     #if DEBUG
       !ignoreKeychainInDebug
@@ -364,15 +286,6 @@ class CheckvistManager: ObservableObject {
       true
     #endif
   }
-
-  // Use system networking defaults so proxy/VPN/PAC environments behave correctly.
-  private let session: URLSession = {
-    let config = URLSessionConfiguration.ephemeral
-    config.httpCookieStorage = nil
-    config.httpShouldSetCookies = false
-    config.urlCache = nil
-    return URLSession(configuration: config)
-  }()
 
   init() {
     let storedUsername = UserDefaults.standard.string(forKey: "checkvistUsername") ?? ""
@@ -384,7 +297,9 @@ class CheckvistManager: ObservableObject {
     self.launchAtLogin = UserDefaults.standard.object(forKey: "launchAtLogin") as? Bool ?? false
     #if DEBUG
       self.ignoreKeychainInDebug =
-        UserDefaults.standard.object(forKey: Self.ignoreKeychainInDebugDefaultsKey) as? Bool
+        UserDefaults.standard.object(
+          forKey: CheckvistCredentialStore.ignoreKeychainInDebugDefaultsKey)
+        as? Bool
         ?? false
     #else
       self.ignoreKeychainInDebug = true
@@ -397,7 +312,8 @@ class CheckvistManager: ObservableObject {
       UserDefaults.standard.object(forKey: "globalHotkeyModifiers") as? Int ?? 0x0800  // ⌥
     self.maxTitleWidth = UserDefaults.standard.object(forKey: "maxTitleWidth") as? Double ?? 150.0
     if let storedOnboarding =
-      UserDefaults.standard.object(forKey: Self.onboardingCompletedDefaultsKey) as? Bool
+      UserDefaults.standard.object(forKey: CheckvistCredentialStore.onboardingCompletedDefaultsKey)
+      as? Bool
     {
       self.onboardingCompleted = storedOnboarding
     } else {
@@ -413,27 +329,17 @@ class CheckvistManager: ObservableObject {
     let useKeychainStorageAtInit: Bool
     #if DEBUG
       let ignoreAtInit =
-        UserDefaults.standard.object(forKey: Self.ignoreKeychainInDebugDefaultsKey) as? Bool
+        UserDefaults.standard.object(
+          forKey: CheckvistCredentialStore.ignoreKeychainInDebugDefaultsKey)
+        as? Bool
         ?? false
       useKeychainStorageAtInit = !ignoreAtInit
     #else
       useKeychainStorageAtInit = true
     #endif
 
-    if useKeychainStorageAtInit {
-      // Migrate any legacy local key into keychain.
-      if let legacyKey = UserDefaults.standard.string(forKey: Self.remoteKeyDefaultsKey),
-        !legacyKey.isEmpty
-      {
-        Self.setKeychainValue(legacyKey, forKey: Self.remoteKeyDefaultsKey)
-        UserDefaults.standard.removeObject(forKey: Self.remoteKeyDefaultsKey)
-      }
-      // Never read keychain during app bootstrap; defer until explicit login/action.
-      self.remoteKey = ""
-    } else {
-      // Debug-only local storage mode when keychain is explicitly disabled.
-      self.remoteKey = UserDefaults.standard.string(forKey: Self.remoteKeyDefaultsKey) ?? ""
-    }
+    self.remoteKey = credentialStore.startupRemoteKey(
+      useKeychainStorageAtInit: useKeychainStorageAtInit)
 
     setupBindings()
   }
@@ -451,17 +357,7 @@ class CheckvistManager: ObservableObject {
       .sink { [weak self] value in
         guard let self else { return }
         self.token = nil
-        if self.usesKeychainStorage {
-          if !value.isEmpty {
-            Self.setKeychainValue(value, forKey: Self.remoteKeyDefaultsKey)
-          }
-        } else {
-          if value.isEmpty {
-            UserDefaults.standard.removeObject(forKey: Self.remoteKeyDefaultsKey)
-          } else {
-            UserDefaults.standard.set(value, forKey: Self.remoteKeyDefaultsKey)
-          }
-        }
+        self.credentialStore.persistRemoteKey(value, useKeychainStorage: self.usesKeychainStorage)
       }.store(in: &cancellables)
     $listId
       .dropFirst()
@@ -488,7 +384,8 @@ class CheckvistManager: ObservableObject {
         .dropFirst()
         .sink { [weak self] newValue in
           guard let self else { return }
-          UserDefaults.standard.set(newValue, forKey: Self.ignoreKeychainInDebugDefaultsKey)
+          UserDefaults.standard.set(
+            newValue, forKey: CheckvistCredentialStore.ignoreKeychainInDebugDefaultsKey)
           self.handleCredentialStorageModeChanged()
         }.store(in: &cancellables)
     #endif
@@ -501,7 +398,10 @@ class CheckvistManager: ObservableObject {
     $maxTitleWidth.sink { UserDefaults.standard.set($0, forKey: "maxTitleWidth") }.store(
       in: &cancellables)
     $onboardingCompleted
-      .sink { UserDefaults.standard.set($0, forKey: Self.onboardingCompletedDefaultsKey) }
+      .sink {
+        UserDefaults.standard.set(
+          $0, forKey: CheckvistCredentialStore.onboardingCompletedDefaultsKey)
+      }
       .store(in: &cancellables)
     $timerBarLeading.sink { UserDefaults.standard.set($0, forKey: "timerBarLeading") }.store(
       in: &cancellables)
@@ -535,99 +435,58 @@ class CheckvistManager: ObservableObject {
     let current = remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
     if usesKeychainStorage {
       if !current.isEmpty {
-        Self.setKeychainValue(current, forKey: Self.remoteKeyDefaultsKey)
+        credentialStore.persistRemoteKey(current, useKeychainStorage: true)
       } else {
         hasAttemptedRemoteKeyBootstrap = false
         loadRemoteKeyFromKeychainIfNeeded()
       }
     } else {
-      UserDefaults.standard.set(current, forKey: Self.remoteKeyDefaultsKey)
+      credentialStore.persistRemoteKeyForDebugStorageMode(current)
     }
   }
 
   private func loadRemoteKeyFromKeychainIfNeeded() {
-    guard usesKeychainStorage else { return }
-    guard remoteKey.isEmpty, !hasAttemptedRemoteKeyBootstrap else { return }
-    hasAttemptedRemoteKeyBootstrap = true
-    if let stored = Self.keychainValue(forKey: Self.remoteKeyDefaultsKey), !stored.isEmpty {
-      remoteKey = stored
-    }
-  }
-
-  private static func keychainValue(forKey key: String) -> String? {
-    let scopedQuery: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: Self.keychainService,
-      kSecAttrAccount as String: key,
-      kSecReturnData as String: true,
-    ]
-    var result: AnyObject?
-    if SecItemCopyMatching(scopedQuery as CFDictionary, &result) == errSecSuccess,
-      let data = result as? Data
-    {
-      return String(data: data, encoding: .utf8)
-    }
-
-    // Compatibility: migrate legacy entries that were saved without kSecAttrService.
-    let legacyQuery: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrAccount as String: key,
-      kSecReturnData as String: true,
-    ]
-    var legacyResult: AnyObject?
-    guard SecItemCopyMatching(legacyQuery as CFDictionary, &legacyResult) == errSecSuccess,
-      let legacyData = legacyResult as? Data,
-      let legacyValue = String(data: legacyData, encoding: .utf8)
-    else { return nil }
-    setKeychainValue(legacyValue, forKey: key)
-    SecItemDelete(legacyQuery as CFDictionary)
-    return legacyValue
-  }
-
-  private static func setKeychainValue(_ value: String, forKey key: String) {
-    let data = Data(value.utf8)
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: Self.keychainService,
-      kSecAttrAccount as String: key,
-    ]
-    if SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess {
-      SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-    } else {
-      var add = query
-      add[kSecValueData as String] = data
-      add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-      SecItemAdd(add as CFDictionary, nil)
-    }
-  }
-
-  private static func deleteKeychainValue(forKey key: String) {
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: Self.keychainService,
-      kSecAttrAccount as String: key,
-    ]
-    SecItemDelete(query as CFDictionary)
+    let currentState = RemoteKeyBootstrapState(
+      remoteKey: remoteKey,
+      hasAttemptedBootstrap: hasAttemptedRemoteKeyBootstrap
+    )
+    let nextState = RemoteKeyBootstrapPolicy.bootstrap(
+      state: currentState,
+      usesKeychainStorage: usesKeychainStorage,
+      loadFromKeychain: { credentialStore.loadRemoteKeyFromKeychain() }
+    )
+    remoteKey = nextState.remoteKey
+    hasAttemptedRemoteKeyBootstrap = nextState.hasAttemptedBootstrap
   }
 
   @MainActor func resetOnboardingForDebug() {
     #if DEBUG
       token = nil
       errorMessage = nil
-      onboardingCompleted = false
-      username = ""
-      remoteKey = ""
-      listId = ""
+      let resetState = OnboardingResetPolicy.reset(
+        OnboardingResetState(
+          remoteKey: remoteKey,
+          onboardingCompleted: onboardingCompleted,
+          username: username,
+          listId: listId,
+          availableListsCount: availableLists.count,
+          tasksCount: tasks.count,
+          currentParentId: currentParentId,
+          currentSiblingIndex: currentSiblingIndex
+        ))
+
+      onboardingCompleted = resetState.onboardingCompleted
+      username = resetState.username
+      listId = resetState.listId
       availableLists = []
       tasks = []
-      currentParentId = 0
-      currentSiblingIndex = 0
+      currentParentId = resetState.currentParentId
+      currentSiblingIndex = resetState.currentSiblingIndex
 
       UserDefaults.standard.removeObject(forKey: "checkvistUsername")
       UserDefaults.standard.removeObject(forKey: "checkvistListId")
-      UserDefaults.standard.removeObject(forKey: Self.remoteKeyDefaultsKey)
-      UserDefaults.standard.removeObject(forKey: Self.onboardingCompletedDefaultsKey)
-      Self.deleteKeychainValue(forKey: Self.remoteKeyDefaultsKey)
+      UserDefaults.standard.removeObject(
+        forKey: CheckvistCredentialStore.onboardingCompletedDefaultsKey)
     #endif
   }
 
@@ -644,13 +503,15 @@ class CheckvistManager: ObservableObject {
   @MainActor func nextTask() {
     let count = visibleTasks.count
     guard count > 0 else { return }
-    currentSiblingIndex = (currentSiblingIndex + 1) % count
+    let clampedIndex = min(max(currentSiblingIndex, 0), count - 1)
+    currentSiblingIndex = (clampedIndex + 1) % count
   }
 
   @MainActor func previousTask() {
     let count = visibleTasks.count
     guard count > 0 else { return }
-    currentSiblingIndex = (currentSiblingIndex - 1 + count) % count
+    let clampedIndex = min(max(currentSiblingIndex, 0), count - 1)
+    currentSiblingIndex = (clampedIndex - 1 + count) % count
   }
 
   /// Navigate into the current task's children
@@ -685,7 +546,9 @@ class CheckvistManager: ObservableObject {
 
   @MainActor func login() async -> Bool {
     loadRemoteKeyFromKeychainIfNeeded()
-    guard !username.isEmpty, !remoteKey.isEmpty else {
+    let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedRemoteKey = remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedUsername.isEmpty, !normalizedRemoteKey.isEmpty else {
       errorMessage = "Username or Remote Key is missing."
       return false
     }
@@ -704,11 +567,13 @@ class CheckvistManager: ObservableObject {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
 
-    let body: [String: String] = ["username": username, "remote_key": remoteKey]
+    let body: [String: String] = [
+      "username": normalizedUsername, "remote_key": normalizedRemoteKey,
+    ]
 
     do {
       request.httpBody = try JSONSerialization.data(withJSONObject: body)
-      let (data, response) = try await session.data(for: request)
+      let (data, response) = try await apiClient.data(for: request)
 
       guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
         errorMessage = "Login failed. Check your credentials."
@@ -743,8 +608,9 @@ class CheckvistManager: ObservableObject {
     guard !listId.isEmpty else { return }
 
     if token == nil {
-      // Avoid keychain prompt on launch/background refresh when no in-memory key exists yet.
-      if remoteKey.isEmpty {
+      // Ensure persisted credentials are available after app/laptop restarts.
+      loadRemoteKeyFromKeychainIfNeeded()
+      if remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         errorMessage = "Authentication required."
         return
       }
@@ -769,7 +635,7 @@ class CheckvistManager: ObservableObject {
     request.setValue("CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
 
     do {
-      let (data, response) = try await session.data(for: request)
+      let (data, response) = try await apiClient.data(for: request)
 
       if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
         self.token = nil
@@ -858,7 +724,7 @@ class CheckvistManager: ObservableObject {
       ? applyOptimisticCompletion(for: task.id) : nil
 
     do {
-      let (_, response) = try await session.data(for: request)
+      let (_, response) = try await apiClient.data(for: request)
       if let r = response as? HTTPURLResponse, (200...299).contains(r.statusCode) {
         await fetchTopTask()
       } else {
@@ -888,7 +754,7 @@ class CheckvistManager: ObservableObject {
     request.setValue("application/json", forHTTPHeaderField: "Accept")
 
     do {
-      let (data, response) = try await session.data(for: request)
+      let (data, response) = try await apiClient.data(for: request)
       if let httpResponse = response as? HTTPURLResponse,
         (200...299).contains(httpResponse.statusCode)
       {
@@ -934,7 +800,7 @@ class CheckvistManager: ObservableObject {
     request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": taskDict])
 
     do {
-      let (_, response) = try await session.data(for: request)
+      let (_, response) = try await apiClient.data(for: request)
       if let httpResponse = response as? HTTPURLResponse,
         (200...299).contains(httpResponse.statusCode)
       {
@@ -1004,7 +870,7 @@ class CheckvistManager: ObservableObject {
     request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": taskPayload])
 
     do {
-      let (data, response) = try await session.data(for: request)
+      let (data, response) = try await apiClient.data(for: request)
       if let httpResponse = response as? HTTPURLResponse,
         (200...299).contains(httpResponse.statusCode)
       {
@@ -1054,7 +920,7 @@ class CheckvistManager: ObservableObject {
     ])
 
     do {
-      let (data, response) = try await session.data(for: request)
+      let (data, response) = try await apiClient.data(for: request)
       if let r = response as? HTTPURLResponse, (200...299).contains(r.statusCode) {
         if let newTask = try? JSONDecoder().decode(CheckvistTask.self, from: data) {
           lastUndo = .add(taskId: newTask.id)
@@ -1186,7 +1052,7 @@ class CheckvistManager: ObservableObject {
     request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
 
     do {
-      let (_, response) = try await session.data(for: request)
+      let (_, response) = try await apiClient.data(for: request)
       if let r = response as? HTTPURLResponse, (200...299).contains(r.statusCode) {
         await fetchTopTask()
       } else {
@@ -1380,7 +1246,7 @@ class CheckvistManager: ObservableObject {
     ])
 
     do {
-      let (_, response) = try await session.data(for: request)
+      let (_, response) = try await apiClient.data(for: request)
       if let httpResponse = response as? HTTPURLResponse,
         !(200...299).contains(httpResponse.statusCode)
       {
@@ -1446,108 +1312,69 @@ class CheckvistManager: ObservableObject {
       return
     }
 
-    let cmd = input.lowercased().trimmingCharacters(in: .whitespaces)
-    logger.log("Executing command: \(cmd, privacy: .public)")
+    let parsed = CheckvistCommandEngine.parse(input)
+    logger.log("Executing command: \(input, privacy: .public)")
 
-    if cmd == "done" {
+    switch parsed {
+    case .done:
       await markCurrentTaskDone()
-      return
-    }
-    if cmd == "undone" {
+    case .undone:
       if lastUndo == nil {
         errorMessage = "Nothing to undo."
       } else {
         await undoLastAction()
       }
-      return
-    }
-    if cmd == "invalidate" {
+    case .invalidate:
       await invalidateCurrentTask()
-      return
-    }
-    if cmd.hasPrefix("due ") {
-      let raw = String(cmd.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+    case .due(let raw):
       guard !raw.isEmpty else {
         errorMessage = "Missing due date. Try: due today"
         return
       }
       let resolved = Self.resolveDueDate(raw)
       await updateTask(task: task, due: resolved)
-      return
-    }
-    if cmd == "clear due" {
+    case .clearDue:
       await updateTask(task: task, due: "")
-      return
-    }
-    if cmd == "edit" {
+    case .edit:
       quickEntryMode = .editTask
       editCursorAtEnd = true
       filterText = task.content
       isQuickEntryFocused = true
-      return
-    }
-    if cmd == "search" {
+    case .search:
       quickEntryMode = .search
       filterText = ""
       isQuickEntryFocused = true
-      return
-    }
-    if cmd == "add sibling" {
+    case .addSibling:
       quickEntryMode = .addSibling
       isQuickEntryFocused = true
-      return
-    }
-    if cmd == "add child" {
+    case .addChild:
       quickEntryMode = .addChild
       isQuickEntryFocused = true
-      return
-    }
-    if cmd == "open link" {
+    case .openLink:
       openTaskLink()
-      return
-    }
-    if cmd == "undo" {
+    case .undo:
       await undoLastAction()
-      return
-    }
-    if cmd == "toggle timer" {
+    case .toggleTimer:
       toggleTimerForCurrentTask()
-      return
-    }
-    if cmd == "pause timer" {
+    case .pauseTimer:
       if timerRunning { pauseTimer() } else { resumeTimer() }
-      return
-    }
-    if cmd == "toggle hide future" {
+    case .toggleHideFuture:
       hideFuture.toggle()
-      return
-    }
-    if cmd == "delete" {
+    case .delete:
       if confirmBeforeDelete {
         pendingDeleteConfirmation = true
       } else {
         await deleteTask(task)
       }
-      return
-    }
-    if cmd == "move up" {
+    case .moveUp:
       await moveTask(task, direction: -1)
-      return
-    }
-    if cmd == "move down" {
+    case .moveDown:
       await moveTask(task, direction: 1)
-      return
-    }
-    if cmd == "enter children" {
+    case .enterChildren:
       enterChildren()
-      return
-    }
-    if cmd == "exit parent" {
+    case .exitParent:
       exitToParent()
-      return
-    }
-    if cmd.hasPrefix("tag ") {
-      let tagName = String(cmd.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+    case .tag(let tagName):
       guard !tagName.isEmpty else {
         errorMessage = "Missing tag name. Try: tag urgent"
         return
@@ -1555,10 +1382,7 @@ class CheckvistManager: ObservableObject {
       let tagged =
         task.content.contains("#\(tagName)") ? task.content : "\(task.content) #\(tagName)"
       await updateTask(task: task, content: tagged)
-      return
-    }
-    if cmd.hasPrefix("untag ") {
-      let tagName = String(cmd.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+    case .untag(let tagName):
       guard !tagName.isEmpty else {
         errorMessage = "Missing tag name. Try: untag urgent"
         return
@@ -1567,10 +1391,7 @@ class CheckvistManager: ObservableObject {
         .replacingOccurrences(of: "#\(tagName)", with: "")
         .trimmingCharacters(in: .whitespaces)
       await updateTask(task: task, content: cleaned)
-      return
-    }
-    if cmd.hasPrefix("list ") {
-      let query = String(cmd.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+    case .list(let query):
       guard !query.isEmpty else {
         errorMessage = "Missing list query. Try: list inbox"
         return
@@ -1587,67 +1408,32 @@ class CheckvistManager: ObservableObject {
       currentSiblingIndex = 0
       filterText = ""
       await fetchTopTask()
-      return
+    case .unknown(let raw):
+      errorMessage = "Unknown command: \(raw)"
+      logger.error("Unknown command: \(raw, privacy: .public)")
     }
-
-    errorMessage = "Unknown command: \(input)"
-    logger.error("Unknown command: \(input, privacy: .public)")
   }
 
-  private static let isoFormatter: DateFormatter = {
-    let f = DateFormatter()
-    f.dateFormat = "yyyy-MM-dd"
-    return f
-  }()
-
   static func resolveDueDate(_ input: String) -> String {
-    let cal = Calendar.current
-    let today = Date()
-    switch input.lowercased() {
-    case "today":
-      return isoFormatter.string(from: today)
-    case "tomorrow":
-      return isoFormatter.string(from: cal.date(byAdding: .day, value: 1, to: today)!)
-    case "next week":
-      return isoFormatter.string(from: cal.date(byAdding: .weekOfYear, value: 1, to: today)!)
-    case "next month":
-      return isoFormatter.string(from: cal.date(byAdding: .month, value: 1, to: today)!)
-    case "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday":
-      let weekdays = [
-        "sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4,
-        "thursday": 5, "friday": 6, "saturday": 7,
-      ]
-      if let target = weekdays[input.lowercased()] {
-        let current = cal.component(.weekday, from: today)
-        var diff = target - current
-        if diff <= 0 { diff += 7 }
-        return isoFormatter.string(from: cal.date(byAdding: .day, value: diff, to: today)!)
-      }
-      return input
-    default:
-      return input
-    }
+    CheckvistCommandEngine.resolveDueDate(input)
   }
 
   func totalElapsed(forTaskId taskId: Int) -> TimeInterval {
-    var childrenByParent: [Int: [CheckvistTask]] = [:]
-    for task in tasks {
-      childrenByParent[task.parentId ?? 0, default: []].append(task)
-    }
-
-    func total(for id: Int) -> TimeInterval {
-      var elapsed = timerByTaskId[id] ?? 0
-      for child in childrenByParent[id] ?? [] {
-        elapsed += total(for: child.id)
-      }
-      return elapsed
-    }
-
-    return total(for: taskId)
+    rolledUpElapsedByTaskId()[taskId] ?? 0
   }
 
   func totalElapsed(for task: CheckvistTask) -> TimeInterval {
     totalElapsed(forTaskId: task.id)
+  }
+
+  func childCountByTaskId() -> [Int: Int] {
+    let nodes = tasks.map { CheckvistTimerNode(id: $0.id, parentId: $0.parentId) }
+    return CheckvistTimerStore.childCountByTaskId(nodes: nodes)
+  }
+
+  func rolledUpElapsedByTaskId() -> [Int: TimeInterval] {
+    let nodes = tasks.map { CheckvistTimerNode(id: $0.id, parentId: $0.parentId) }
+    return CheckvistTimerStore.rolledUpElapsedByTaskId(nodes: nodes, ownElapsed: timerByTaskId)
   }
 
   @MainActor private func scheduleReorderResync() {
@@ -1684,7 +1470,18 @@ class CheckvistManager: ObservableObject {
     request.httpBody = try? JSONSerialization.data(withJSONObject: [
       "task": ["parent_id": newParent.id]
     ])
-    _ = try? await session.data(for: request)
+    do {
+      let (_, response) = try await apiClient.data(for: request)
+      if let httpResponse = response as? HTTPURLResponse,
+        !(200...299).contains(httpResponse.statusCode)
+      {
+        errorMessage = "Failed to indent task."
+        return
+      }
+    } catch {
+      errorMessage = "Error indenting task: \(error.localizedDescription)"
+      return
+    }
     await fetchTopTask()
   }
 
@@ -1707,7 +1504,18 @@ class CheckvistManager: ObservableObject {
     let body: [String: Any] =
       newParentId == 0 ? ["task": ["parent_id": NSNull()]] : ["task": ["parent_id": newParentId]]
     request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-    _ = try? await session.data(for: request)
+    do {
+      let (_, response) = try await apiClient.data(for: request)
+      if let httpResponse = response as? HTTPURLResponse,
+        !(200...299).contains(httpResponse.statusCode)
+      {
+        errorMessage = "Failed to unindent task."
+        return
+      }
+    } catch {
+      errorMessage = "Error unindenting task: \(error.localizedDescription)"
+      return
+    }
     await fetchTopTask()
   }
 }

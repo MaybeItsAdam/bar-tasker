@@ -1,0 +1,374 @@
+import AppKit
+import OSLog
+
+@MainActor
+struct KeyboardShortcutRouter {
+  let manager: CheckvistManager
+  let logger: Logger
+  let updateTitle: () -> Void
+  let closeWindow: () -> Void
+
+  func handle(event: NSEvent, popoverWindow: NSWindow?) -> Bool {
+    guard let popoverWindow, event.window === popoverWindow else { return false }
+
+    let shift = event.modifierFlags.contains(.shift)
+    let ctrl = event.modifierFlags.contains(.control)
+    let cmd = event.modifierFlags.contains(.command)
+    let option = event.modifierFlags.contains(.option)
+
+    // We consider the user "typing" if they are explicitly focused in the text box.
+    let isFocused = manager.isQuickEntryFocused
+    let firstResponder = event.window?.firstResponder
+    let typingInNativeTextField = firstResponder is NSTextView
+    if manager.needsInitialSetup {
+      // During onboarding, let all key events through to the setup form.
+      // Only handle Escape to close the window.
+      manager.keyBuffer = ""
+      if event.keyCode == 53 {
+        closeWindow()
+        return true
+      }
+      return false
+    }
+    if typingInNativeTextField && !isFocused {
+      // Do not steal keystrokes from settings text inputs inside the popover.
+      manager.keyBuffer = ""
+      return false
+    }
+
+    let chars = event.charactersIgnoringModifiers ?? ""
+
+    // Reliable fallback for command/actions prompt.
+    if cmd && !shift && !ctrl && !option && chars.lowercased() == "k" && !isFocused {
+      manager.keyBuffer = ""
+      manager.quickEntryMode = .command
+      manager.filterText = ""
+      manager.isQuickEntryFocused = true
+      manager.commandSuggestionIndex = 0
+      logger.log("Opened command palette via Cmd+K")
+      return true
+    }
+
+    if manager.quickEntryMode == .command && isFocused {
+      if event.keyCode == 125 {
+        manager.selectNextCommandSuggestion(for: manager.filterText)
+        return true
+      }
+      if event.keyCode == 126 {
+        manager.selectPreviousCommandSuggestion(for: manager.filterText)
+        return true
+      }
+      if event.keyCode == 36 {
+        let suggestions = manager.filteredCommandSuggestions(query: manager.filterText)
+        if suggestions.indices.contains(manager.commandSuggestionIndex) {
+          let selected = suggestions[manager.commandSuggestionIndex]
+          if selected.submitImmediately {
+            manager.isQuickEntryFocused = false
+            manager.quickEntryMode = .search
+            manager.filterText = ""
+            Task { await manager.executeCommandInput(selected.command) }
+          } else {
+            manager.filterText = selected.command
+            manager.isQuickEntryFocused = true
+          }
+          return true
+        }
+      }
+    }
+
+    // Delete confirmation: Return confirms, anything else cancels.
+    if manager.pendingDeleteConfirmation {
+      if event.keyCode == 36 {  // Return - confirm delete.
+        manager.pendingDeleteConfirmation = false
+        Task {
+          if let task = manager.currentTask {
+            await manager.deleteTask(task)
+            updateTitle()
+          }
+        }
+        return true
+      } else {
+        manager.pendingDeleteConfirmation = false
+        manager.filterText = ""
+        manager.quickEntryMode = .search
+        manager.isQuickEntryFocused = false
+        if event.keyCode == 53 { return true }  // Escape just cancels.
+      }
+    }
+
+    // Cmd+↑/↓ - reorder.
+    if cmd && event.keyCode == 125 {
+      Task { if let task = manager.currentTask { await manager.moveTask(task, direction: 1) } }
+      return true
+    }
+    if cmd && event.keyCode == 126 {
+      Task { if let task = manager.currentTask { await manager.moveTask(task, direction: -1) } }
+      return true
+    }
+
+    // Up/Down arrows - navigate list ALWAYS (even if focused, to allow list navigation while typing).
+    if event.keyCode == 125 {
+      manager.nextTask()
+      updateTitle()
+      return true
+    }
+    if event.keyCode == 126 {
+      manager.previousTask()
+      updateTitle()
+      return true
+    }
+
+    // Shift+→ - focus/hoist (Checkvist), plain → - enter children.
+    if event.keyCode == 124 {
+      if isFocused { return false }
+      manager.enterChildren()
+      if !manager.filterText.isEmpty {
+        manager.filterText = ""
+        manager.quickEntryMode = .search
+        manager.isQuickEntryFocused = false
+      }
+      return true
+    }
+    // Shift+← - un-focus (Checkvist), plain ← - exit to parent.
+    if event.keyCode == 123 {
+      if isFocused { return false }
+      if !manager.filterText.isEmpty {
+        manager.filterText = ""
+        manager.quickEntryMode = .search
+        manager.isQuickEntryFocused = false
+      }
+      manager.exitToParent()
+      updateTitle()
+      return true
+    }
+
+    // Space - mark done; Shift+Space - invalidate.
+    if event.keyCode == 49 && !isFocused && !ctrl && !cmd {
+      if shift {
+        Task {
+          await manager.invalidateCurrentTask()
+          updateTitle()
+        }
+      } else {
+        Task {
+          await manager.markCurrentTaskDone()
+          updateTitle()
+        }
+      }
+      return true
+    }
+
+    // Shift+Enter - add child; Enter - add sibling.
+    if event.keyCode == 36 {
+      if isFocused { return false }
+      manager.quickEntryMode = shift ? .addChild : .addSibling
+      manager.isQuickEntryFocused = true
+      return true
+    }
+
+    // Tab / Shift+Tab - indent/unindent OR add child.
+    if event.keyCode == 48 {
+      if isFocused { return false }
+      if shift {
+        Task { if let task = manager.currentTask { await manager.unindentTask(task) } }
+      } else {
+        manager.quickEntryMode = .addChild
+        manager.isQuickEntryFocused = true
+      }
+      return true
+    }
+
+    // Escape - cancel input if active; otherwise close.
+    if event.keyCode == 53 {
+      if isFocused || manager.quickEntryMode != .search || !manager.filterText.isEmpty {
+        manager.isQuickEntryFocused = false
+        manager.quickEntryMode = .search
+        manager.filterText = ""
+        return true
+      }
+      closeWindow()
+      return true
+    }
+
+    // F2 - edit task, cursor at end.
+    if event.keyCode == 120 && !isFocused {
+      manager.quickEntryMode = .editTask
+      manager.editCursorAtEnd = true
+      manager.filterText = manager.currentTask?.content ?? ""
+      manager.isQuickEntryFocused = true
+      return true
+    }
+
+    // Del (forward delete / Fn+Backspace) - delete task.
+    if event.keyCode == 117 && !isFocused {
+      if manager.confirmBeforeDelete {
+        manager.pendingDeleteConfirmation = true
+        manager.quickEntryMode = .command
+        manager.commandSuggestionIndex = 0
+        manager.filterText = ""
+        manager.isQuickEntryFocused = false
+      } else {
+        Task {
+          if let task = manager.currentTask {
+            await manager.deleteTask(task)
+            updateTitle()
+          }
+        }
+      }
+      return true
+    }
+
+    // Two-key sequences.
+    let sequenceStarters: Set<String> = ["e", "d", "g"]
+    if !manager.keyBuffer.isEmpty {
+      let sequence = manager.keyBuffer + chars
+      manager.keyBuffer = ""
+      if !isFocused {
+        switch sequence {
+        case "ee", "ea":
+          manager.quickEntryMode = .editTask
+          manager.editCursorAtEnd = true
+          manager.filterText = manager.currentTask?.content ?? ""
+          manager.isQuickEntryFocused = true
+          return true
+        case "ei":
+          manager.quickEntryMode = .editTask
+          manager.editCursorAtEnd = false
+          manager.filterText = manager.currentTask?.content ?? ""
+          manager.isQuickEntryFocused = true
+          return true
+        case "dd":
+          manager.quickEntryMode = .command
+          manager.commandSuggestionIndex = 0
+          manager.filterText = "due "
+          manager.isQuickEntryFocused = true
+          return true
+        case "gg":
+          manager.openTaskLink()
+          return true
+        case "gt":
+          manager.quickEntryMode = .command
+          manager.commandSuggestionIndex = 0
+          manager.filterText = "tag "
+          manager.isQuickEntryFocused = true
+          return true
+        case "gu":
+          manager.quickEntryMode = .command
+          manager.commandSuggestionIndex = 0
+          manager.filterText = "untag "
+          manager.isQuickEntryFocused = true
+          return true
+        default:
+          break
+        }
+      }
+      return false
+    }
+    if sequenceStarters.contains(chars) && !shift && !ctrl && !isFocused {
+      manager.keyBuffer = chars
+      return true
+    }
+
+    // t - toggle timer.
+    if chars == "t" && !shift && !ctrl && !isFocused {
+      if manager.timerIsEnabled {
+        manager.toggleTimerForCurrentTask()
+      }
+      return true
+    }
+
+    // p - pause/resume timer.
+    if chars == "p" && !shift && !ctrl && !isFocused {
+      if manager.timerIsEnabled {
+        if manager.timerRunning { manager.pauseTimer() } else { manager.resumeTimer() }
+      }
+      return true
+    }
+
+    // j/k/u - Vim up/down navigation, undo.
+    if chars == "u" && !shift && !ctrl && !isFocused {
+      Task { await manager.undoLastAction() }
+      return true
+    }
+    if chars == "j" && !shift && !ctrl && !isFocused {
+      manager.nextTask()
+      updateTitle()
+      return true
+    }
+    if chars == "k" && !shift && !ctrl && !isFocused {
+      manager.previousTask()
+      updateTitle()
+      return true
+    }
+
+    // h/l - Vim left/right navigation (parent / children).
+    if chars == "h" && !shift && !ctrl && !isFocused {
+      if !manager.filterText.isEmpty {
+        manager.filterText = ""
+        manager.quickEntryMode = .search
+        manager.isQuickEntryFocused = false
+      }
+      manager.exitToParent()
+      updateTitle()
+      return true
+    }
+    if chars == "l" && !shift && !ctrl && !isFocused {
+      manager.enterChildren()
+      if !manager.filterText.isEmpty {
+        manager.filterText = ""
+        manager.quickEntryMode = .search
+        manager.isQuickEntryFocused = false
+      }
+      return true
+    }
+
+    // H (Shift+h) - toggle hide future.
+    if chars == "h" && shift && !ctrl && !isFocused {
+      manager.hideFuture.toggle()
+      return true
+    }
+
+    // Shift+L - fast list switch prompt.
+    if chars == "l" && shift && !ctrl && !cmd && !isFocused {
+      manager.quickEntryMode = .command
+      manager.commandSuggestionIndex = 0
+      manager.filterText = "list "
+      manager.isQuickEntryFocused = true
+      return true
+    }
+
+    // Forward-slash - focus search.
+    if chars == "/" && !shift && !ctrl && !isFocused {
+      manager.quickEntryMode = .search
+      manager.isQuickEntryFocused = true
+      return true
+    }
+
+    // i - insert, a - append.
+    if chars == "i" && !shift && !ctrl && !isFocused {
+      manager.quickEntryMode = .editTask
+      manager.editCursorAtEnd = false
+      manager.filterText = manager.currentTask?.content ?? ""
+      manager.isQuickEntryFocused = true
+      return true
+    }
+    if chars == "a" && !shift && !ctrl && !isFocused {
+      manager.quickEntryMode = .editTask
+      manager.editCursorAtEnd = true
+      manager.filterText = manager.currentTask?.content ?? ""
+      manager.isQuickEntryFocused = true
+      return true
+    }
+
+    // : or ; - command mode.
+    if (chars == ":" || chars == ";") && !ctrl && !isFocused {
+      manager.quickEntryMode = .command
+      manager.commandSuggestionIndex = 0
+      manager.filterText = ""
+      manager.isQuickEntryFocused = true
+      return true
+    }
+
+    return false
+  }
+}

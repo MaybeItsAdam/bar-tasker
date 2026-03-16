@@ -362,10 +362,18 @@ struct PopoverView: View {
         .frame(minHeight: 150)
       } else {
         ScrollViewReader { proxy in
+          let childCountsByTaskId = manager.childCountByTaskId()
+          let elapsedByTaskId = manager.rolledUpElapsedByTaskId()
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(Array(manager.visibleTasks.enumerated()), id: \.element.id) { index, task in
-                taskRow(task: task, index: index).id(task.id)
+                taskRow(
+                  task: task,
+                  index: index,
+                  childCount: childCountsByTaskId[task.id, default: 0],
+                  elapsed: elapsedByTaskId[task.id, default: 0]
+                )
+                .id(task.id)
 
                 if manager.currentSiblingIndex == index && manager.quickEntryMode == .addSibling {
                   quickEntryBar(verticalPadding: PopoverLayout.inlineEntryVerticalPadding)
@@ -546,10 +554,10 @@ struct PopoverView: View {
   // MARK: - Task Rows
 
   @ViewBuilder
-  func taskRow(task: CheckvistTask, index: Int) -> some View {
+  func taskRow(task: CheckvistTask, index: Int, childCount: Int, elapsed: TimeInterval) -> some View
+  {
     let isSelected = index == manager.currentSiblingIndex
     let isCompleting = manager.completingTaskId == task.id
-    let childCount = manager.tasks.filter { ($0.parentId ?? 0) == task.id }.count
 
     HStack(alignment: .top, spacing: PopoverLayout.rowContentSpacing) {
       Image(
@@ -596,7 +604,6 @@ struct PopoverView: View {
           fadedTaskTitle(task: task)
         }
 
-        let elapsed = manager.totalElapsed(for: task)
         if manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id) {
           timerBadge(
             elapsed: elapsed, running: manager.timedTaskId == task.id && manager.timerRunning)
@@ -898,7 +905,7 @@ struct PopoverView: View {
     var lastEnd = text.startIndex
 
     for match in matches {
-      let matchRange = Range(match.range, in: text)!
+      guard let matchRange = Range(match.range, in: text) else { continue }
 
       // Add preceding text
       if matchRange.lowerBound > lastEnd {
