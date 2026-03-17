@@ -99,4 +99,44 @@ final class CoreLogicRegressionTests: XCTestCase {
       .terminateNow
     )
   }
+
+  func testAuthRetryPolicyRetriesOnlyOnceAfterUnauthorized() {
+    var state = AuthRetryState(hasRetriedAfterUnauthorized: false)
+
+    let firstAttempt = AuthRetryPolicy.decisionForUnauthorized(state: state)
+    XCTAssertEqual(firstAttempt.decision, .retryAuthentication)
+    XCTAssertTrue(firstAttempt.nextState.hasRetriedAfterUnauthorized)
+
+    state = firstAttempt.nextState
+    let secondAttempt = AuthRetryPolicy.decisionForUnauthorized(state: state)
+    XCTAssertEqual(secondAttempt.decision, .giveUp)
+    XCTAssertEqual(secondAttempt.nextState, state)
+  }
+
+  func testAutoRefreshThrottlePolicyBlocksSetupAndThrottlesBurstRefreshes() {
+    let now = Date(timeIntervalSince1970: 1_000)
+
+    XCTAssertFalse(
+      AutoRefreshThrottlePolicy.shouldRefresh(
+        needsInitialSetup: true,
+        now: now,
+        lastRefreshAt: now.addingTimeInterval(-100)
+      ))
+
+    XCTAssertFalse(
+      AutoRefreshThrottlePolicy.shouldRefresh(
+        needsInitialSetup: false,
+        now: now,
+        lastRefreshAt: now.addingTimeInterval(-3),
+        minimumInterval: 8
+      ))
+
+    XCTAssertTrue(
+      AutoRefreshThrottlePolicy.shouldRefresh(
+        needsInitialSetup: false,
+        now: now,
+        lastRefreshAt: now.addingTimeInterval(-12),
+        minimumInterval: 8
+      ))
+  }
 }

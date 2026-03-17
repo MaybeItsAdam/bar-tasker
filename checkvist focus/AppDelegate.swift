@@ -22,6 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   private var lastToggleTime: Date = Date.distantPast
   private var pendingPopoverResize: DispatchWorkItem?
   private var explicitQuitRequested = false
+  private var lastAutoRefreshTime: Date = Date.distantPast
   private let logger = Logger(subsystem: "uk.co.maybeitsadam.checkvist-focus", category: "keyboard")
 
   private var currentPopoverContentSize: NSSize {
@@ -101,6 +102,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       .dropFirst().receive(on: RunLoop.main)
       .sink { [weak self] _ in
         self?.updateTitle()
+      }
+      .store(in: &cancellables)
+
+    NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        self?.scheduleAutoRefresh()
+      }
+      .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        self?.scheduleAutoRefresh()
       }
       .store(in: &cancellables)
 
@@ -410,6 +425,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc func menuRefresh() {
+    Task { [weak self] in
+      await self?.checkvistManager.fetchTopTask()
+      self?.updateTitle()
+    }
+  }
+
+  private func scheduleAutoRefresh() {
+    let now = Date()
+    guard
+      AutoRefreshThrottlePolicy.shouldRefresh(
+        needsInitialSetup: checkvistManager.needsInitialSetup,
+        now: now,
+        lastRefreshAt: lastAutoRefreshTime
+      )
+    else { return }
+    lastAutoRefreshTime = now
     Task { [weak self] in
       await self?.checkvistManager.fetchTopTask()
       self?.updateTitle()

@@ -272,6 +272,9 @@ class CheckvistManager: ObservableObject {
   }
 
   private var token: String? = nil
+  private var loadingOperationCount: Int = 0
+  private var isLoginInProgress: Bool = false
+  private var loginWaiters: [CheckedContinuation<Bool, Never>] = []
   private var cancellables = Set<AnyCancellable>()
   private var pendingReorderRequests: [(taskId: Int, position: Int)] = []
   private var reorderSyncTask: Task<Void, Never>? = nil
@@ -363,7 +366,6 @@ class CheckvistManager: ObservableObject {
       .dropFirst()
       .sink { [weak self] value in
         UserDefaults.standard.set(value, forKey: "checkvistListId")
-        self?.token = nil
       }.store(in: &cancellables)
     $confirmBeforeDelete.sink { UserDefaults.standard.set($0, forKey: "confirmBeforeDelete") }
       .store(in: &cancellables)
@@ -427,6 +429,18 @@ class CheckvistManager: ObservableObject {
       if let id = Int(k) { result[id] = v }
     }
     return result
+  }
+
+  @MainActor
+  private func beginLoading() {
+    loadingOperationCount += 1
+    isLoading = true
+  }
+
+  @MainActor
+  private func endLoading() {
+    loadingOperationCount = max(loadingOperationCount - 1, 0)
+    isLoading = loadingOperationCount > 0
   }
 
   // MARK: - Keychain
@@ -544,7 +558,70 @@ class CheckvistManager: ObservableObject {
   }
   // MARK: - API
 
+  private enum AuthenticatedRequestError: Error {
+    case authenticationUnavailable
+    case invalidResponse
+  }
+
+  @MainActor
+  private func performAuthenticatedRequest(
+    _ buildRequest: (String) throws -> URLRequest
+  ) async throws -> (Data, HTTPURLResponse) {
+    var retryState = AuthRetryState(hasRetriedAfterUnauthorized: false)
+
+    while true {
+      if token == nil {
+        let ok = await login()
+        if !ok {
+          throw AuthenticatedRequestError.authenticationUnavailable
+        }
+      }
+
+      guard let validToken = token else {
+        throw AuthenticatedRequestError.authenticationUnavailable
+      }
+
+      let request = try buildRequest(validToken)
+      let (data, response) = try await apiClient.data(for: request)
+      guard let httpResponse = response as? HTTPURLResponse else {
+        throw AuthenticatedRequestError.invalidResponse
+      }
+
+      if httpResponse.statusCode == 401 {
+        token = nil
+        let retry = AuthRetryPolicy.decisionForUnauthorized(state: retryState)
+        retryState = retry.nextState
+        if retry.decision == .retryAuthentication {
+          continue
+        }
+      }
+
+      return (data, httpResponse)
+    }
+  }
+
   @MainActor func login() async -> Bool {
+    if isLoginInProgress {
+      return await withCheckedContinuation { continuation in
+        loginWaiters.append(continuation)
+      }
+    }
+
+    isLoginInProgress = true
+    let result = await executeLoginRequest()
+    isLoginInProgress = false
+
+    let waiters = loginWaiters
+    loginWaiters = []
+    for waiter in waiters {
+      waiter.resume(returning: result)
+    }
+
+    return result
+  }
+
+  @MainActor
+  private func executeLoginRequest() async -> Bool {
     loadRemoteKeyFromKeychainIfNeeded()
     let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
     let normalizedRemoteKey = remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -553,12 +630,12 @@ class CheckvistManager: ObservableObject {
       return false
     }
 
-    isLoading = true
+    beginLoading()
+    defer { endLoading() }
     errorMessage = nil
 
     guard let url = URL(string: "https://checkvist.com/auth/login.json") else {
       errorMessage = "Invalid login URL."
-      isLoading = false
       return false
     }
 
@@ -577,7 +654,6 @@ class CheckvistManager: ObservableObject {
 
       guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
         errorMessage = "Login failed. Check your credentials."
-        isLoading = false
         return false
       }
 
@@ -591,15 +667,12 @@ class CheckvistManager: ObservableObject {
         self.token = tokenString
       } else {
         errorMessage = "Failed to parse token."
-        isLoading = false
         return false
       }
 
-      isLoading = false
       return true
     } catch {
       errorMessage = "Network error: \(error.localizedDescription)"
-      isLoading = false
       return false
     }
   }
@@ -607,39 +680,27 @@ class CheckvistManager: ObservableObject {
   @MainActor func fetchTopTask() async {
     guard !listId.isEmpty else { return }
 
-    if token == nil {
-      // Ensure persisted credentials are available after app/laptop restarts.
-      loadRemoteKeyFromKeychainIfNeeded()
-      if remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        errorMessage = "Authentication required."
-        return
-      }
-      let success = await login()
-      if !success { return }
-    }
-
-    guard let validToken = token else { return }
-
-    isLoading = true
+    beginLoading()
+    defer { endLoading() }
     errorMessage = nil
 
     guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json") else {
       errorMessage = "Invalid list URL."
-      isLoading = false
       return
     }
 
-    var request = URLRequest(url: url)
-    request.httpMethod = "GET"
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
-
     do {
-      let (data, response) = try await apiClient.data(for: request)
+      let (data, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue(
+          "CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
+        return request
+      }
 
-      if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
-        self.token = nil
-        self.isLoading = false
+      guard (200...299).contains(httpResponse.statusCode) else {
+        errorMessage = "Failed to fetch tasks."
         return
       }
 
@@ -668,11 +729,13 @@ class CheckvistManager: ObservableObject {
         onboardingCompleted = true
       }
 
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      if errorMessage == nil {
+        errorMessage = "Authentication required."
+      }
     } catch {
       errorMessage = "Failed to fetch tasks: \(error.localizedDescription)"
     }
-
-    isLoading = false
   }
 
   @MainActor func markCurrentTaskDone() async {
@@ -704,34 +767,35 @@ class CheckvistManager: ObservableObject {
       }
     }
 
-    if token == nil {
-      let ok = await login()
-      if !ok { return }
-    }
-    guard let validToken = token else { return }
     guard
       let url = URL(
         string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id)/\(endpoint).json")
     else { return }
-
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
 
     let optimisticSnapshot: [CheckvistTask]? =
       (!isUndo && (endpoint == "close" || endpoint == "invalidate"))
       ? applyOptimisticCompletion(for: task.id) : nil
 
     do {
-      let (_, response) = try await apiClient.data(for: request)
-      if let r = response as? HTTPURLResponse, (200...299).contains(r.statusCode) {
+      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue(
+          "CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
+        return request
+      }
+      if (200...299).contains(httpResponse.statusCode) {
         await fetchTopTask()
       } else {
         if let optimisticSnapshot {
           restoreTasksSnapshot(optimisticSnapshot)
         }
         errorMessage = "Failed to \(endpoint) task."
+      }
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      if let optimisticSnapshot {
+        restoreTasksSnapshot(optimisticSnapshot)
       }
     } catch {
       if let optimisticSnapshot {
@@ -741,27 +805,24 @@ class CheckvistManager: ObservableObject {
     }
   }
   @MainActor func fetchLists() async {
-    if token == nil {
-      let ok = await login()
-      if !ok { return }
-    }
-    guard let validToken = token,
-      let url = URL(string: "https://checkvist.com/checklists.json")
-    else { return }
-
-    var request = URLRequest(url: url)
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    guard let url = URL(string: "https://checkvist.com/checklists.json") else { return }
 
     do {
-      let (data, response) = try await apiClient.data(for: request)
-      if let httpResponse = response as? HTTPURLResponse,
-        (200...299).contains(httpResponse.statusCode)
-      {
+      let (data, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+      }
+      if (200...299).contains(httpResponse.statusCode) {
         let lists = try JSONDecoder().decode([CheckvistList].self, from: data)
         self.availableLists = lists.filter { !($0.archived ?? false) }
       } else {
         self.errorMessage = "Failed to fetch lists."
+      }
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      if errorMessage == nil {
+        errorMessage = "Authentication required."
       }
     } catch {
       self.errorMessage = "Failed to fetch lists: \(error.localizedDescription)"
@@ -779,34 +840,32 @@ class CheckvistManager: ObservableObject {
       lastUndo = .update(taskId: task.id, oldContent: task.content, oldDue: task.due)
     }
 
-    if token == nil {
-      let ok = await login()
-      if !ok { return }
-    }
-    guard let validToken = token else { return }
     guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id).json")
     else { return }
-
-    var request = URLRequest(url: url)
-    request.httpMethod = "PUT"
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
 
     var taskDict: [String: Any] = [:]
     if let c = content { taskDict["content"] = c }
     if let d = due { taskDict["due"] = d }
 
-    request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": taskDict])
-
     do {
-      let (_, response) = try await apiClient.data(for: request)
-      if let httpResponse = response as? HTTPURLResponse,
-        (200...299).contains(httpResponse.statusCode)
-      {
+      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(
+          "CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": taskDict])
+        return request
+      }
+      if (200...299).contains(httpResponse.statusCode) {
         await fetchTopTask()
       } else {
         errorMessage = "Failed to update task."
+      }
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      if errorMessage == nil {
+        errorMessage = "Authentication required."
       }
     } catch {
       errorMessage = "Error: \(error.localizedDescription)"
@@ -819,30 +878,15 @@ class CheckvistManager: ObservableObject {
     let optimisticTask = insertOptimisticSiblingTask(content: content, afterTask: insertAfterTask)
     let optimisticTaskId = optimisticTask.id
 
-    if token == nil {
-      let success = await login()
-      if !success {
-        removeOptimisticTask(id: optimisticTaskId)
-        return
-      }
-    }
-
-    guard let validToken = token else { return }
-
-    isLoading = true
+    beginLoading()
+    defer { endLoading() }
     errorMessage = nil
 
     guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json?parse=true")
     else {
-      isLoading = false
+      removeOptimisticTask(id: optimisticTaskId)
       return
     }
-
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
 
     var taskPayload: [String: Any] = ["content": content]
     if currentParentId != 0 {
@@ -867,13 +911,18 @@ class CheckvistManager: ObservableObject {
 
     if apiPosition > 0 { taskPayload["position"] = apiPosition }
 
-    request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": taskPayload])
-
     do {
-      let (data, response) = try await apiClient.data(for: request)
-      if let httpResponse = response as? HTTPURLResponse,
-        (200...299).contains(httpResponse.statusCode)
-      {
+      let (data, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(
+          "CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": taskPayload])
+        return request
+      }
+      if (200...299).contains(httpResponse.statusCode) {
         if let newTask = try? JSONDecoder().decode(CheckvistTask.self, from: data) {
           lastUndo = .add(taskId: newTask.id)
         }
@@ -881,12 +930,15 @@ class CheckvistManager: ObservableObject {
       } else {
         removeOptimisticTask(id: optimisticTaskId)
         errorMessage = "Failed to add task."
-        isLoading = false
+      }
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      removeOptimisticTask(id: optimisticTaskId)
+      if errorMessage == nil {
+        errorMessage = "Authentication required."
       }
     } catch {
       removeOptimisticTask(id: optimisticTaskId)
       errorMessage = "Error adding task: \(error.localizedDescription)"
-      isLoading = false
     }
   }
 
@@ -895,33 +947,28 @@ class CheckvistManager: ObservableObject {
     let optimisticTask = insertOptimisticChildTask(content: content, parentId: parentId)
     let optimisticTaskId = optimisticTask.id
 
-    if token == nil {
-      let ok = await login()
-      if !ok {
-        removeOptimisticTask(id: optimisticTaskId)
-        return
-      }
-    }
-    guard let validToken = token,
-      let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json?parse=true")
+    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json?parse=true")
     else {
       removeOptimisticTask(id: optimisticTaskId)
       return
     }
-    isLoading = true
+    beginLoading()
+    defer { endLoading() }
     errorMessage = nil
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
-    request.httpBody = try? JSONSerialization.data(withJSONObject: [
-      "task": ["content": content, "parent_id": parentId, "position": 1]
-    ])
 
     do {
-      let (data, response) = try await apiClient.data(for: request)
-      if let r = response as? HTTPURLResponse, (200...299).contains(r.statusCode) {
+      let (data, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+          "task": ["content": content, "parent_id": parentId, "position": 1]
+        ])
+        return request
+      }
+      if (200...299).contains(httpResponse.statusCode) {
         if let newTask = try? JSONDecoder().decode(CheckvistTask.self, from: data) {
           lastUndo = .add(taskId: newTask.id)
         }
@@ -929,12 +976,15 @@ class CheckvistManager: ObservableObject {
       } else {
         removeOptimisticTask(id: optimisticTaskId)
         errorMessage = "Failed to add task."
-        isLoading = false
+      }
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      removeOptimisticTask(id: optimisticTaskId)
+      if errorMessage == nil {
+        errorMessage = "Authentication required."
       }
     } catch {
       removeOptimisticTask(id: optimisticTaskId)
       errorMessage = "Error: \(error.localizedDescription)"
-      isLoading = false
     }
   }
 
@@ -1037,31 +1087,31 @@ class CheckvistManager: ObservableObject {
       lastUndo = nil  // Clear undo history since we don't support recovering hard-deleted tasks yet
     }
 
-    if token == nil {
-      let ok = await login()
-      if !ok { return }
-    }
-    guard let validToken = token else { return }
     guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id).json")
     else { return }
 
-    isLoading = true
-    var request = URLRequest(url: url)
-    request.httpMethod = "DELETE"
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
+    beginLoading()
+    defer { endLoading() }
 
     do {
-      let (_, response) = try await apiClient.data(for: request)
-      if let r = response as? HTTPURLResponse, (200...299).contains(r.statusCode) {
+      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
+        return request
+      }
+      if (200...299).contains(httpResponse.statusCode) {
         await fetchTopTask()
       } else {
         errorMessage = "Failed to delete task."
-        isLoading = false
+      }
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      if errorMessage == nil {
+        errorMessage = "Authentication required."
       }
     } catch {
       errorMessage = "Error: \(error.localizedDescription)"
-      isLoading = false
     }
   }
 
@@ -1228,34 +1278,30 @@ class CheckvistManager: ObservableObject {
   }
 
   private func commitReorderRequest(taskId: Int, position: Int) async -> Bool {
-    if token == nil {
-      let ok = await login()
-      if !ok { return false }
-    }
-    guard let validToken = token,
-      let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(taskId).json")
+    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(taskId).json")
     else { return false }
 
-    var request = URLRequest(url: url)
-    request.httpMethod = "PUT"
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
-    request.httpBody = try? JSONSerialization.data(withJSONObject: [
-      "task": ["position": position]
-    ])
-
     do {
-      let (_, response) = try await apiClient.data(for: request)
-      if let httpResponse = response as? HTTPURLResponse,
-        !(200...299).contains(httpResponse.statusCode)
-      {
+      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+          "task": ["position": position]
+        ])
+        return request
+      }
+      if !(200...299).contains(httpResponse.statusCode) {
         await MainActor.run {
           self.errorMessage = "Failed to move task."
         }
         return false
       }
       return true
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      return false
     } catch {
       await MainActor.run {
         self.errorMessage = "Error: \(error.localizedDescription)"
@@ -1451,33 +1497,33 @@ class CheckvistManager: ObservableObject {
   // MARK: - Indent / Unindent
 
   @MainActor func indentTask(_ task: CheckvistTask) async {
-    if token == nil {
-      let ok = await login()
-      if !ok { return }
-    }
-    guard let validToken = token else { return }
     let siblings = tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }), idx > 0 else { return }
     let newParent = siblings[idx - 1]
 
     guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id).json")
     else { return }
-    var request = URLRequest(url: url)
-    request.httpMethod = "PUT"
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
-    request.httpBody = try? JSONSerialization.data(withJSONObject: [
-      "task": ["parent_id": newParent.id]
-    ])
     do {
-      let (_, response) = try await apiClient.data(for: request)
-      if let httpResponse = response as? HTTPURLResponse,
-        !(200...299).contains(httpResponse.statusCode)
-      {
+      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+          "task": ["parent_id": newParent.id]
+        ])
+        return request
+      }
+      if !(200...299).contains(httpResponse.statusCode) {
         errorMessage = "Failed to indent task."
         return
       }
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      if errorMessage == nil {
+        errorMessage = "Authentication required."
+      }
+      return
     } catch {
       errorMessage = "Error indenting task: \(error.localizedDescription)"
       return
@@ -1486,32 +1532,33 @@ class CheckvistManager: ObservableObject {
   }
 
   @MainActor func unindentTask(_ task: CheckvistTask) async {
-    if token == nil {
-      let ok = await login()
-      if !ok { return }
-    }
-    guard let validToken = token, let parentId = task.parentId, parentId != 0 else { return }
+    guard let parentId = task.parentId, parentId != 0 else { return }
     guard let parent = tasks.first(where: { $0.id == parentId }) else { return }
     let newParentId = parent.parentId ?? 0
 
     guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id).json")
     else { return }
-    var request = URLRequest(url: url)
-    request.httpMethod = "PUT"
-    request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
     let body: [String: Any] =
       newParentId == 0 ? ["task": ["parent_id": NSNull()]] : ["task": ["parent_id": newParentId]]
-    request.httpBody = try? JSONSerialization.data(withJSONObject: body)
     do {
-      let (_, response) = try await apiClient.data(for: request)
-      if let httpResponse = response as? HTTPURLResponse,
-        !(200...299).contains(httpResponse.statusCode)
-      {
+      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return request
+      }
+      if !(200...299).contains(httpResponse.statusCode) {
         errorMessage = "Failed to unindent task."
         return
       }
+    } catch AuthenticatedRequestError.authenticationUnavailable {
+      if errorMessage == nil {
+        errorMessage = "Authentication required."
+      }
+      return
     } catch {
       errorMessage = "Error unindenting task: \(error.localizedDescription)"
       return
