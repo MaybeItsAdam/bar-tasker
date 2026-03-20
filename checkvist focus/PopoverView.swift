@@ -28,6 +28,12 @@ enum PopoverLayout {
     if !manager.breadcrumbs.isEmpty || manager.currentParentId != 0 {
       fixedHeight += 30 + dividerHeight
     }
+    if manager.shouldShowRootScopeSection {
+      fixedHeight += (manager.rootTaskView == .all ? 40 : 72) + dividerHeight
+    }
+    if manager.showTaskBreadcrumbContext {
+      fixedHeight += 24 + dividerHeight
+    }
     if manager.hideFuture {
       fixedHeight += 24 + dividerHeight
     }
@@ -57,7 +63,9 @@ enum PopoverLayout {
     } else if manager.visibleTasks.isEmpty {
       taskAreaHeight = 150
     } else {
-      let visibleRows = CGFloat(min(manager.visibleTasks.count, 6))
+      let visibleTasks = manager.visibleTasks
+      let sectionRows = manager.rootDueSectionCount(in: visibleTasks)
+      let visibleRows = CGFloat(min(visibleTasks.count + sectionRows, 8))
       taskAreaHeight = max(110, visibleRows * 34)
     }
 
@@ -208,6 +216,16 @@ struct PopoverView: View {
         Divider()
       }
 
+      if manager.shouldShowRootScopeSection {
+        rootScopeSection
+        Divider()
+      }
+
+      if manager.showTaskBreadcrumbContext {
+        breadcrumbContextChip
+        Divider()
+      }
+
       if manager.needsInitialSetup {
         setupView
           .frame(maxHeight: .infinity, alignment: .top)
@@ -340,15 +358,172 @@ struct PopoverView: View {
     .padding(.horizontal, 14).padding(.vertical, 4)
   }
 
+  var rootScopeSection: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 0) {
+        ForEach(
+          Array(CheckvistManager.RootTaskView.allCases.enumerated()),
+          id: \.element.rawValue
+        ) { index, scope in
+          if index > 0 {
+            Rectangle()
+              .fill(Color.white.opacity(0.08))
+              .frame(width: 1, height: 20)
+          }
+          rootScopeTabButton(scope)
+        }
+      }
+      .padding(2)
+      .background(Color.secondary.opacity(0.08))
+      .overlay {
+        Rectangle().stroke(Color.white.opacity(0.08), lineWidth: 1)
+      }
+      .overlay {
+        Rectangle()
+          .stroke(
+            manager.rootScopeFocusLevel == 1 ? Color.accentColor.opacity(0.9) : Color.clear,
+            lineWidth: 1
+          )
+      }
+
+      if manager.rootTaskView == .due {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 6) {
+            rootScopeChip(
+              title: "All due",
+              isSelected: manager.selectedRootDueBucket == nil
+            ) {
+              manager.selectedRootDueBucket = nil
+              manager.currentSiblingIndex = 0
+              manager.rootScopeFocusLevel = 2
+            }
+
+            ForEach(
+              CheckvistManager.RootDueBucket.allCases.filter { $0 != .noDueDate },
+              id: \.rawValue
+            ) { bucket in
+              rootScopeChip(
+                title: bucket.title,
+                isSelected: manager.selectedRootDueBucket == bucket
+              ) {
+                manager.selectedRootDueBucket = bucket
+                manager.currentSiblingIndex = 0
+                manager.rootScopeFocusLevel = 2
+              }
+            }
+          }
+        }
+        .padding(3)
+        .background(Color.secondary.opacity(0.06))
+        .overlay {
+          Rectangle().stroke(Color.white.opacity(0.08), lineWidth: 1)
+        }
+        .overlay {
+          Rectangle()
+            .stroke(
+              manager.rootScopeFocusLevel == 2 ? Color.accentColor.opacity(0.9) : Color.clear,
+              lineWidth: 1
+            )
+        }
+      } else if manager.rootTaskView == .tags {
+        let tags = manager.rootLevelTagNames(limit: 30)
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 6) {
+            rootScopeChip(
+              title: "All tags",
+              isSelected: manager.selectedRootTag.isEmpty
+            ) {
+              manager.selectedRootTag = ""
+              manager.currentSiblingIndex = 0
+              manager.rootScopeFocusLevel = 2
+            }
+
+            ForEach(tags, id: \.self) { tag in
+              rootScopeChip(
+                title: tag,
+                isSelected: manager.selectedRootTag == tag
+              ) {
+                manager.selectedRootTag = tag
+                manager.currentSiblingIndex = 0
+                manager.rootScopeFocusLevel = 2
+              }
+            }
+          }
+        }
+        .padding(3)
+        .background(Color.secondary.opacity(0.06))
+        .overlay {
+          Rectangle().stroke(Color.white.opacity(0.08), lineWidth: 1)
+        }
+        .overlay {
+          Rectangle()
+            .stroke(
+              manager.rootScopeFocusLevel == 2 ? Color.accentColor.opacity(0.9) : Color.clear,
+              lineWidth: 1
+            )
+        }
+      }
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 3)
+  }
+
+  @ViewBuilder
+  func rootScopeTabButton(_ scope: CheckvistManager.RootTaskView) -> some View {
+    let selected = manager.rootTaskView == scope
+    Button {
+      manager.setRootTaskView(scope)
+      manager.rootScopeFocusLevel = 1
+    } label: {
+      Text(scope.title)
+        .font(.system(size: 12, weight: .semibold))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+        .background(selected ? Color.accentColor.opacity(0.24) : Color.clear)
+        .foregroundColor(selected ? Color.accentColor : .secondary)
+    }
+    .buttonStyle(.plain)
+    .contentShape(Rectangle())
+  }
+
+  @ViewBuilder
+  func rootScopeChip(
+    title: String,
+    isSelected: Bool,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Text(title)
+        .font(.system(size: 10, weight: .medium))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(isSelected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12))
+        .foregroundColor(isSelected ? Color.accentColor : .secondary)
+    }
+    .buttonStyle(.plain)
+  }
+
+  var breadcrumbContextChip: some View {
+    HStack {
+      Label("Task context", systemImage: "square.split.2x1")
+        .font(.caption2).padding(.horizontal, 6).padding(.vertical, 3)
+        .background(Color.blue.opacity(0.15)).foregroundColor(.blue).clipShape(Capsule())
+      Spacer()
+    }
+    .padding(.horizontal, 14).padding(.vertical, 4)
+  }
+
   var taskList: some View {
-    Group {
+    let visibleTasks = manager.visibleTasks
+
+    return Group {
       if manager.isLoading && manager.tasks.isEmpty {
         HStack {
           Spacer()
           ProgressView().padding(24)
           Spacer()
         }
-      } else if manager.visibleTasks.isEmpty {
+      } else if visibleTasks.isEmpty {
         HStack {
           Spacer()
           VStack(spacing: 6) {
@@ -366,7 +541,13 @@ struct PopoverView: View {
           let elapsedByTaskId = manager.rolledUpElapsedByTaskId()
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-              ForEach(Array(manager.visibleTasks.enumerated()), id: \.element.id) { index, task in
+              ForEach(Array(visibleTasks.enumerated()), id: \.element.id) { index, task in
+                if let sectionHeader = manager.rootDueSectionHeader(
+                  atVisibleIndex: index, visibleTasks: visibleTasks)
+                {
+                  dueSectionHeader(sectionHeader)
+                }
+
                 taskRow(
                   task: task,
                   index: index,
@@ -554,6 +735,20 @@ struct PopoverView: View {
   // MARK: - Task Rows
 
   @ViewBuilder
+  func dueSectionHeader(_ title: String) -> some View {
+    HStack {
+      Text(title.uppercased())
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundColor(.secondary)
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
+    .padding(.top, 8)
+    .padding(.bottom, 5)
+    .background(Color.secondary.opacity(0.05))
+  }
+
+  @ViewBuilder
   func taskRow(task: CheckvistTask, index: Int, childCount: Int, elapsed: TimeInterval) -> some View
   {
     let isSelected = index == manager.currentSiblingIndex
@@ -573,18 +768,25 @@ struct PopoverView: View {
       .symbolEffect(.bounce, value: isCompleting)
       .onTapGesture {
         Task {
+          manager.rootScopeFocusLevel = 0
           manager.currentSiblingIndex = index
           await manager.markCurrentTaskDone()
         }
       }
 
       VStack(alignment: .leading, spacing: 3) {
-        // Show breadcrumb path when filter shows cross-level results
-        if manager.quickEntryMode == .search && !manager.filterText.isEmpty,
-          let pid = task.parentId, pid != manager.currentParentId
-        {
-          Text(breadcrumbPath(for: task))
-            .font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
+        if manager.shouldShowBreadcrumbPath(for: task) {
+          let includeCurrentParent =
+            manager.showTaskBreadcrumbContext
+            && !(manager.quickEntryMode == .search && !manager.filterText.isEmpty)
+          let path = breadcrumbPath(
+            for: task,
+            includeCurrentParent: includeCurrentParent
+          )
+          if !path.isEmpty {
+            Text(path)
+              .font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
+          }
         }
 
         // Inline edit: replace text with editable field when editing this task
@@ -653,7 +855,10 @@ struct PopoverView: View {
         .frame(width: 3)
     }
     .contentShape(Rectangle())
-    .onTapGesture { manager.currentSiblingIndex = index }
+    .onTapGesture {
+      manager.rootScopeFocusLevel = 0
+      manager.currentSiblingIndex = index
+    }
     .contextMenu {
       Button("Mark Done ␣") {
         Task {
@@ -787,10 +992,13 @@ struct PopoverView: View {
     manager.commandSuggestionIndex = 0
   }
 
-  func breadcrumbPath(for task: CheckvistTask) -> String {
+  func breadcrumbPath(for task: CheckvistTask, includeCurrentParent: Bool = false) -> String {
     var parts: [String] = []
     var pid = task.parentId ?? 0
-    while pid != 0 && pid != manager.currentParentId {
+    while pid != 0 {
+      if !includeCurrentParent && pid == manager.currentParentId {
+        break
+      }
       if let parent = manager.tasks.first(where: { $0.id == pid }) {
         parts.insert(parent.content, at: 0)
         pid = parent.parentId ?? 0

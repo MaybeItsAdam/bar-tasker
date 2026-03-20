@@ -114,6 +114,12 @@ Common prompt shortcuts:
 | `dd` | Open due-date command |
 | `gg` | Open first URL found in task content |
 | `H` (Shift+h) | Toggle "Hide Future" filter (shows only today + overdue) |
+| `sc` | Toggle breadcrumb/task context hints on rows |
+| `Ctrl+←` / `Ctrl+→` | Root scope: previous/next tab |
+| `Ctrl+↑` / `Ctrl+↓` | Root scope: previous/next Due bucket or Tag filter |
+| `↑` from first task | Move focus to root scope tabs |
+| `k` from first task | Move focus to root scope tabs |
+| `h` / `l` while scope focused | Previous/next tab (or filter chip) |
 | `u` | Undo last action (add, complete, edit) |
 | `Fn+Delete` | Delete task (with confirmation prompt) |
 | `/` | Focus search |
@@ -124,6 +130,10 @@ Due dates appear as color-coded badges on each task row:
 - **Red** — overdue
 - **Orange** — due today
 - **Grey** — upcoming
+
+At the root level, tasks are grouped in this due-order:
+- Use the root selector: **All / Due / Tags**.
+- In **Due**, tasks are ordered: **Overdue**, **ASAP**, **Today**, **Tomorrow**, **Next 7 days**, **Further in the future**.
 
 ### Global Hotkey
 
