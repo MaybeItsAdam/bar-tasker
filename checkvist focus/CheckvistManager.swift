@@ -19,15 +19,67 @@ struct CheckvistTask: Codable, Identifiable {
     case level
   }
 
-  private static let dueDateFormatter: DateFormatter = {
-    let f = DateFormatter()
-    f.dateFormat = "yyyy-MM-dd"
-    return f
+  private static let dueDateFormatters: [DateFormatter] = {
+    let locale = Locale(identifier: "en_US_POSIX")
+
+    let dateOnly = DateFormatter()
+    dateOnly.locale = locale
+    dateOnly.dateFormat = "yyyy-MM-dd"
+
+    let dateOnlyNoPadding = DateFormatter()
+    dateOnlyNoPadding.locale = locale
+    dateOnlyNoPadding.dateFormat = "yyyy-M-d"
+
+    let dateTime = DateFormatter()
+    dateTime.locale = locale
+    dateTime.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+
+    return [dateOnly, dateOnlyNoPadding, dateTime]
+  }()
+
+  private static let iso8601Parsers: [ISO8601DateFormatter] = {
+    let internet = ISO8601DateFormatter()
+    internet.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate]
+
+    let internetFractional = ISO8601DateFormatter()
+    internetFractional.formatOptions = [
+      .withInternetDateTime, .withFractionalSeconds, .withDashSeparatorInDate,
+    ]
+
+    let fullDate = ISO8601DateFormatter()
+    fullDate.formatOptions = [.withFullDate, .withDashSeparatorInDate]
+
+    return [internet, internetFractional, fullDate]
   }()
 
   var dueDate: Date? {
-    guard let due else { return nil }
-    return Self.dueDateFormatter.date(from: due)
+    guard let dueRaw = due?.trimmingCharacters(in: .whitespacesAndNewlines), !dueRaw.isEmpty else {
+      return nil
+    }
+
+    for parser in Self.iso8601Parsers {
+      if let parsed = parser.date(from: dueRaw) {
+        return parsed
+      }
+    }
+
+    for formatter in Self.dueDateFormatters {
+      if let parsed = formatter.date(from: dueRaw) {
+        return parsed
+      }
+    }
+
+    // Common fallback for strings like "yyyy-MM-ddTHH:mm:ssZ"
+    if dueRaw.count >= 10 {
+      let dayPrefix = String(dueRaw.prefix(10))
+      for formatter in Self.dueDateFormatters {
+        if let parsed = formatter.date(from: dayPrefix) {
+          return parsed
+        }
+      }
+    }
+
+    return nil
   }
 
   var isOverdue: Bool {
@@ -55,6 +107,42 @@ struct CheckvistList: Codable, Identifiable {
 
 class CheckvistManager: ObservableObject {
   private let logger = Logger(subsystem: "uk.co.maybeitsadam.checkvist-focus", category: "manager")
+
+  enum RootDueBucket: Int, CaseIterable {
+    case overdue
+    case asap
+    case today
+    case tomorrow
+    case nextSevenDays
+    case future
+    case noDueDate
+
+    var title: String {
+      switch self {
+      case .overdue: return "Overdue"
+      case .asap: return "ASAP"
+      case .today: return "Today"
+      case .tomorrow: return "Tomorrow"
+      case .nextSevenDays: return "Next 7 days"
+      case .future: return "Further in the future"
+      case .noDueDate: return "No due date"
+      }
+    }
+  }
+
+  enum RootTaskView: Int, CaseIterable {
+    case all
+    case due
+    case tags
+
+    var title: String {
+      switch self {
+      case .all: return "All"
+      case .due: return "Due"
+      case .tags: return "Tags"
+      }
+    }
+  }
 
   @Published var username: String
   @Published var remoteKey: String
@@ -94,6 +182,12 @@ class CheckvistManager: ObservableObject {
 
   @Published var filterText: String = ""
   @Published var hideFuture: Bool = false
+  @Published var showTaskBreadcrumbContext: Bool
+  @Published var rootTaskView: RootTaskView
+  @Published var selectedRootDueBucketRawValue: Int
+  @Published var selectedRootTag: String
+  /// 0 = task list, 1 = root tabs (All/Due/Tags), 2 = root filter row (due buckets/tags)
+  @Published var rootScopeFocusLevel: Int = 0
   @Published var keyBuffer: String = ""
   @Published var quickEntryMode: QuickEntryMode = .search
   @Published var isQuickEntryFocused: Bool = false
@@ -240,14 +334,27 @@ class CheckvistManager: ObservableObject {
 
   /// Visible tasks: searches recursively through subtasks when filter active
   var visibleTasks: [CheckvistTask] {
-    if !filterText.isEmpty && quickEntryMode == .search {
+    if isSearchFilterActive {
       // Recursive search: include any task under currentParentId that matches
       return tasks.filter { task in
         task.content.localizedCaseInsensitiveContains(filterText)
           && isDescendant(task, of: currentParentId)
       }
     }
-    var result = currentLevelTasks
+    let baseTasks: [CheckvistTask]
+    if shouldShowRootScopeSection {
+      switch rootTaskView {
+      case .all:
+        baseTasks = currentLevelTasks
+      case .due, .tags:
+        // In root Due/Tags views, mirror Checkvist-style cross-tree browsing.
+        baseTasks = tasks
+      }
+    } else {
+      baseTasks = currentLevelTasks
+    }
+
+    var result = baseTasks
     if hideFuture {
       result = result.filter { task in
         guard let d = task.dueDate else { return false }
@@ -257,7 +364,229 @@ class CheckvistManager: ObservableObject {
         return d <= Calendar.current.startOfDay(for: tomorrow)
       }
     }
+    if shouldShowRootScopeSection {
+      switch rootTaskView {
+      case .all:
+        result.sort(by: compareByPositionThenContent)
+      case .due:
+        if let selectedRootDueBucket {
+          result = result.filter { rootDueBucket(for: $0) == selectedRootDueBucket }
+        } else {
+          result = result.filter { rootDueBucket(for: $0) != .noDueDate }
+        }
+        result.sort(by: compareByRootDueBucket)
+      case .tags:
+        if selectedRootTag.isEmpty {
+          result = result.filter(hasAnyTag(_:))
+        } else {
+          result = result.filter { hasTag($0, tag: selectedRootTag) }
+        }
+        result.sort(by: compareByPositionThenContent)
+      }
+    }
     return result
+  }
+
+  var isRootLevel: Bool { currentParentId == 0 }
+
+  var shouldShowRootScopeSection: Bool { isRootLevel && !isSearchFilterActive }
+
+  var selectedRootDueBucket: RootDueBucket? {
+    get { RootDueBucket(rawValue: selectedRootDueBucketRawValue) }
+    set { selectedRootDueBucketRawValue = newValue?.rawValue ?? -1 }
+  }
+
+  func shouldShowBreadcrumbPath(for task: CheckvistTask) -> Bool {
+    let pid = task.parentId ?? 0
+    if shouldShowRootScopeSection && rootTaskView != .all {
+      return pid != 0
+    }
+    if isSearchFilterActive {
+      return pid != currentParentId
+    }
+    if showTaskBreadcrumbContext {
+      return pid != 0
+    }
+    return false
+  }
+
+  func rootDueSectionHeader(atVisibleIndex index: Int, visibleTasks: [CheckvistTask]) -> String? {
+    guard shouldShowDueSectionHeaders, visibleTasks.indices.contains(index) else { return nil }
+    let currentBucket = rootDueBucket(for: visibleTasks[index])
+    if index == 0 { return currentBucket.title }
+    let previousBucket = rootDueBucket(for: visibleTasks[index - 1])
+    return previousBucket == currentBucket ? nil : currentBucket.title
+  }
+
+  func rootDueSectionCount(in visibleTasks: [CheckvistTask]) -> Int {
+    guard shouldShowDueSectionHeaders, !visibleTasks.isEmpty else { return 0 }
+    var total = 0
+    var previousBucket: RootDueBucket?
+    for task in visibleTasks {
+      let bucket = rootDueBucket(for: task)
+      if bucket != previousBucket {
+        total += 1
+        previousBucket = bucket
+      }
+    }
+    return total
+  }
+
+  func rootLevelTagNames(limit: Int = 8) -> [String] {
+    guard isRootLevel else { return [] }
+    var counts: [String: Int] = [:]
+    for task in tasks {
+      let range = NSRange(task.content.startIndex..., in: task.content)
+      let matches = Self.tagRegex.matches(in: task.content, range: range)
+      for match in matches {
+        guard let matchRange = Range(match.range, in: task.content) else { continue }
+        let tag = String(task.content[matchRange]).lowercased()
+        counts[tag, default: 0] += 1
+      }
+    }
+    return
+      counts
+      .sorted { lhs, rhs in
+        if lhs.value != rhs.value { return lhs.value > rhs.value }
+        return lhs.key < rhs.key
+      }
+      .prefix(limit)
+      .map(\.key)
+  }
+
+  private var isSearchFilterActive: Bool {
+    !filterText.isEmpty && quickEntryMode == .search
+  }
+
+  var shouldShowDueSectionHeaders: Bool {
+    shouldShowRootScopeSection && rootTaskView == .due && selectedRootDueBucket == nil
+  }
+
+  private static let tagRegex = (try? NSRegularExpression(pattern: "[@#][a-zA-Z0-9_\\-]+"))!
+
+  private func hasAnyTag(_ task: CheckvistTask) -> Bool {
+    let range = NSRange(task.content.startIndex..., in: task.content)
+    return Self.tagRegex.firstMatch(in: task.content, range: range) != nil
+  }
+
+  private func hasTag(_ task: CheckvistTask, tag: String) -> Bool {
+    let normalized: String
+    if tag.hasPrefix("#") || tag.hasPrefix("@") {
+      normalized = tag.lowercased()
+    } else {
+      normalized = "#\(tag.lowercased())"
+    }
+    let range = NSRange(task.content.startIndex..., in: task.content)
+    let matches = Self.tagRegex.matches(in: task.content, range: range)
+    for match in matches {
+      guard let matchRange = Range(match.range, in: task.content) else { continue }
+      if String(task.content[matchRange]).lowercased() == normalized { return true }
+    }
+    return false
+  }
+
+  private func compareByPositionThenContent(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
+    switch (lhs.position, rhs.position) {
+    case (.some(let leftPosition), .some(let rightPosition)) where leftPosition != rightPosition:
+      return leftPosition < rightPosition
+    default:
+      break
+    }
+    return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
+  }
+
+  private func compareByRootDueBucket(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
+    let leftBucket = rootDueBucket(for: lhs)
+    let rightBucket = rootDueBucket(for: rhs)
+    if leftBucket != rightBucket {
+      return leftBucket.rawValue < rightBucket.rawValue
+    }
+
+    switch (lhs.dueDate, rhs.dueDate) {
+    case (.some(let leftDate), .some(let rightDate)) where leftDate != rightDate:
+      return leftDate < rightDate
+    default:
+      break
+    }
+
+    switch (lhs.position, rhs.position) {
+    case (.some(let leftPosition), .some(let rightPosition)) where leftPosition != rightPosition:
+      return leftPosition < rightPosition
+    default:
+      break
+    }
+
+    return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
+  }
+
+  func rootDueBucket(for task: CheckvistTask) -> RootDueBucket {
+    let dueText = task.due?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    guard !dueText.isEmpty else { return .noDueDate }
+    if dueText == "asap" { return .asap }
+    guard let dueDate = task.dueDate else { return .future }
+
+    let calendar = Calendar.current
+    let now = Date()
+    let todayStart = calendar.startOfDay(for: now)
+    if dueDate < todayStart { return .overdue }
+    if calendar.isDateInToday(dueDate) { return .today }
+    if calendar.isDateInTomorrow(dueDate) { return .tomorrow }
+    guard let sevenDaysOut = calendar.date(byAdding: .day, value: 8, to: todayStart) else {
+      return .future
+    }
+    if dueDate < sevenDaysOut { return .nextSevenDays }
+    return .future
+  }
+
+  func setRootTaskView(_ view: RootTaskView) {
+    rootTaskView = view
+    currentSiblingIndex = 0
+    if view != .due {
+      selectedRootDueBucket = nil
+    }
+    if view != .tags {
+      selectedRootTag = ""
+    }
+    if view == .all, rootScopeFocusLevel > 1 {
+      rootScopeFocusLevel = 1
+    }
+  }
+
+  @MainActor func cycleRootTaskView(direction: Int) {
+    let allViews = RootTaskView.allCases
+    guard let currentIndex = allViews.firstIndex(of: rootTaskView) else { return }
+    let nextIndex = max(0, min(allViews.count - 1, currentIndex + direction))
+    guard nextIndex != currentIndex else { return }
+    setRootTaskView(allViews[nextIndex])
+  }
+
+  @MainActor func cycleRootScopeFilter(direction: Int) {
+    guard shouldShowRootScopeSection else { return }
+    switch rootTaskView {
+    case .all:
+      return
+    case .due:
+      let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
+      guard let currentIndex = options.firstIndex(where: { $0 == selectedRootDueBucket }) else {
+        selectedRootDueBucket = nil
+        currentSiblingIndex = 0
+        return
+      }
+      let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
+      selectedRootDueBucket = options[nextIndex]
+      currentSiblingIndex = 0
+    case .tags:
+      let tags = rootLevelTagNames(limit: 30)
+      let options = [""] + tags
+      guard let currentIndex = options.firstIndex(of: selectedRootTag) else {
+        selectedRootTag = ""
+        currentSiblingIndex = 0
+        return
+      }
+      let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
+      selectedRootTag = options[nextIndex]
+      currentSiblingIndex = 0
+    }
   }
 
   /// Returns true if task is a descendant of the given parentId (or IS at that level)
@@ -297,6 +626,14 @@ class CheckvistManager: ObservableObject {
     self.listId = storedListId
     self.confirmBeforeDelete =
       UserDefaults.standard.object(forKey: "confirmBeforeDelete") as? Bool ?? true
+    self.showTaskBreadcrumbContext =
+      UserDefaults.standard.object(forKey: "showTaskBreadcrumbContext") as? Bool ?? false
+    self.rootTaskView =
+      RootTaskView(rawValue: UserDefaults.standard.object(forKey: "rootTaskView") as? Int ?? 1)
+      ?? .due
+    self.selectedRootDueBucketRawValue =
+      UserDefaults.standard.object(forKey: "selectedRootDueBucketRawValue") as? Int ?? -1
+    self.selectedRootTag = UserDefaults.standard.string(forKey: "selectedRootTag") ?? ""
     self.launchAtLogin = UserDefaults.standard.object(forKey: "launchAtLogin") as? Bool ?? false
     #if DEBUG
       self.ignoreKeychainInDebug =
@@ -364,11 +701,27 @@ class CheckvistManager: ObservableObject {
       }.store(in: &cancellables)
     $listId
       .dropFirst()
-      .sink { [weak self] value in
+      .sink { value in
         UserDefaults.standard.set(value, forKey: "checkvistListId")
       }.store(in: &cancellables)
     $confirmBeforeDelete.sink { UserDefaults.standard.set($0, forKey: "confirmBeforeDelete") }
       .store(in: &cancellables)
+    $showTaskBreadcrumbContext.sink {
+      UserDefaults.standard.set($0, forKey: "showTaskBreadcrumbContext")
+    }
+    .store(in: &cancellables)
+    $rootTaskView.sink {
+      UserDefaults.standard.set($0.rawValue, forKey: "rootTaskView")
+    }
+    .store(in: &cancellables)
+    $selectedRootDueBucketRawValue.sink {
+      UserDefaults.standard.set($0, forKey: "selectedRootDueBucketRawValue")
+    }
+    .store(in: &cancellables)
+    $selectedRootTag.sink {
+      UserDefaults.standard.set($0, forKey: "selectedRootTag")
+    }
+    .store(in: &cancellables)
     $launchAtLogin.sink { newValue in
       UserDefaults.standard.set(newValue, forKey: "launchAtLogin")
       if #available(macOS 13.0, *) {

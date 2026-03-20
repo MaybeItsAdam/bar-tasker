@@ -37,6 +37,10 @@ struct KeyboardShortcutRouter {
     }
 
     let chars = event.charactersIgnoringModifiers ?? ""
+    if !manager.shouldShowRootScopeSection && manager.rootScopeFocusLevel != 0 {
+      manager.rootScopeFocusLevel = 0
+    }
+    let rootScopeFocused = manager.shouldShowRootScopeSection && manager.rootScopeFocusLevel > 0
 
     // Reliable fallback for command/actions prompt.
     if cmd && !shift && !ctrl && !option && chars.lowercased() == "k" && !isFocused {
@@ -96,6 +100,27 @@ struct KeyboardShortcutRouter {
       }
     }
 
+    // Root scope keyboard navigation:
+    // Ctrl+←/→ switches All/Due/Tags. Ctrl+↑/↓ cycles Due bucket or Tag filter.
+    if manager.shouldShowRootScopeSection && !isFocused && ctrl && !cmd && !option {
+      if event.keyCode == 123 {
+        manager.cycleRootTaskView(direction: -1)
+        return true
+      }
+      if event.keyCode == 124 {
+        manager.cycleRootTaskView(direction: 1)
+        return true
+      }
+      if event.keyCode == 126 {
+        manager.cycleRootScopeFilter(direction: -1)
+        return true
+      }
+      if event.keyCode == 125 {
+        manager.cycleRootScopeFilter(direction: 1)
+        return true
+      }
+    }
+
     // Cmd+↑/↓ - reorder.
     if cmd && event.keyCode == 125 {
       Task { if let task = manager.currentTask { await manager.moveTask(task, direction: 1) } }
@@ -106,21 +131,63 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    // Up/Down arrows - navigate list ALWAYS (even if focused, to allow list navigation while typing).
+    // Up/Down arrows - list navigation + root scope navigation.
     if event.keyCode == 125 {
+      if rootScopeFocused {
+        if manager.rootScopeFocusLevel == 1 && manager.rootTaskView != .all {
+          manager.rootScopeFocusLevel = 2
+        } else {
+          manager.rootScopeFocusLevel = 0
+        }
+        return true
+      }
       manager.nextTask()
       updateTitle()
       return true
     }
     if event.keyCode == 126 {
+      if rootScopeFocused {
+        if manager.rootScopeFocusLevel == 2 {
+          manager.rootScopeFocusLevel = 1
+        }
+        return true
+      }
+      if manager.shouldShowRootScopeSection && manager.currentSiblingIndex == 0 {
+        manager.rootScopeFocusLevel = 1
+        return true
+      }
       manager.previousTask()
       updateTitle()
       return true
     }
 
+    if rootScopeFocused && !isFocused && !ctrl && !cmd && !option {
+      if event.keyCode == 124 {
+        if manager.rootScopeFocusLevel == 1 {
+          manager.cycleRootTaskView(direction: 1)
+        } else if manager.rootScopeFocusLevel == 2 {
+          manager.cycleRootScopeFilter(direction: 1)
+        }
+        return true
+      }
+      if event.keyCode == 123 {
+        if manager.rootScopeFocusLevel == 1 {
+          manager.cycleRootTaskView(direction: -1)
+        } else if manager.rootScopeFocusLevel == 2 {
+          manager.cycleRootScopeFilter(direction: -1)
+        }
+        return true
+      }
+      if event.keyCode == 36 || event.keyCode == 53 {
+        manager.rootScopeFocusLevel = 0
+        return true
+      }
+    }
+
     // Shift+→ - focus/hoist (Checkvist), plain → - enter children.
     if event.keyCode == 124 {
       if isFocused { return false }
+      manager.rootScopeFocusLevel = 0
       manager.enterChildren()
       if !manager.filterText.isEmpty {
         manager.filterText = ""
@@ -132,6 +199,7 @@ struct KeyboardShortcutRouter {
     // Shift+← - un-focus (Checkvist), plain ← - exit to parent.
     if event.keyCode == 123 {
       if isFocused { return false }
+      manager.rootScopeFocusLevel = 0
       if !manager.filterText.isEmpty {
         manager.filterText = ""
         manager.quickEntryMode = .search
@@ -143,7 +211,7 @@ struct KeyboardShortcutRouter {
     }
 
     // Space - mark done; Shift+Space - invalidate.
-    if event.keyCode == 49 && !isFocused && !ctrl && !cmd {
+    if event.keyCode == 49 && !isFocused && !ctrl && !cmd && !rootScopeFocused {
       if shift {
         Task {
           await manager.invalidateCurrentTask()
@@ -160,6 +228,10 @@ struct KeyboardShortcutRouter {
 
     // Shift+Enter - add child; Enter - add sibling.
     if event.keyCode == 36 {
+      if rootScopeFocused {
+        manager.rootScopeFocusLevel = 0
+        return true
+      }
       if isFocused { return false }
       manager.quickEntryMode = shift ? .addChild : .addSibling
       manager.isQuickEntryFocused = true
@@ -169,6 +241,7 @@ struct KeyboardShortcutRouter {
     // Tab / Shift+Tab - indent/unindent OR add child.
     if event.keyCode == 48 {
       if isFocused { return false }
+      if rootScopeFocused { return true }
       if shift {
         Task { if let task = manager.currentTask { await manager.unindentTask(task) } }
       } else {
@@ -180,6 +253,10 @@ struct KeyboardShortcutRouter {
 
     // Escape - cancel input if active; otherwise close.
     if event.keyCode == 53 {
+      if rootScopeFocused {
+        manager.rootScopeFocusLevel = 0
+        return true
+      }
       if isFocused || manager.quickEntryMode != .search || !manager.filterText.isEmpty {
         manager.isQuickEntryFocused = false
         manager.quickEntryMode = .search
@@ -219,7 +296,7 @@ struct KeyboardShortcutRouter {
     }
 
     // Two-key sequences.
-    let sequenceStarters: Set<String> = ["e", "d", "g"]
+    let sequenceStarters: Set<String> = ["e", "d", "g", "s"]
     if !manager.keyBuffer.isEmpty {
       let sequence = manager.keyBuffer + chars
       manager.keyBuffer = ""
@@ -258,6 +335,9 @@ struct KeyboardShortcutRouter {
           manager.filterText = "untag "
           manager.isQuickEntryFocused = true
           return true
+        case "sc":
+          manager.showTaskBreadcrumbContext.toggle()
+          return true
         default:
           break
         }
@@ -291,11 +371,29 @@ struct KeyboardShortcutRouter {
       return true
     }
     if chars == "j" && !shift && !ctrl && !isFocused {
+      if rootScopeFocused {
+        if manager.rootScopeFocusLevel == 1 && manager.rootTaskView != .all {
+          manager.rootScopeFocusLevel = 2
+        } else {
+          manager.rootScopeFocusLevel = 0
+        }
+        return true
+      }
       manager.nextTask()
       updateTitle()
       return true
     }
     if chars == "k" && !shift && !ctrl && !isFocused {
+      if rootScopeFocused {
+        if manager.rootScopeFocusLevel == 2 {
+          manager.rootScopeFocusLevel = 1
+        }
+        return true
+      }
+      if manager.shouldShowRootScopeSection && manager.currentSiblingIndex == 0 {
+        manager.rootScopeFocusLevel = 1
+        return true
+      }
       manager.previousTask()
       updateTitle()
       return true
@@ -303,6 +401,15 @@ struct KeyboardShortcutRouter {
 
     // h/l - Vim left/right navigation (parent / children).
     if chars == "h" && !shift && !ctrl && !isFocused {
+      if rootScopeFocused {
+        if manager.rootScopeFocusLevel == 1 {
+          manager.cycleRootTaskView(direction: -1)
+        } else if manager.rootScopeFocusLevel == 2 {
+          manager.cycleRootScopeFilter(direction: -1)
+        }
+        return true
+      }
+      manager.rootScopeFocusLevel = 0
       if !manager.filterText.isEmpty {
         manager.filterText = ""
         manager.quickEntryMode = .search
@@ -313,6 +420,15 @@ struct KeyboardShortcutRouter {
       return true
     }
     if chars == "l" && !shift && !ctrl && !isFocused {
+      if rootScopeFocused {
+        if manager.rootScopeFocusLevel == 1 {
+          manager.cycleRootTaskView(direction: 1)
+        } else if manager.rootScopeFocusLevel == 2 {
+          manager.cycleRootScopeFilter(direction: 1)
+        }
+        return true
+      }
+      manager.rootScopeFocusLevel = 0
       manager.enterChildren()
       if !manager.filterText.isEmpty {
         manager.filterText = ""
