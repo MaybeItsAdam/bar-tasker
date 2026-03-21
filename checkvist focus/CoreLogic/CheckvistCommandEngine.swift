@@ -31,6 +31,9 @@ enum CheckvistCommand: Equatable {
   case tag(String)
   case untag(String)
   case list(String)
+  case priority(Int)
+  case priorityBack
+  case clearPriority
   case unknown(String)
 }
 
@@ -64,11 +67,22 @@ enum CheckvistCommandEngine {
       label: "Remove tag", command: "untag ", preview: "Remove #tag from task", keybind: "gu",
       submitImmediately: false),
     .init(
+      label: "Set priority", command: "priority 1",
+      preview: "Set selected task priority (1-9)", keybind: "1-9", submitImmediately: false),
+    .init(
+      label: "Send to priority back", command: "priority back",
+      preview: "Move selected task to end of priority list", keybind: "=",
+      submitImmediately: true),
+    .init(
+      label: "Clear priority", command: "clear priority",
+      preview: "Remove selected task from priority list", keybind: "-",
+      submitImmediately: true),
+    .init(
       label: "Switch list", command: "list ", preview: "Find and switch list", keybind: "Shift+L",
       submitImmediately: false),
     .init(
       label: "Edit task", command: "edit", preview: "Edit selected task",
-      keybind: "ee / i / a / F2", submitImmediately: true),
+      keybind: "i / a / F2", submitImmediately: true),
     .init(
       label: "Focus search", command: "search", preview: "Search tasks", keybind: "/",
       submitImmediately: true),
@@ -155,6 +169,21 @@ enum CheckvistCommandEngine {
     }
     if cmd.hasPrefix("list ") {
       return .list(String(cmd.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+    }
+    if cmd.hasPrefix("priority ") {
+      let raw = String(cmd.dropFirst(9)).trimmingCharacters(in: .whitespaces)
+      if raw == "back" || raw == "end" {
+        return .priorityBack
+      }
+      if raw == "clear" {
+        return .clearPriority
+      }
+      if let rank = Int(raw), (1...9).contains(rank) {
+        return .priority(rank)
+      }
+    }
+    if cmd == "clear priority" || cmd == "unpriority" {
+      return .clearPriority
     }
     return .unknown(input)
   }

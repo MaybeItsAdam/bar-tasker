@@ -157,7 +157,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   func updateTitle() {
     DispatchQueue.main.async {
-      let taskText = self.checkvistManager.currentTaskText
+      let rawTaskText = self.checkvistManager.currentTaskText
+      let taskText = self.menuBarDisplayTaskText(rawTaskText)
       if taskText.isEmpty {
         self.statusItem?.button?.attributedTitle = NSAttributedString(string: "…")
         self.statusItem?.button?.toolTip = nil
@@ -222,6 +223,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem?.button?.layer?.mask = nil
       }
     }
+  }
+
+  private func menuBarDisplayTaskText(_ rawText: String) -> String {
+    let pattern = "([@#][a-zA-Z0-9_\\-]+)"
+    guard let regex = try? NSRegularExpression(pattern: pattern) else {
+      return rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    let range = NSRange(rawText.startIndex..., in: rawText)
+    let withoutTags = regex.stringByReplacingMatches(in: rawText, range: range, withTemplate: "")
+    let collapsedWhitespace = withoutTags.replacingOccurrences(
+      of: "\\s+", with: " ", options: .regularExpression)
+    return collapsedWhitespace.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private func clippedMenuTitleTaskText(_ taskText: String, maxWidth: CGFloat, font: NSFont)
