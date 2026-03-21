@@ -29,7 +29,7 @@ enum PopoverLayout {
       fixedHeight += 30 + dividerHeight
     }
     if manager.shouldShowRootScopeSection {
-      fixedHeight += (manager.rootTaskView == .all ? 40 : 72) + dividerHeight
+      fixedHeight += (manager.rootScopeShowsFilterControls ? 72 : 40) + dividerHeight
     }
     if manager.showTaskBreadcrumbContext {
       fixedHeight += 24 + dividerHeight
@@ -206,23 +206,18 @@ struct PopoverView: View {
       topBevelArea
       Divider()
 
-      if !manager.breadcrumbs.isEmpty || manager.currentParentId != 0 {
+      if manager.shouldShowRootScopeSection {
+        rootScopeSection
+        Divider()
+      }
+
+      if manager.currentParentId != 0 {
         breadcrumbBar
         Divider()
       }
 
       if manager.hideFuture {
         hideFutureChip
-        Divider()
-      }
-
-      if manager.shouldShowRootScopeSection {
-        rootScopeSection
-        Divider()
-      }
-
-      if manager.showTaskBreadcrumbContext {
-        breadcrumbContextChip
         Divider()
       }
 
@@ -366,14 +361,11 @@ struct PopoverView: View {
           id: \.element.rawValue
         ) { index, scope in
           if index > 0 {
-            Rectangle()
-              .fill(Color.white.opacity(0.08))
-              .frame(width: 1, height: 20)
+            rootScopeSeparator()
           }
           rootScopeTabButton(scope)
         }
       }
-      .padding(2)
       .background(Color.secondary.opacity(0.08))
       .overlay {
         Rectangle().stroke(Color.white.opacity(0.08), lineWidth: 1)
@@ -387,34 +379,48 @@ struct PopoverView: View {
       }
 
       if manager.rootTaskView == .due {
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 6) {
-            rootScopeChip(
-              title: "All due",
-              isSelected: manager.selectedRootDueBucket == nil
-            ) {
-              manager.selectedRootDueBucket = nil
-              manager.currentSiblingIndex = 0
-              manager.rootScopeFocusLevel = 2
-            }
-
-            ForEach(
-              CheckvistManager.RootDueBucket.allCases.filter { $0 != .noDueDate },
-              id: \.rawValue
-            ) { bucket in
+        let dueBuckets = CheckvistManager.RootDueBucket.allCases.filter { $0 != .noDueDate }
+        ScrollViewReader { proxy in
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
               rootScopeChip(
-                title: bucket.title,
-                isSelected: manager.selectedRootDueBucket == bucket
+                title: "All due",
+                isSelected: manager.selectedRootDueBucket == nil
               ) {
-                manager.selectedRootDueBucket = bucket
+                manager.selectedRootDueBucket = nil
                 manager.currentSiblingIndex = 0
                 manager.rootScopeFocusLevel = 2
               }
+              .id("due-filter-all")
+
+              if !dueBuckets.isEmpty {
+                rootScopeSeparator()
+              }
+
+              ForEach(Array(dueBuckets.enumerated()), id: \.element.rawValue) { index, bucket in
+                if index > 0 {
+                  rootScopeSeparator()
+                }
+                rootScopeChip(
+                  title: bucket.title,
+                  isSelected: manager.selectedRootDueBucket == bucket
+                ) {
+                  manager.selectedRootDueBucket = bucket
+                  manager.currentSiblingIndex = 0
+                  manager.rootScopeFocusLevel = 2
+                }
+                .id("due-filter-\(bucket.rawValue)")
+              }
             }
           }
+          .onAppear {
+            scrollRootDueFilterIntoView(proxy: proxy)
+          }
+          .onChange(of: manager.selectedRootDueBucketRawValue) { _, _ in
+            scrollRootDueFilterIntoView(proxy: proxy)
+          }
         }
-        .padding(3)
-        .background(Color.secondary.opacity(0.06))
+        .background(Color.secondary.opacity(0.08))
         .overlay {
           Rectangle().stroke(Color.white.opacity(0.08), lineWidth: 1)
         }
@@ -427,31 +433,47 @@ struct PopoverView: View {
         }
       } else if manager.rootTaskView == .tags {
         let tags = manager.rootLevelTagNames(limit: 30)
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 6) {
-            rootScopeChip(
-              title: "All tags",
-              isSelected: manager.selectedRootTag.isEmpty
-            ) {
-              manager.selectedRootTag = ""
-              manager.currentSiblingIndex = 0
-              manager.rootScopeFocusLevel = 2
-            }
-
-            ForEach(tags, id: \.self) { tag in
+        ScrollViewReader { proxy in
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
               rootScopeChip(
-                title: tag,
-                isSelected: manager.selectedRootTag == tag
+                title: "All tags",
+                isSelected: manager.selectedRootTag.isEmpty
               ) {
-                manager.selectedRootTag = tag
+                manager.selectedRootTag = ""
                 manager.currentSiblingIndex = 0
                 manager.rootScopeFocusLevel = 2
               }
+              .id("tags-filter-all")
+
+              if !tags.isEmpty {
+                rootScopeSeparator()
+              }
+
+              ForEach(Array(tags.enumerated()), id: \.element) { index, tag in
+                if index > 0 {
+                  rootScopeSeparator()
+                }
+                rootScopeChip(
+                  title: tag,
+                  isSelected: manager.selectedRootTag == tag
+                ) {
+                  manager.selectedRootTag = tag
+                  manager.currentSiblingIndex = 0
+                  manager.rootScopeFocusLevel = 2
+                }
+                .id("tags-filter-\(tag)")
+              }
             }
           }
+          .onAppear {
+            scrollRootTagFilterIntoView(proxy: proxy)
+          }
+          .onChange(of: manager.selectedRootTag) { _, _ in
+            scrollRootTagFilterIntoView(proxy: proxy)
+          }
         }
-        .padding(3)
-        .background(Color.secondary.opacity(0.06))
+        .background(Color.secondary.opacity(0.08))
         .overlay {
           Rectangle().stroke(Color.white.opacity(0.08), lineWidth: 1)
         }
@@ -464,8 +486,22 @@ struct PopoverView: View {
         }
       }
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 3)
+    .onAppear {
+      if manager.currentParentId == 0
+        && manager.visibleTasks.isEmpty
+        && manager.rootScopeFocusLevel == 0
+      {
+        manager.rootScopeFocusLevel = 1
+      }
+    }
+    .onChange(of: manager.visibleTasks.count) { _, count in
+      if manager.currentParentId == 0
+        && count == 0
+        && manager.rootScopeFocusLevel == 0
+      {
+        manager.rootScopeFocusLevel = 1
+      }
+    }
   }
 
   @ViewBuilder
@@ -494,23 +530,45 @@ struct PopoverView: View {
   ) -> some View {
     Button(action: action) {
       Text(title)
-        .font(.system(size: 10, weight: .medium))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(isSelected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12))
+        .font(.system(size: 12, weight: .semibold))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(isSelected ? Color.accentColor.opacity(0.24) : Color.clear)
         .foregroundColor(isSelected ? Color.accentColor : .secondary)
     }
     .buttonStyle(.plain)
   }
 
-  var breadcrumbContextChip: some View {
-    HStack {
-      Label("Task context", systemImage: "square.split.2x1")
-        .font(.caption2).padding(.horizontal, 6).padding(.vertical, 3)
-        .background(Color.blue.opacity(0.15)).foregroundColor(.blue).clipShape(Capsule())
-      Spacer()
+  @ViewBuilder
+  func rootScopeSeparator() -> some View {
+    Rectangle()
+      .fill(Color.white.opacity(0.08))
+      .frame(width: 1, height: 20)
+  }
+
+  func scrollRootDueFilterIntoView(proxy: ScrollViewProxy) {
+    let targetId: String
+    if let bucket = manager.selectedRootDueBucket {
+      targetId = "due-filter-\(bucket.rawValue)"
+    } else {
+      targetId = "due-filter-all"
     }
-    .padding(.horizontal, 14).padding(.vertical, 4)
+    DispatchQueue.main.async {
+      withAnimation(.easeInOut(duration: 0.12)) {
+        proxy.scrollTo(targetId, anchor: .center)
+      }
+    }
+  }
+
+  func scrollRootTagFilterIntoView(proxy: ScrollViewProxy) {
+    let targetId =
+      manager.selectedRootTag.isEmpty
+      ? "tags-filter-all" : "tags-filter-\(manager.selectedRootTag)"
+    DispatchQueue.main.async {
+      withAnimation(.easeInOut(duration: 0.12)) {
+        proxy.scrollTo(targetId, anchor: .center)
+      }
+    }
   }
 
   var taskList: some View {
@@ -806,6 +864,10 @@ struct PopoverView: View {
           fadedTaskTitle(task: task)
         }
 
+        if let priority = manager.priorityRank(for: task) {
+          priorityBadge(priority)
+        }
+
         if manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id) {
           timerBadge(
             elapsed: elapsed, running: manager.timedTaskId == task.id && manager.timerRunning)
@@ -884,7 +946,7 @@ struct PopoverView: View {
         }
       }
       Divider()
-      Button("Edit ee/i/a") {
+      Button("Edit i/a/F2") {
         manager.currentSiblingIndex = index
         manager.quickEntryMode = .editTask
         manager.editCursorAtEnd = true
@@ -943,7 +1005,8 @@ struct PopoverView: View {
     case .addSibling: return "Add task"
     case .addChild: return "Add task"
     case .editTask: return "Edit task..."
-    case .command: return "Action… (done, undone, due [date], tag [name], clear due)"
+    case .command:
+      return "Action… (done, due [date], tag [name], priority [1-9], priority back)"
     }
   }
 
@@ -1082,6 +1145,16 @@ struct PopoverView: View {
 
   func inlineTaskContent(task: CheckvistTask) -> Text {
     formatTaskContent(task.content)
+  }
+
+  @ViewBuilder
+  func priorityBadge(_ priority: Int) -> some View {
+    Text("P\(priority)")
+      .font(.system(size: 10, weight: .semibold, design: .monospaced))
+      .padding(.horizontal, 5)
+      .padding(.vertical, 2)
+      .background(Color.accentColor.opacity(0.2))
+      .foregroundColor(.accentColor)
   }
 
   @ViewBuilder

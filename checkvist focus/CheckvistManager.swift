@@ -134,12 +134,14 @@ class CheckvistManager: ObservableObject {
     case all
     case due
     case tags
+    case priority
 
     var title: String {
       switch self {
       case .all: return "All"
       case .due: return "Due"
       case .tags: return "Tags"
+      case .priority: return "Priority"
       }
     }
   }
@@ -195,6 +197,7 @@ class CheckvistManager: ObservableObject {
   @Published var pendingDeleteConfirmation: Bool = false
   @Published var completingTaskId: Int? = nil
   @Published var commandSuggestionIndex: Int = 0
+  @Published private(set) var priorityTaskIds: [Int]
 
   struct CommandSuggestion {
     let label: String
@@ -213,6 +216,8 @@ class CheckvistManager: ObservableObject {
       submitImmediately: $0.submitImmediately
     )
   }
+  static let maxPriorityRank = 9
+  private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
 
   // MARK: - Timer
   @Published var timedTaskId: Int? = nil
@@ -336,19 +341,26 @@ class CheckvistManager: ObservableObject {
   var visibleTasks: [CheckvistTask] {
     if isSearchFilterActive {
       // Recursive search: include any task under currentParentId that matches
-      return tasks.filter { task in
+      var matches = tasks.filter { task in
         task.content.localizedCaseInsensitiveContains(filterText)
           && isDescendant(task, of: currentParentId)
       }
+      matches.sort(by: compareByPriorityThenPosition)
+      return matches
     }
     let baseTasks: [CheckvistTask]
     if shouldShowRootScopeSection {
-      switch rootTaskView {
-      case .all:
+      if isRootLevel {
+        switch rootTaskView {
+        case .all:
+          baseTasks = currentLevelTasks
+        case .due, .tags, .priority:
+          // In root Due/Tags/Priority views, mirror Checkvist-style cross-tree browsing.
+          baseTasks = tasks
+        }
+      } else {
+        // Once inside a task, always navigate the real child level.
         baseTasks = currentLevelTasks
-      case .due, .tags:
-        // In root Due/Tags views, mirror Checkvist-style cross-tree browsing.
-        baseTasks = tasks
       }
     } else {
       baseTasks = currentLevelTasks
@@ -365,31 +377,52 @@ class CheckvistManager: ObservableObject {
       }
     }
     if shouldShowRootScopeSection {
-      switch rootTaskView {
-      case .all:
-        result.sort(by: compareByPositionThenContent)
-      case .due:
-        if let selectedRootDueBucket {
-          result = result.filter { rootDueBucket(for: $0) == selectedRootDueBucket }
-        } else {
-          result = result.filter { rootDueBucket(for: $0) != .noDueDate }
+      if isRootLevel {
+        switch rootTaskView {
+        case .all:
+          result.sort(by: compareByPriorityThenPosition)
+        case .due:
+          if let selectedRootDueBucket {
+            result = result.filter { rootDueBucket(for: $0) == selectedRootDueBucket }
+          } else {
+            result = result.filter { rootDueBucket(for: $0) != .noDueDate }
+          }
+          result.sort(by: compareByRootDueBucket)
+        case .tags:
+          if selectedRootTag.isEmpty {
+            result = result.filter(hasAnyTag(_:))
+          } else {
+            result = result.filter { hasTag($0, tag: selectedRootTag) }
+          }
+          result.sort(by: compareByPriorityThenPosition)
+        case .priority:
+          result = result.filter { priorityRank(for: $0) != nil }
+          result.sort(by: compareByPriorityThenPosition)
         }
-        result.sort(by: compareByRootDueBucket)
-      case .tags:
-        if selectedRootTag.isEmpty {
-          result = result.filter(hasAnyTag(_:))
+      } else {
+        // Allow full child browsing only when the current parent itself matches
+        // the active root scope. Otherwise keep siblings constrained by scope.
+        if let parentTask = tasks.first(where: { $0.id == currentParentId }),
+          taskMatchesActiveRootScope(parentTask)
+        {
+          // Keep all real children.
         } else {
-          result = result.filter { hasTag($0, tag: selectedRootTag) }
+          result = result.filter(taskMatchesActiveRootScope(_:))
         }
-        result.sort(by: compareByPositionThenContent)
+        result.sort(by: compareByPriorityThenPosition)
       }
+    } else {
+      result.sort(by: compareByPriorityThenPosition)
     }
     return result
   }
 
   var isRootLevel: Bool { currentParentId == 0 }
 
-  var shouldShowRootScopeSection: Bool { isRootLevel && !isSearchFilterActive }
+  var shouldShowRootScopeSection: Bool { !needsInitialSetup && !isSearchFilterActive }
+  var rootScopeShowsFilterControls: Bool {
+    shouldShowRootScopeSection && isRootLevel && (rootTaskView == .due || rootTaskView == .tags)
+  }
 
   var selectedRootDueBucket: RootDueBucket? {
     get { RootDueBucket(rawValue: selectedRootDueBucketRawValue) }
@@ -398,7 +431,7 @@ class CheckvistManager: ObservableObject {
 
   func shouldShowBreadcrumbPath(for task: CheckvistTask) -> Bool {
     let pid = task.parentId ?? 0
-    if shouldShowRootScopeSection && rootTaskView != .all {
+    if isRootLevel && shouldShowRootScopeSection && rootTaskView != .all {
       return pid != 0
     }
     if isSearchFilterActive {
@@ -433,7 +466,6 @@ class CheckvistManager: ObservableObject {
   }
 
   func rootLevelTagNames(limit: Int = 8) -> [String] {
-    guard isRootLevel else { return [] }
     var counts: [String: Int] = [:]
     for task in tasks {
       let range = NSRange(task.content.startIndex..., in: task.content)
@@ -454,12 +486,18 @@ class CheckvistManager: ObservableObject {
       .map(\.key)
   }
 
+  func priorityRank(for task: CheckvistTask) -> Int? {
+    guard let index = priorityTaskIds.firstIndex(of: task.id) else { return nil }
+    return index + 1
+  }
+
   private var isSearchFilterActive: Bool {
     !filterText.isEmpty && quickEntryMode == .search
   }
 
   var shouldShowDueSectionHeaders: Bool {
-    shouldShowRootScopeSection && rootTaskView == .due && selectedRootDueBucket == nil
+    isRootLevel && shouldShowRootScopeSection && rootTaskView == .due
+      && selectedRootDueBucket == nil
   }
 
   private static let tagRegex = (try? NSRegularExpression(pattern: "[@#][a-zA-Z0-9_\\-]+"))!
@@ -485,6 +523,25 @@ class CheckvistManager: ObservableObject {
     return false
   }
 
+  private func taskMatchesActiveRootScope(_ task: CheckvistTask) -> Bool {
+    switch rootTaskView {
+    case .all:
+      return true
+    case .due:
+      if let selectedRootDueBucket {
+        return rootDueBucket(for: task) == selectedRootDueBucket
+      }
+      return rootDueBucket(for: task) != .noDueDate
+    case .tags:
+      if selectedRootTag.isEmpty {
+        return hasAnyTag(task)
+      }
+      return hasTag(task, tag: selectedRootTag)
+    case .priority:
+      return priorityRank(for: task) != nil
+    }
+  }
+
   private func compareByPositionThenContent(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
     switch (lhs.position, rhs.position) {
     case (.some(let leftPosition), .some(let rightPosition)) where leftPosition != rightPosition:
@@ -493,6 +550,23 @@ class CheckvistManager: ObservableObject {
       break
     }
     return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
+  }
+
+  private func compareByPriorityThenPosition(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
+    let leftPriority = priorityRank(for: lhs)
+    let rightPriority = priorityRank(for: rhs)
+
+    if let leftPriority, let rightPriority, leftPriority != rightPriority {
+      return leftPriority < rightPriority
+    }
+    if leftPriority != nil && rightPriority == nil {
+      return true
+    }
+    if leftPriority == nil && rightPriority != nil {
+      return false
+    }
+
+    return compareByPositionThenContent(lhs, rhs)
   }
 
   private func compareByRootDueBucket(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
@@ -540,6 +614,9 @@ class CheckvistManager: ObservableObject {
 
   func setRootTaskView(_ view: RootTaskView) {
     rootTaskView = view
+    if currentParentId != 0 {
+      currentParentId = 0
+    }
     currentSiblingIndex = 0
     if view != .due {
       selectedRootDueBucket = nil
@@ -547,7 +624,7 @@ class CheckvistManager: ObservableObject {
     if view != .tags {
       selectedRootTag = ""
     }
-    if view == .all, rootScopeFocusLevel > 1 {
+    if !(view == .due || view == .tags), rootScopeFocusLevel > 1 {
       rootScopeFocusLevel = 1
     }
   }
@@ -563,7 +640,7 @@ class CheckvistManager: ObservableObject {
   @MainActor func cycleRootScopeFilter(direction: Int) {
     guard shouldShowRootScopeSection else { return }
     switch rootTaskView {
-    case .all:
+    case .all, .priority:
       return
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
@@ -589,6 +666,79 @@ class CheckvistManager: ObservableObject {
     }
   }
 
+  @MainActor func selectRootScopeFilter(at index: Int) {
+    guard shouldShowRootScopeSection else { return }
+    guard index >= 0 else { return }
+    switch rootTaskView {
+    case .all, .priority:
+      return
+    case .due:
+      let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
+      guard options.indices.contains(index) else { return }
+      selectedRootDueBucket = options[index]
+      currentSiblingIndex = 0
+      rootScopeFocusLevel = 2
+    case .tags:
+      let options = [""] + rootLevelTagNames(limit: 30)
+      guard options.indices.contains(index) else { return }
+      selectedRootTag = options[index]
+      currentSiblingIndex = 0
+      rootScopeFocusLevel = 2
+    }
+  }
+
+  @MainActor func setPriorityForCurrentTask(_ rank: Int) {
+    guard (1...Self.maxPriorityRank).contains(rank), let task = currentTask else { return }
+
+    var updated = priorityTaskIds
+    updated.removeAll { $0 == task.id }
+    let insertIndex = min(max(rank - 1, 0), updated.count)
+    updated.insert(task.id, at: insertIndex)
+    if updated.count > Self.maxPriorityRank {
+      updated = Array(updated.prefix(Self.maxPriorityRank))
+    }
+    savePriorityQueue(updated)
+    errorMessage = nil
+
+    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      currentSiblingIndex = newIndex
+    }
+  }
+
+  @MainActor func sendCurrentTaskToPriorityBack() {
+    guard let task = currentTask else { return }
+
+    var updated = priorityTaskIds
+    let wasPrioritized = updated.contains(task.id)
+    updated.removeAll { $0 == task.id }
+
+    if !wasPrioritized && updated.count >= Self.maxPriorityRank {
+      errorMessage = "Priority slots full (1-9). Press 1-9 to replace one."
+      return
+    }
+
+    updated.append(task.id)
+    savePriorityQueue(updated)
+    errorMessage = nil
+
+    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      currentSiblingIndex = newIndex
+    }
+  }
+
+  @MainActor func clearPriorityForCurrentTask() {
+    guard let task = currentTask else { return }
+    guard priorityTaskIds.contains(task.id) else { return }
+    savePriorityQueue(priorityTaskIds.filter { $0 != task.id })
+    errorMessage = nil
+
+    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      currentSiblingIndex = newIndex
+    } else {
+      clampSelectionToVisibleRange()
+    }
+  }
+
   /// Returns true if task is a descendant of the given parentId (or IS at that level)
   func isDescendant(_ task: CheckvistTask, of rootId: Int) -> Bool {
     if rootId == 0 { return true }  // root contains everything
@@ -605,6 +755,7 @@ class CheckvistManager: ObservableObject {
   private var isLoginInProgress: Bool = false
   private var loginWaiters: [CheckedContinuation<Bool, Never>] = []
   private var cancellables = Set<AnyCancellable>()
+  private var priorityTaskIdsByListId: [String: [Int]]
   private var pendingReorderRequests: [(taskId: Int, position: Int)] = []
   private var reorderSyncTask: Task<Void, Never>? = nil
   private var reorderResyncTask: Task<Void, Never>? = nil
@@ -622,8 +773,11 @@ class CheckvistManager: ObservableObject {
   init() {
     let storedUsername = UserDefaults.standard.string(forKey: "checkvistUsername") ?? ""
     let storedListId = UserDefaults.standard.string(forKey: "checkvistListId") ?? ""
+    let storedPriorityQueues = Self.priorityQueuesFromDefaults()
     self.username = storedUsername
     self.listId = storedListId
+    self.priorityTaskIdsByListId = storedPriorityQueues
+    self.priorityTaskIds = Self.normalizedPriorityQueue(storedPriorityQueues[storedListId] ?? [])
     self.confirmBeforeDelete =
       UserDefaults.standard.object(forKey: "confirmBeforeDelete") as? Bool ?? true
     self.showTaskBreadcrumbContext =
@@ -701,8 +855,9 @@ class CheckvistManager: ObservableObject {
       }.store(in: &cancellables)
     $listId
       .dropFirst()
-      .sink { value in
+      .sink { [weak self] value in
         UserDefaults.standard.set(value, forKey: "checkvistListId")
+        self?.loadPriorityQueue(for: value)
       }.store(in: &cancellables)
     $confirmBeforeDelete.sink { UserDefaults.standard.set($0, forKey: "confirmBeforeDelete") }
       .store(in: &cancellables)
@@ -782,6 +937,67 @@ class CheckvistManager: ObservableObject {
       if let id = Int(k) { result[id] = v }
     }
     return result
+  }
+
+  private static func priorityQueuesFromDefaults() -> [String: [Int]] {
+    guard let raw = UserDefaults.standard.dictionary(forKey: Self.priorityQueuesDefaultsKey) else {
+      return [:]
+    }
+
+    var parsed: [String: [Int]] = [:]
+    for (listId, value) in raw {
+      if let queue = value as? [Int] {
+        parsed[listId] = normalizedPriorityQueue(queue)
+      } else if let queue = value as? [NSNumber] {
+        parsed[listId] = normalizedPriorityQueue(queue.map(\.intValue))
+      }
+    }
+    return parsed
+  }
+
+  private static func normalizedPriorityQueue(_ queue: [Int]) -> [Int] {
+    var seen = Set<Int>()
+    var normalized: [Int] = []
+    for taskId in queue where taskId > 0 && !seen.contains(taskId) {
+      seen.insert(taskId)
+      normalized.append(taskId)
+    }
+    if normalized.count > maxPriorityRank {
+      return Array(normalized.prefix(maxPriorityRank))
+    }
+    return normalized
+  }
+
+  private func loadPriorityQueue(for listId: String) {
+    if listId.isEmpty {
+      priorityTaskIds = []
+      return
+    }
+    priorityTaskIds = Self.normalizedPriorityQueue(priorityTaskIdsByListId[listId] ?? [])
+  }
+
+  private func savePriorityQueue(_ queue: [Int]) {
+    let normalized = Self.normalizedPriorityQueue(queue)
+    priorityTaskIds = normalized
+
+    guard !listId.isEmpty else { return }
+    priorityTaskIdsByListId[listId] = normalized
+    UserDefaults.standard.set(priorityTaskIdsByListId, forKey: Self.priorityQueuesDefaultsKey)
+  }
+
+  @MainActor private func removeTasksFromPriorityQueue(_ taskIds: Set<Int>) {
+    guard !taskIds.isEmpty else { return }
+    let filtered = priorityTaskIds.filter { !taskIds.contains($0) }
+    guard filtered != priorityTaskIds else { return }
+    savePriorityQueue(filtered)
+  }
+
+  @MainActor private func reconcilePriorityQueueWithOpenTasks() {
+    let openTaskIds = Set(tasks.map(\.id))
+    let filtered = priorityTaskIds.filter { openTaskIds.contains($0) }
+    if filtered != priorityTaskIds {
+      savePriorityQueue(filtered)
+    }
   }
 
   @MainActor
@@ -884,6 +1100,7 @@ class CheckvistManager: ObservableObject {
   /// Navigate into the current task's children
   @MainActor func enterChildren() {
     guard let task = currentTask, !currentTaskChildren.isEmpty else { return }
+    rootScopeFocusLevel = 0
     currentParentId = task.id
     currentSiblingIndex = 0
   }
@@ -891,6 +1108,7 @@ class CheckvistManager: ObservableObject {
   /// Navigate back up to the parent level
   @MainActor func exitToParent() {
     guard currentParentId != 0 else { return }
+    rootScopeFocusLevel = 0
     // Find the parent task and make it the selected sibling
     if let parent = tasks.first(where: { $0.id == currentParentId }) {
       let grandparentId = parent.parentId ?? 0
@@ -906,6 +1124,7 @@ class CheckvistManager: ObservableObject {
   @MainActor func navigateTo(task: CheckvistTask) {
     let parentId = task.parentId ?? 0
     let siblings = tasks.filter { ($0.parentId ?? 0) == parentId }
+    rootScopeFocusLevel = 0
     currentParentId = parentId
     currentSiblingIndex = siblings.firstIndex(where: { $0.id == task.id }) ?? 0
   }
@@ -1075,6 +1294,7 @@ class CheckvistManager: ObservableObject {
       let sortedForest = depthFirst(parentId: 0, all: open)
 
       self.tasks = sortedForest
+      reconcilePriorityQueueWithOpenTasks()
       if currentSiblingIndex >= sortedForest.count { currentSiblingIndex = 0 }
       let validTaskIds = Set(sortedForest.map(\.id))
       self.timerByTaskId = self.timerByTaskId.filter { validTaskIds.contains($0.key) }
@@ -1125,7 +1345,7 @@ class CheckvistManager: ObservableObject {
         string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id)/\(endpoint).json")
     else { return }
 
-    let optimisticSnapshot: [CheckvistTask]? =
+    let optimisticSnapshot: OptimisticCompletionSnapshot? =
       (!isUndo && (endpoint == "close" || endpoint == "invalidate"))
       ? applyOptimisticCompletion(for: task.id) : nil
 
@@ -1416,16 +1636,26 @@ class CheckvistManager: ObservableObject {
     }
   }
 
-  @MainActor private func applyOptimisticCompletion(for taskId: Int) -> [CheckvistTask]? {
+  private struct OptimisticCompletionSnapshot {
+    let tasks: [CheckvistTask]
+    let priorityTaskIds: [Int]
+  }
+
+  @MainActor private func applyOptimisticCompletion(for taskId: Int)
+    -> OptimisticCompletionSnapshot?
+  {
     guard let removingRange = subtreeBlockRange(for: taskId, in: tasks) else { return nil }
-    let snapshot = tasks
+    let removedTaskIds = Set(tasks[removingRange].map(\.id))
+    let snapshot = OptimisticCompletionSnapshot(tasks: tasks, priorityTaskIds: priorityTaskIds)
     tasks.removeSubrange(removingRange)
+    removeTasksFromPriorityQueue(removedTaskIds)
     clampSelectionToVisibleRange()
     return snapshot
   }
 
-  @MainActor private func restoreTasksSnapshot(_ snapshot: [CheckvistTask]) {
-    tasks = snapshot
+  @MainActor private func restoreTasksSnapshot(_ snapshot: OptimisticCompletionSnapshot) {
+    tasks = snapshot.tasks
+    savePriorityQueue(snapshot.priorityTaskIds)
     clampSelectionToVisibleRange()
   }
 
@@ -1807,6 +2037,12 @@ class CheckvistManager: ObservableObject {
       currentSiblingIndex = 0
       filterText = ""
       await fetchTopTask()
+    case .priority(let rank):
+      setPriorityForCurrentTask(rank)
+    case .priorityBack:
+      sendCurrentTaskToPriorityBack()
+    case .clearPriority:
+      clearPriorityForCurrentTask()
     case .unknown(let raw):
       errorMessage = "Unknown command: \(raw)"
       logger.error("Unknown command: \(raw, privacy: .public)")

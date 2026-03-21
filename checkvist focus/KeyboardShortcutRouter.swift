@@ -41,6 +41,10 @@ struct KeyboardShortcutRouter {
       manager.rootScopeFocusLevel = 0
     }
     let rootScopeFocused = manager.shouldShowRootScopeSection && manager.rootScopeFocusLevel > 0
+    let canFocusRootScopeFromListTop =
+      manager.shouldShowRootScopeSection
+      && manager.currentSiblingIndex == 0
+      && (!manager.visibleTasks.isEmpty || manager.currentParentId == 0)
 
     // Reliable fallback for command/actions prompt.
     if cmd && !shift && !ctrl && !option && chars.lowercased() == "k" && !isFocused {
@@ -101,7 +105,7 @@ struct KeyboardShortcutRouter {
     }
 
     // Root scope keyboard navigation:
-    // Ctrl+←/→ switches All/Due/Tags. Ctrl+↑/↓ cycles Due bucket or Tag filter.
+    // Ctrl+←/→ switches root tabs. Ctrl+↑/↓ cycles Due bucket or Tag filter.
     if manager.shouldShowRootScopeSection && !isFocused && ctrl && !cmd && !option {
       if event.keyCode == 123 {
         manager.cycleRootTaskView(direction: -1)
@@ -134,7 +138,7 @@ struct KeyboardShortcutRouter {
     // Up/Down arrows - list navigation + root scope navigation.
     if event.keyCode == 125 {
       if rootScopeFocused {
-        if manager.rootScopeFocusLevel == 1 && manager.rootTaskView != .all {
+        if manager.rootScopeFocusLevel == 1 && manager.rootScopeShowsFilterControls {
           manager.rootScopeFocusLevel = 2
         } else {
           manager.rootScopeFocusLevel = 0
@@ -152,7 +156,7 @@ struct KeyboardShortcutRouter {
         }
         return true
       }
-      if manager.shouldShowRootScopeSection && manager.currentSiblingIndex == 0 {
+      if canFocusRootScopeFromListTop {
         manager.rootScopeFocusLevel = 1
         return true
       }
@@ -295,25 +299,47 @@ struct KeyboardShortcutRouter {
       return true
     }
 
+    // q/w/e/r - root tab shortcuts: All / Due / Tags / Priority.
+    if !shift && !ctrl && !cmd && !option && !isFocused {
+      switch chars {
+      case "q":
+        manager.setRootTaskView(.all)
+        updateTitle()
+        return true
+      case "w":
+        manager.setRootTaskView(.due)
+        updateTitle()
+        return true
+      case "e":
+        manager.setRootTaskView(.tags)
+        updateTitle()
+        return true
+      case "r":
+        manager.setRootTaskView(.priority)
+        updateTitle()
+        return true
+      default:
+        break
+      }
+    }
+
+    // z/x/c/v/b/n/m - lower root filter shortcuts (Due/Tags row options).
+    if !shift && !ctrl && !cmd && !option && !isFocused && manager.rootScopeShowsFilterControls {
+      let filterShortcutKeys = ["z", "x", "c", "v", "b", "n", "m"]
+      if let filterIndex = filterShortcutKeys.firstIndex(of: chars) {
+        manager.selectRootScopeFilter(at: filterIndex)
+        updateTitle()
+        return true
+      }
+    }
+
     // Two-key sequences.
-    let sequenceStarters: Set<String> = ["e", "d", "g", "s"]
+    let sequenceStarters: Set<String> = ["d", "g", "s"]
     if !manager.keyBuffer.isEmpty {
       let sequence = manager.keyBuffer + chars
       manager.keyBuffer = ""
       if !isFocused {
         switch sequence {
-        case "ee", "ea":
-          manager.quickEntryMode = .editTask
-          manager.editCursorAtEnd = true
-          manager.filterText = manager.currentTask?.content ?? ""
-          manager.isQuickEntryFocused = true
-          return true
-        case "ei":
-          manager.quickEntryMode = .editTask
-          manager.editCursorAtEnd = false
-          manager.filterText = manager.currentTask?.content ?? ""
-          manager.isQuickEntryFocused = true
-          return true
         case "dd":
           manager.quickEntryMode = .command
           manager.commandSuggestionIndex = 0
@@ -372,7 +398,7 @@ struct KeyboardShortcutRouter {
     }
     if chars == "j" && !shift && !ctrl && !isFocused {
       if rootScopeFocused {
-        if manager.rootScopeFocusLevel == 1 && manager.rootTaskView != .all {
+        if manager.rootScopeFocusLevel == 1 && manager.rootScopeShowsFilterControls {
           manager.rootScopeFocusLevel = 2
         } else {
           manager.rootScopeFocusLevel = 0
@@ -390,7 +416,7 @@ struct KeyboardShortcutRouter {
         }
         return true
       }
-      if manager.shouldShowRootScopeSection && manager.currentSiblingIndex == 0 {
+      if canFocusRootScopeFromListTop {
         manager.rootScopeFocusLevel = 1
         return true
       }
@@ -458,6 +484,25 @@ struct KeyboardShortcutRouter {
       manager.quickEntryMode = .search
       manager.isQuickEntryFocused = true
       return true
+    }
+
+    // 1-9 set priority rank, = sends to the back of prioritized tasks, - clears priority.
+    if !shift && !ctrl && !cmd && !option && !isFocused && !rootScopeFocused {
+      if chars == "-" {
+        manager.clearPriorityForCurrentTask()
+        updateTitle()
+        return true
+      }
+      if chars == "=" {
+        manager.sendCurrentTaskToPriorityBack()
+        updateTitle()
+        return true
+      }
+      if let priority = Int(chars), (1...CheckvistManager.maxPriorityRank).contains(priority) {
+        manager.setPriorityForCurrentTask(priority)
+        updateTitle()
+        return true
+      }
     }
 
     // i - insert, a - append.
