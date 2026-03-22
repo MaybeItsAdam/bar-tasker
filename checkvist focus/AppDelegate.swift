@@ -4,7 +4,7 @@ import OSLog
 import SwiftUI
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   static private(set) var shared: AppDelegate!
 
   override init() {
@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   lazy var checkvistManager: CheckvistManager = CheckvistManager()
   private var statusItem: NSStatusItem!
   private var window: NSWindow?
+  private var preferencesWindow: NSWindow?
   private var keyMonitor: Any?
   private var clickMonitor: Any?
   private var globalHotkeyRef: EventHotKeyRef?
@@ -158,7 +159,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   func updateTitle() {
     DispatchQueue.main.async {
       let rawTaskText = self.checkvistManager.currentTaskText
-      let taskText = self.menuBarDisplayTaskText(rawTaskText)
+      let baseTaskText = self.menuBarDisplayTaskText(rawTaskText)
+      let taskText =
+        self.checkvistManager.pendingSyncMenuBarPrefix.isEmpty
+        ? baseTaskText
+        : "\(self.checkvistManager.pendingSyncMenuBarPrefix): \(baseTaskText)"
       if taskText.isEmpty {
         self.statusItem?.button?.attributedTitle = NSAttributedString(string: "…")
         self.statusItem?.button?.toolTip = nil
@@ -415,14 +420,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     if event.type == .rightMouseUp {
       let menu = NSMenu()
       menu.addItem(withTitle: "Refresh", action: #selector(menuRefresh), keyEquivalent: "")
-      if #available(macOS 14.0, *) {
-        menu.addItem(makeSettingsMenuItem())
-      } else {
-        let settingsItem = NSMenuItem(
-          title: "Settings...", action: #selector(menuSettings), keyEquivalent: ",")
-        settingsItem.keyEquivalentModifierMask = [.command]
-        menu.addItem(settingsItem)
-      }
+      let obsidianItem = NSMenuItem(
+        title: "Open in Obsidian",
+        action: #selector(menuSyncToObsidian),
+        keyEquivalent: "O")
+      obsidianItem.keyEquivalentModifierMask = [.command, .shift]
+      menu.addItem(obsidianItem)
+      let settingsItem = NSMenuItem(
+        title: "Preferences...", action: #selector(menuSettings), keyEquivalent: ",")
+      settingsItem.keyEquivalentModifierMask = [.command]
+      menu.addItem(settingsItem)
       menu.addItem(.separator())
       menu.addItem(withTitle: "Quit", action: #selector(menuQuit), keyEquivalent: "q")
 
@@ -444,6 +451,56 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  @objc func menuSyncToObsidian() {
+    Task { [weak self] in
+      await self?.checkvistManager.syncCurrentTaskToObsidian()
+      self?.updateTitle()
+    }
+  }
+
+  @objc func menuSettings() {
+    closeWindow()
+    let window = makePreferencesWindowIfNeeded()
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  private func makePreferencesWindowIfNeeded() -> NSWindow {
+    if let preferencesWindow {
+      return preferencesWindow
+    }
+
+    let rootView = SettingsView()
+      .environmentObject(checkvistManager)
+      .frame(minWidth: 560, idealWidth: 620, minHeight: 520, idealHeight: 620)
+    let hostingController = NSHostingController(rootView: rootView)
+
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 620, height: 620),
+      styleMask: [.titled, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "Preferences"
+    window.center()
+    // Keep ARC ownership on our side; we explicitly nil `preferencesWindow` on close.
+    window.isReleasedWhenClosed = false
+    window.isRestorable = false
+    window.tabbingMode = .disallowed
+    window.delegate = self
+    window.contentViewController = hostingController
+    window.setFrameAutosaveName("CheckvistFocusPreferencesWindow")
+    preferencesWindow = window
+    return window
+  }
+
+  func windowWillClose(_ notification: Notification) {
+    guard let closingWindow = notification.object as? NSWindow else { return }
+    if closingWindow === preferencesWindow {
+      preferencesWindow = nil
+    }
+  }
+
   private func scheduleAutoRefresh() {
     let now = Date()
     guard
@@ -458,39 +515,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       await self?.checkvistManager.fetchTopTask()
       self?.updateTitle()
     }
-  }
-
-  @objc func menuSettings() {
-    closeWindow()
-    if #available(macOS 13.0, *) {
-      NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-    } else {
-      NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-    }
-    NSApp.activate(ignoringOtherApps: true)
-  }
-
-  @available(macOS 14.0, *)
-  private func makeSettingsMenuItem() -> NSMenuItem {
-    let item = NSMenuItem()
-    let hostingView = NSHostingView(
-      rootView:
-        SettingsLink {
-          HStack(spacing: 0) {
-            Text("Settings...")
-            Spacer(minLength: 0)
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.leading, 16)
-          .padding(.trailing, 12)
-          .padding(.vertical, 4)
-        }
-        .buttonStyle(.plain)
-        .frame(width: 220, alignment: .leading)
-    )
-    hostingView.frame.size = hostingView.fittingSize
-    item.view = hostingView
-    return item
   }
 
   @objc func menuQuit() {

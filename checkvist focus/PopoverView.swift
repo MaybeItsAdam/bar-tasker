@@ -12,9 +12,9 @@ enum PopoverLayout {
   static let rowIconWidth: CGFloat = 16
   static let rowContentSpacing: CGFloat = 10
   static let rowTextFadeWidth: CGFloat = 18
-  static let rowTextMinScale: CGFloat = 0.72
   static let inlineEntryVerticalPadding: CGFloat = 7
 
+  @MainActor
   static func preferredHeight(for manager: CheckvistManager) -> CGFloat {
     if manager.needsInitialSetup {
       return 360
@@ -70,6 +70,111 @@ enum PopoverLayout {
     }
 
     return min(maxHeight, max(minHeight, fixedHeight + taskAreaHeight))
+  }
+}
+
+private struct MarqueeTextLine<Content: View>: View {
+  let fadeWidth: CGFloat
+  let content: () -> Content
+
+  @State private var containerWidth: CGFloat = 0
+  @State private var contentWidth: CGFloat = 0
+  @State private var isHovering = false
+  @State private var xOffset: CGFloat = 0
+
+  private var shouldMarquee: Bool {
+    isHovering && contentWidth > containerWidth + 1
+  }
+
+  private var overflowDistance: CGFloat {
+    max(0, contentWidth - containerWidth)
+  }
+
+  var body: some View {
+    GeometryReader { proxy in
+      let width = proxy.size.width
+      ZStack(alignment: .leading) {
+        if shouldMarquee {
+          HStack(spacing: 28) {
+            marqueeContent
+            marqueeContent
+          }
+          .offset(x: xOffset)
+          .onAppear {
+            containerWidth = width
+            startMarqueeIfNeeded()
+          }
+        } else {
+          marqueeContent
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      .mask(fadeMask)
+      .contentShape(Rectangle())
+      .onAppear {
+        containerWidth = width
+      }
+      .onChange(of: width) { _, newValue in
+        containerWidth = newValue
+        restartMarqueeIfNeeded()
+      }
+      .onHover { hovering in
+        isHovering = hovering
+        restartMarqueeIfNeeded()
+      }
+    }
+    .frame(height: 22)
+    .background(
+      marqueeContent
+        .fixedSize(horizontal: true, vertical: false)
+        .hidden()
+        .background(
+          GeometryReader { proxy in
+            Color.clear
+              .onAppear { contentWidth = proxy.size.width }
+              .onChange(of: proxy.size.width) { _, newValue in
+                contentWidth = newValue
+                restartMarqueeIfNeeded()
+              }
+          }
+        )
+    )
+  }
+
+  private var marqueeContent: some View {
+    content()
+      .lineLimit(1)
+      .fixedSize(horizontal: true, vertical: false)
+  }
+
+  private var fadeMask: some View {
+    let safeFade = min(fadeWidth, max(0, containerWidth - 24))
+    return HStack(spacing: 0) {
+      Rectangle()
+      LinearGradient(
+        colors: [.black, .black.opacity(0)],
+        startPoint: .leading,
+        endPoint: .trailing
+      )
+      .frame(width: safeFade)
+    }
+  }
+
+  private func restartMarqueeIfNeeded() {
+    xOffset = 0
+    guard shouldMarquee else { return }
+    startMarqueeIfNeeded()
+  }
+
+  private func startMarqueeIfNeeded() {
+    guard shouldMarquee else { return }
+    let distance = overflowDistance + 28
+    let duration = max(2.5, Double(distance / 28))
+    withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
+      xOffset = -distance
+    }
   }
 }
 
@@ -861,7 +966,14 @@ struct PopoverView: View {
           .frame(height: 18)
           .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-          fadedTaskTitle(task: task)
+          HStack(spacing: 6) {
+            fadedTaskTitle(task: task)
+            if task.hasNotes {
+              Image(systemName: "text.alignleft")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.secondary)
+            }
+          }
         }
 
         if let priority = manager.priorityRank(for: task) {
@@ -973,6 +1085,26 @@ struct PopoverView: View {
       Divider()
       Button("Indent ⇥") { Task { await manager.indentTask(task) } }
       Button("Unindent ⇧⇥") { Task { await manager.unindentTask(task) } }
+      Divider()
+      Button("Link Obsidian Folder") {
+        manager.currentSiblingIndex = index
+        manager.linkCurrentTaskToObsidianFolder(taskId: task.id)
+      }
+      if manager.hasObsidianFolderLink(taskId: task.id) {
+        Button("Clear Obsidian Folder Link") {
+          manager.currentSiblingIndex = index
+          manager.clearCurrentTaskObsidianFolderLink(taskId: task.id)
+        }
+      }
+      Divider()
+      Button("Open in Obsidian o") {
+        manager.currentSiblingIndex = index
+        Task { await manager.syncCurrentTaskToObsidian(taskId: task.id) }
+      }
+      Button("Open in New Obsidian Window O") {
+        manager.currentSiblingIndex = index
+        Task { await manager.openCurrentTaskInNewObsidianWindow(taskId: task.id) }
+      }
       Divider()
       Button("Delete", role: .destructive) {
         manager.currentSiblingIndex = index
@@ -1119,28 +1251,12 @@ struct PopoverView: View {
 
   @ViewBuilder
   func fadedTaskTitle(task: CheckvistTask) -> some View {
-    inlineTaskContent(task: task)
-      .lineLimit(1)
-      .truncationMode(.tail)
-      .allowsTightening(true)
-      .minimumScaleFactor(PopoverLayout.rowTextMinScale)
-      .multilineTextAlignment(.leading)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .mask {
-        GeometryReader { proxy in
-          let maxFade = PopoverLayout.rowTextFadeWidth
-          let safeFade = min(maxFade, max(0, proxy.size.width - 24))
-          HStack(spacing: 0) {
-            Rectangle()
-            LinearGradient(
-              colors: [.black, .black.opacity(0)],
-              startPoint: .leading,
-              endPoint: .trailing
-            )
-            .frame(width: safeFade)
-          }
-        }
-      }
+    MarqueeTextLine(fadeWidth: PopoverLayout.rowTextFadeWidth) {
+      inlineTaskContent(task: task)
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   func inlineTaskContent(task: CheckvistTask) -> Text {

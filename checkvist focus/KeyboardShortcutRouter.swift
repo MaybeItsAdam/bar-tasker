@@ -135,6 +135,22 @@ struct KeyboardShortcutRouter {
       return true
     }
 
+    // o / O - open selected task in Obsidian / new Obsidian window.
+    if !cmd && !ctrl && !option && !isFocused && chars == "o" {
+      Task {
+        await manager.syncCurrentTaskToObsidian()
+        updateTitle()
+      }
+      return true
+    }
+    if !cmd && !ctrl && !option && !isFocused && chars == "O" {
+      Task {
+        await manager.openCurrentTaskInNewObsidianWindow()
+        updateTitle()
+      }
+      return true
+    }
+
     // Up/Down arrows - list navigation + root scope navigation.
     if event.keyCode == 125 {
       if rootScopeFocused {
