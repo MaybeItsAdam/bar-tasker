@@ -210,6 +210,7 @@ struct SettingsView: View {
 
       Section(header: Text("Preferences")) {
         Toggle("Confirm before deleting tasks", isOn: $checkvistManager.confirmBeforeDelete)
+        Toggle("Enable sc breadcrumb shortcut", isOn: $checkvistManager.enableTaskContextShortcut)
         if #available(macOS 13.0, *) {
           Toggle("Launch at login", isOn: $checkvistManager.launchAtLogin)
         }

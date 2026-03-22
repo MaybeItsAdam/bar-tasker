@@ -48,7 +48,7 @@ A keyboard-first macOS menu bar app for working your Checkvist lists quickly, wi
 | `dd` | Open due command |
 | `gg` | Open first URL in task |
 | `gt` / `gu` | Open tag / untag command |
-| `sc` | Toggle breadcrumb context on rows |
+| `sc` | Toggle breadcrumb context on rows (if enabled in Preferences) |
 
 ### Root scope (top bars)
 

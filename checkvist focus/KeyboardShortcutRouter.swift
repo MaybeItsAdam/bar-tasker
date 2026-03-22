@@ -350,7 +350,9 @@ struct KeyboardShortcutRouter {
     }
 
     // Two-key sequences.
-    let sequenceStarters: Set<String> = ["d", "g", "s"]
+    let sequenceStarters: Set<String> =
+      manager.enableTaskContextShortcut
+      ? ["d", "g", "s"] : ["d", "g"]
     if !manager.keyBuffer.isEmpty {
       let sequence = manager.keyBuffer + chars
       manager.keyBuffer = ""
@@ -378,6 +380,7 @@ struct KeyboardShortcutRouter {
           manager.isQuickEntryFocused = true
           return true
         case "sc":
+          guard manager.enableTaskContextShortcut else { return false }
           manager.showTaskBreadcrumbContext.toggle()
           return true
         default:
