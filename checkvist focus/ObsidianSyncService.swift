@@ -10,6 +10,9 @@ final class ObsidianSyncService {
   private static let bookmarkDefaultsKey = "obsidianInboxBookmark"
   private static let linkedFolderBookmarksDefaultsKey = "obsidianLinkedFolderBookmarksByTaskId"
   private static let obsidianBundleIdentifier = "md.obsidian"
+  private static let standardOpenDelay: TimeInterval = 0.1
+  private static let newWindowOpenDelay: TimeInterval = 0.25
+  private static let uriRetryDelay: TimeInterval = 0.35
   private static let remoteTimestampParsers: [ISO8601DateFormatter] = {
     let internet = ISO8601DateFormatter()
     internet.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate]
@@ -241,13 +244,10 @@ final class ObsidianSyncService {
         [markdownURL], withApplicationAt: obsidianAppURL, configuration: fileOpenConfiguration
       ) { _, _ in
         guard let obsidianURL else { return }
-        let delay: TimeInterval = mode == .newWindow ? 0.8 : 0.4
+        let delay: TimeInterval =
+          mode == .newWindow ? Self.newWindowOpenDelay : Self.standardOpenDelay
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-          let uriOpenConfiguration = NSWorkspace.OpenConfiguration()
-          uriOpenConfiguration.activates = mode == .standard
-          NSWorkspace.shared.open(
-            [obsidianURL], withApplicationAt: obsidianAppURL, configuration: uriOpenConfiguration
-          ) { _, _ in }
+          self.openObsidianURI(obsidianURL, appURL: obsidianAppURL, mode: mode, allowRetry: true)
         }
       }
       return
@@ -270,6 +270,24 @@ final class ObsidianSyncService {
     }
     components.queryItems = queryItems
     return components.url
+  }
+
+  private func openObsidianURI(
+    _ obsidianURL: URL,
+    appURL: URL,
+    mode: ObsidianOpenMode,
+    allowRetry: Bool
+  ) {
+    let uriOpenConfiguration = NSWorkspace.OpenConfiguration()
+    uriOpenConfiguration.activates = mode == .standard
+    NSWorkspace.shared.open(
+      [obsidianURL], withApplicationAt: appURL, configuration: uriOpenConfiguration
+    ) { _, error in
+      guard allowRetry, error != nil else { return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + Self.uriRetryDelay) {
+        self.openObsidianURI(obsidianURL, appURL: appURL, mode: mode, allowRetry: false)
+      }
+    }
   }
 
   private func markdownDocument(for task: CheckvistTask, listId: String, syncDate: Date) -> String {

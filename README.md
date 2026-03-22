@@ -1,191 +1,149 @@
 # <img src="checkvist%20focus/Assets.xcassets/AppIcon.appiconset/ios-1024.png" alt="Checkvist Focus logo" width="28" /> Checkvist Focus
 
-A blazing-fast, keyboard-centric macOS Menu Bar application that seamlessly integrates with your [Checkvist](https://checkvist.com/) account to help you focus on your top priorities.
+A keyboard-first macOS menu bar app for working your Checkvist lists quickly, with due/tag/priority views, timers, and Obsidian export.
 
-## Features
+## Highlights
 
-### Menu Bar
+- Menu bar title shows the current task (and timer summary when enabled).
+- Root views: **All / Due / Tags / Priority**.
+- Due view buckets: **Overdue, ASAP, Today, Tomorrow, Next 7 days, Future**.
+- Priority ranking with automatic shifting (`1-9`, `=`, `-`).
+- Obsidian integration with note export, folder linking, and offline fallback.
+- Global hotkey support for quick popover open/close.
 
-The menu bar shows your currently focused task. When timer display is enabled, it shows the selected task's rolled-up timer value (task + descendants).
+## Keyboard
 
 ### Navigation
 
 | Key | Action |
 |-----|--------|
-| `j` / `↓` | Move to next task |
-| `k` / `↑` | Move to previous task |
-| `→` or `l` | Enter subtasks (children) |
-| `←` or `h` | Go back to parent level |
-| `Esc` | Revert selection to when popover opened, close |
+| `j` / `↓` | Next task |
+| `k` / `↑` | Previous task |
+| `l` / `→` | Enter subtasks |
+| `h` / `←` | Exit to parent |
+| `Esc` | Cancel input or close popover |
 
-### Task Completion
-
-Press `Space` to mark the current task done. Completion is tactile and satisfying:
-- Immediate haptic pulse
-- The circle icon springs into a green checkmark
-- A strikethrough line draws across the task text
-- Additional haptic confirmation pulses follow
-- The task then disappears
-
-Press `Shift+Space` to **invalidate** (void) a task instead.
-
-### Timer
+### Task actions
 
 | Key | Action |
 |-----|--------|
-| `t` | Start timer for current task (or switch to a different task's timer) |
-| `p` | Pause / resume the running timer |
+| `Space` | Mark done |
+| `Shift+Space` | Invalidate task |
+| `u` | Undo last action |
+| `i` | Edit at start |
+| `a` / `F2` | Edit at end |
+| `Enter` | Add sibling |
+| `Shift+Enter` | Add child |
+| `Tab` | Add child |
+| `Shift+Tab` | Unindent |
+| `Cmd+↑` / `Cmd+↓` | Move task up/down |
+| `Fn+Delete` | Delete task |
 
-The timer badge appears beneath the task text and shows elapsed time in the most readable unit:
-- `42s` — seconds (under a minute)
-- `1.4m` / `14m` — minutes (to 2 significant figures)
-- `1.4h` / `14h` — hours (to 2 significant figures)
-
-The timer persists while you navigate and across app relaunches. Parent tasks display rolled-up totals from descendants.
-
-### Searching & Filtering
-
-Press `/` to open search. Type to filter tasks dynamically — results search recursively through all subtasks under the current level. Press `Esc` to clear.
-
-### Editing
+### Focus and filters
 
 | Key | Action |
 |-----|--------|
-| `i` | Edit task, cursor at start |
-| `a` or `ee` / `ea` | Edit task, cursor at end |
-| `ei` | Edit task, cursor at start (two-key) |
-| `F2` | Edit task, cursor at end |
-
-Press `Enter` to save, `Esc` to cancel.
-
-### Adding Tasks
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Add sibling task below current |
-| `Shift+Enter` | Add child task |
-| `Tab` | Add child task (in quick-entry field, promotes to child) |
-
-Checkvist smart syntax works on creation: `^today`, `^tomorrow`, `^monday`, `^2026-03-15` assign due dates inline.
-
-### Commands (`:` or `;`)
-
-Press `:` or `;` to enter command mode for the current task:
-
-| Command | Action |
-|---------|--------|
-| `done` / `undone` | Mark complete or reopen |
-| `invalidate` | Void the task |
-| `due today` / `due tomorrow` / `due monday` | Set due date |
-| `due 2026-03-15` | Set exact due date |
-| `clear due` | Remove due date |
-| `tag <name>` | Append `#name` tag to task |
-| `untag <name>` | Remove `#name` tag from task |
-| `list <name>` | Switch to a different Checkvist list |
-
-### Action Palette (`Cmd+K`)
-
-Press `Cmd+K` to open action search with autocomplete and keybind hints.
-
-- Arrow keys move selection and auto-scroll.
-- `Enter` applies selected action.
-- `Esc` closes.
-
-Common prompt shortcuts:
-
-| Key | Action |
-|-----|--------|
-| `gt` | Open `tag ` prompt |
-| `gu` | Open `untag ` prompt |
-| `Shift+L` | Open `list ` prompt |
-
-### Reordering & Structure
-
-| Key | Action |
-|-----|--------|
-| `Cmd+↑` / `Cmd+↓` | Move task up / down among siblings |
-| `Tab` (not in entry) | Indent task (make child of sibling above) |
-| `Shift+Tab` | Unindent task |
-
-### Other Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `dd` | Open due-date command |
-| `gg` | Open first URL found in task content |
-| `H` (Shift+h) | Toggle "Hide Future" filter (shows only today + overdue) |
-| `sc` | Toggle breadcrumb/task context hints on rows |
-| `Ctrl+←` / `Ctrl+→` | Root scope: previous/next tab |
-| `Ctrl+↑` / `Ctrl+↓` | Root scope: previous/next Due bucket or Tag filter |
-| `↑` from first task | Move focus to root scope tabs |
-| `k` from first task | Move focus to root scope tabs |
-| `h` / `l` while scope focused | Previous/next tab (or filter chip) |
-| `u` | Undo last action (add, complete, edit) |
-| `Fn+Delete` | Delete task (with confirmation prompt) |
 | `/` | Focus search |
+| `H` | Toggle hide-future |
+| `dd` | Open due command |
+| `gg` | Open first URL in task |
+| `gt` / `gu` | Open tag / untag command |
+| `sc` | Toggle breadcrumb context on rows |
 
-### Due Date Display
+### Root scope (top bars)
 
-Due dates appear as color-coded badges on each task row:
-- **Red** — overdue
-- **Orange** — due today
-- **Grey** — upcoming
+| Key | Action |
+|-----|--------|
+| `q` / `w` / `e` / `r` | Switch root view: All / Due / Tags / Priority |
+| `Ctrl+←` / `Ctrl+→` | Previous/next root view |
+| `Ctrl+↑` / `Ctrl+↓` | Cycle active lower filter row |
+| `z x c v b n m` | Jump to lower filter chips (Due/Tags row) |
+| `↑` or `k` from first row | Focus root scope |
+| `h` / `l` while root focused | Cycle scope tabs or chips |
 
-At the root level, tasks are grouped in this due-order:
-- Use the root selector: **All / Due / Tags**.
-- In **Due**, tasks are ordered: **Overdue**, **ASAP**, **Today**, **Tomorrow**, **Next 7 days**, **Further in the future**.
+### Priority
 
-### Global Hotkey
+| Key | Action |
+|-----|--------|
+| `1..9` | Set priority rank |
+| `=` | Send selected task to back of priority list |
+| `-` | Clear priority |
 
-Configure a system-wide hotkey (default `⌥Space`) in Settings to open/close the popover from any application.
+### Obsidian
 
----
+| Key | Action |
+|-----|--------|
+| `o` | Open selected task in Obsidian |
+| `O` | Open selected task in a new Obsidian window |
 
-## Installation (Open Source Release)
+## Commands (`:` or `;`, or `Cmd+K`)
 
-Because this app is open-source and not signed with a paid Apple Developer certificate, macOS Gatekeeper will prevent it from running initially.
+Command mode supports:
 
-1. Download the latest `.dmg` from the [Releases page](https://github.com/yourusername/checkvist-focus/releases).
-2. Open the DMG and drag `Checkvist Focus.app` to your **Applications** folder.
-3. **Right-Click (or Control-Click)** on the app icon and select **"Open"**.
-4. Click **"Open"** again in the warning dialog.
+- `done`, `undone`, `invalidate`
+- `due <value>`, `clear due`
+- `tag <name>`, `untag <name>`
+- `list <name>`
+- `priority <1-9>`, `priority back`, `clear priority`
+- `sync obsidian`
+- `open obsidian new window`
+- `link obsidian folder`
+- `clear obsidian folder`
 
-Or via Terminal:
+## Obsidian integration
+
+- Fetches Checkvist tasks with notes (`with_notes=true`).
+- Exports markdown to your configured Obsidian inbox folder.
+- Supports per-task folder linking: link a parent task to a vault folder and subtree exports follow that folder.
+- Uses security-scoped bookmarks for persistent folder access.
+- Offline-safe flow:
+  - uses cached task/note payload when network refresh fails,
+  - tracks pending sync queue and retries when connectivity returns.
+
+## Preferences
+
+Open **Preferences** from the menu bar context menu or `Cmd+,`.
+
+Configure:
+
+1. Checkvist username
+2. Checkvist remote API key
+3. Checklist selection / list ID
+4. Obsidian inbox folder
+5. Global hotkey and app preferences
+
+## Installation
+
+Because this app is open-source and unsigned, Gatekeeper may block first launch.
+
+1. Download the latest `.dmg` from [Releases](https://github.com/MaybeItsAdam/Checkvist-focus/releases).
+2. Drag `Checkvist Focus.app` to `Applications`.
+3. Right-click the app and choose **Open** once.
+
+Or:
+
 ```bash
 xattr -cr /Applications/"Checkvist Focus.app"
 ```
 
-## Build DMG (Maintainers)
-
-Generate a polished drag-to-Applications installer DMG with Finder layout:
+## Build
 
 ```bash
-./scripts/build_dmg.sh 1.0.0
+xcodebuild -project 'checkvist focus.xcodeproj' -scheme 'checkvist focus' -configuration Debug -destination 'platform=macOS' build
+swift test
 ```
 
-The output file is written to `build/checkvist-focus-v1.0.0.dmg`.
+Build DMG:
 
-## Configuration
+```bash
+./scripts/build_dmg.sh 1.2.0
+```
 
-Open **Settings** (right-click the menu bar icon → Settings):
+## Requirements
 
-1. **Username** — your Checkvist account email
-2. **OpenAPI Key** — generate from Checkvist profile → Account → OpenAPI key
-3. **List ID** — found in the Checkvist URL: `checkvist.com/checklists/123456` → `123456`
-
-## Architecture
-
-- **Swift 6** + **SwiftUI** for UI and state
-- **AppKit** (`NSStatusItem`, `NSPanel`) for menu bar and keyboard monitoring
-- **Combine** + `@Published` / `ObservableObject` for reactive state
-- **Checkvist OpenAPI** via `URLSession` async/await
-- **Keychain** for secure credential storage
-
-## Build Requirements
-
-- macOS 13.0+
-- Xcode 14.0+
+- macOS 15.6+
+- Xcode 17+
 
 ## License
 
-MIT License.
+MIT License
