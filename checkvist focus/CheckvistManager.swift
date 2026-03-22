@@ -1,8 +1,88 @@
+import AppKit
 import Combine
 import Foundation
 import OSLog
 import ServiceManagement
 import SwiftUI
+
+extension KeyedDecodingContainer {
+  fileprivate func decodeLossyString(forKey key: Key) -> String? {
+    if let value = try? decodeIfPresent(String.self, forKey: key) {
+      return value
+    }
+    if let value = try? decodeIfPresent(Int.self, forKey: key) {
+      return String(value)
+    }
+    if let value = try? decodeIfPresent(Double.self, forKey: key) {
+      return String(value)
+    }
+    if let value = try? decodeIfPresent(Bool.self, forKey: key) {
+      return value ? "true" : "false"
+    }
+    return nil
+  }
+
+  fileprivate func decodeLossyInt(forKey key: Key) -> Int? {
+    if let value = try? decodeIfPresent(Int.self, forKey: key) {
+      return value
+    }
+    if let value = try? decodeIfPresent(String.self, forKey: key) {
+      return Int(value)
+    }
+    if let value = try? decodeIfPresent(Double.self, forKey: key) {
+      return Int(value)
+    }
+    return nil
+  }
+}
+
+struct CheckvistNote: Codable, Identifiable {
+  let id: Int?
+  let content: String
+  let createdAt: String?
+  let updatedAt: String?
+
+  enum CodingKeys: String, CodingKey {
+    case id, content
+    case createdAt = "created_at"
+    case updatedAt = "updated_at"
+  }
+
+  private enum DecodingKeys: String, CodingKey {
+    case id, content
+    case text
+    case note
+    case createdAt = "created_at"
+    case updatedAt = "updated_at"
+  }
+
+  init(id: Int?, content: String, createdAt: String?, updatedAt: String?) {
+    self.id = id
+    self.content = content
+    self.createdAt = createdAt
+    self.updatedAt = updatedAt
+  }
+
+  init(from decoder: Decoder) throws {
+    if let singleValue = try? decoder.singleValueContainer() {
+      if let stringValue = try? singleValue.decode(String.self) {
+        self.init(id: nil, content: stringValue, createdAt: nil, updatedAt: nil)
+        return
+      }
+    }
+
+    let container = try decoder.container(keyedBy: DecodingKeys.self)
+    let id = container.decodeLossyInt(forKey: .id)
+    let content =
+      container.decodeLossyString(forKey: .content)
+      ?? container.decodeLossyString(forKey: .text)
+      ?? container.decodeLossyString(forKey: .note)
+      ?? ""
+    let createdAt = container.decodeLossyString(forKey: .createdAt)
+    let updatedAt = container.decodeLossyString(forKey: .updatedAt)
+    self.init(id: id, content: content, createdAt: createdAt, updatedAt: updatedAt)
+  }
+}
 
 struct CheckvistTask: Codable, Identifiable {
   let id: Int
@@ -12,11 +92,93 @@ struct CheckvistTask: Codable, Identifiable {
   let position: Int?
   let parentId: Int?
   let level: Int?
+  let notes: [CheckvistNote]?
+  let updatedAt: String?
 
   enum CodingKeys: String, CodingKey {
     case id, content, status, due, position
     case parentId = "parent_id"
-    case level
+    case level, notes
+    case updatedAt = "updated_at"
+  }
+
+  private enum DecodingKeys: String, CodingKey {
+    case id, content, status, due, position
+    case parentId = "parent_id"
+    case level, notes
+    case text
+    case updatedAt = "updated_at"
+  }
+
+  init(
+    id: Int,
+    content: String,
+    status: Int,
+    due: String?,
+    position: Int?,
+    parentId: Int?,
+    level: Int?,
+    notes: [CheckvistNote]? = nil,
+    updatedAt: String? = nil
+  ) {
+    self.id = id
+    self.content = content
+    self.status = status
+    self.due = due
+    self.position = position
+    self.parentId = parentId
+    self.level = level
+    self.notes = notes
+    self.updatedAt = updatedAt
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: DecodingKeys.self)
+
+    guard let id = container.decodeLossyInt(forKey: .id) else {
+      throw DecodingError.keyNotFound(
+        DecodingKeys.id,
+        .init(codingPath: decoder.codingPath, debugDescription: "Task id is missing")
+      )
+    }
+
+    let content =
+      container.decodeLossyString(forKey: .content)
+      ?? container.decodeLossyString(forKey: .text)
+      ?? ""
+    let status = container.decodeLossyInt(forKey: .status) ?? 0
+    let due = container.decodeLossyString(forKey: .due)
+    let position = container.decodeLossyInt(forKey: .position)
+    let parentId = container.decodeLossyInt(forKey: .parentId)
+    let level = container.decodeLossyInt(forKey: .level)
+    let updatedAt = container.decodeLossyString(forKey: .updatedAt)
+
+    let notes: [CheckvistNote]?
+    if let decodedNotes = try? container.decodeIfPresent([CheckvistNote].self, forKey: .notes) {
+      notes = decodedNotes
+    } else if let singleNote = try? container.decode(CheckvistNote.self, forKey: .notes) {
+      notes = [singleNote]
+    } else if let noteStrings = try? container.decodeIfPresent([String].self, forKey: .notes) {
+      notes = noteStrings.map {
+        CheckvistNote(id: nil, content: $0, createdAt: nil, updatedAt: nil)
+      }
+    } else if let noteString = try? container.decodeIfPresent(String.self, forKey: .notes) {
+      notes = [CheckvistNote(id: nil, content: noteString, createdAt: nil, updatedAt: nil)]
+    } else {
+      notes = nil
+    }
+
+    self.init(
+      id: id,
+      content: content,
+      status: status,
+      due: due,
+      position: position,
+      parentId: parentId,
+      level: level,
+      notes: notes,
+      updatedAt: updatedAt
+    )
   }
 
   private static let dueDateFormatters: [DateFormatter] = {
@@ -91,6 +253,11 @@ struct CheckvistTask: Codable, Identifiable {
     guard let d = dueDate else { return false }
     return Calendar.current.isDateInToday(d)
   }
+
+  var hasNotes: Bool {
+    guard let notes else { return false }
+    return notes.contains { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  }
 }
 
 struct CheckvistList: Codable, Identifiable {
@@ -105,6 +272,7 @@ struct CheckvistList: Codable, Identifiable {
   }
 }
 
+@MainActor
 class CheckvistManager: ObservableObject {
   private let logger = Logger(subsystem: "uk.co.maybeitsadam.checkvist-focus", category: "manager")
 
@@ -218,6 +386,7 @@ class CheckvistManager: ObservableObject {
   }
   static let maxPriorityRank = 9
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
+  private static let pendingObsidianSyncDefaultsKey = "pendingObsidianSyncTaskIdsByListId"
 
   // MARK: - Timer
   @Published var timedTaskId: Int? = nil
@@ -243,6 +412,12 @@ class CheckvistManager: ObservableObject {
 
   var timerIsEnabled: Bool { timerMode != .disabled }
   var timerIsVisible: Bool { timerMode == .visible }
+  var hasPendingObsidianSync: Bool { !pendingObsidianSyncTaskIds.isEmpty }
+  var pendingSyncMenuBarPrefix: String {
+    guard hasPendingObsidianSync else { return "" }
+    return pendingObsidianSyncTaskIds.count == 1
+      ? "Pending Sync" : "Pending Sync (\(pendingObsidianSyncTaskIds.count))"
+  }
 
   func filteredCommandSuggestions(query: String) -> [CommandSuggestion] {
     CheckvistCommandEngine.filteredSuggestions(query: query).map {
@@ -281,6 +456,9 @@ class CheckvistManager: ObservableObject {
   /// Max width of the menu bar text
   @Published var maxTitleWidth: Double
   @Published var onboardingCompleted: Bool
+  @Published private(set) var obsidianInboxPath: String
+  @Published private(set) var pendingObsidianSyncTaskIds: [Int]
+  @Published private(set) var isNetworkReachable: Bool = true
 
   var hasCredentials: Bool {
     !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -750,18 +928,26 @@ class CheckvistManager: ObservableObject {
     return false
   }
 
-  private var token: String? = nil
   private var loadingOperationCount: Int = 0
-  private var isLoginInProgress: Bool = false
-  private var loginWaiters: [CheckedContinuation<Bool, Never>] = []
   private var cancellables = Set<AnyCancellable>()
-  private var priorityTaskIdsByListId: [String: [Int]]
   private var pendingReorderRequests: [(taskId: Int, position: Int)] = []
   private var reorderSyncTask: Task<Void, Never>? = nil
   private var reorderResyncTask: Task<Void, Never>? = nil
+  private var hasPendingSyncProcessingTask = false
   private var hasAttemptedRemoteKeyBootstrap = false
   private let credentialStore = CheckvistCredentialStore()
-  private let apiClient = CheckvistAPIClient()
+  private let session = CheckvistSession()
+  private let navigationCoordinator = TaskNavigationCoordinator()
+  private let taskRepository = CheckvistTaskRepository()
+  private let obsidianSyncService = ObsidianSyncService()
+  private let reachabilityMonitor = NetworkReachabilityMonitor()
+  private let priorityQueueStore = ListScopedTaskIDStore(
+    defaultsKey: CheckvistManager.priorityQueuesDefaultsKey,
+    maximumCount: CheckvistManager.maxPriorityRank
+  )
+  private let pendingSyncQueueStore = ListScopedTaskIDStore(
+    defaultsKey: CheckvistManager.pendingObsidianSyncDefaultsKey
+  )
   private var usesKeychainStorage: Bool {
     #if DEBUG
       !ignoreKeychainInDebug
@@ -773,11 +959,11 @@ class CheckvistManager: ObservableObject {
   init() {
     let storedUsername = UserDefaults.standard.string(forKey: "checkvistUsername") ?? ""
     let storedListId = UserDefaults.standard.string(forKey: "checkvistListId") ?? ""
-    let storedPriorityQueues = Self.priorityQueuesFromDefaults()
     self.username = storedUsername
     self.listId = storedListId
-    self.priorityTaskIdsByListId = storedPriorityQueues
-    self.priorityTaskIds = Self.normalizedPriorityQueue(storedPriorityQueues[storedListId] ?? [])
+    self.pendingObsidianSyncTaskIds = pendingSyncQueueStore.load(for: storedListId)
+    self.priorityTaskIds = priorityQueueStore.load(for: storedListId)
+    self.obsidianInboxPath = obsidianSyncService.inboxPath
     self.confirmBeforeDelete =
       UserDefaults.standard.object(forKey: "confirmBeforeDelete") as? Bool ?? true
     self.showTaskBreadcrumbContext =
@@ -836,6 +1022,11 @@ class CheckvistManager: ObservableObject {
       useKeychainStorageAtInit: useKeychainStorageAtInit)
 
     setupBindings()
+    setupNetworkMonitor()
+  }
+
+  deinit {
+    reachabilityMonitor.stop()
   }
 
   private func setupBindings() {
@@ -843,14 +1034,14 @@ class CheckvistManager: ObservableObject {
       .dropFirst()
       .sink { [weak self] value in
         UserDefaults.standard.set(value, forKey: "checkvistUsername")
-        self?.token = nil
+        self?.session.clearToken()
       }.store(in: &cancellables)
     $remoteKey
       .dropFirst()
       .removeDuplicates()
       .sink { [weak self] value in
         guard let self else { return }
-        self.token = nil
+        self.session.clearToken()
         self.credentialStore.persistRemoteKey(value, useKeychainStorage: self.usesKeychainStorage)
       }.store(in: &cancellables)
     $listId
@@ -858,6 +1049,7 @@ class CheckvistManager: ObservableObject {
       .sink { [weak self] value in
         UserDefaults.standard.set(value, forKey: "checkvistListId")
         self?.loadPriorityQueue(for: value)
+        self?.loadPendingObsidianSyncQueue(for: value)
       }.store(in: &cancellables)
     $confirmBeforeDelete.sink { UserDefaults.standard.set($0, forKey: "confirmBeforeDelete") }
       .store(in: &cancellables)
@@ -939,50 +1131,64 @@ class CheckvistManager: ObservableObject {
     return result
   }
 
-  private static func priorityQueuesFromDefaults() -> [String: [Int]] {
-    guard let raw = UserDefaults.standard.dictionary(forKey: Self.priorityQueuesDefaultsKey) else {
-      return [:]
-    }
-
-    var parsed: [String: [Int]] = [:]
-    for (listId, value) in raw {
-      if let queue = value as? [Int] {
-        parsed[listId] = normalizedPriorityQueue(queue)
-      } else if let queue = value as? [NSNumber] {
-        parsed[listId] = normalizedPriorityQueue(queue.map(\.intValue))
-      }
-    }
-    return parsed
-  }
-
-  private static func normalizedPriorityQueue(_ queue: [Int]) -> [Int] {
+  private static func normalizedTaskIdQueue(_ queue: [Int], maximumCount: Int? = nil) -> [Int] {
     var seen = Set<Int>()
     var normalized: [Int] = []
     for taskId in queue where taskId > 0 && !seen.contains(taskId) {
       seen.insert(taskId)
       normalized.append(taskId)
     }
-    if normalized.count > maxPriorityRank {
-      return Array(normalized.prefix(maxPriorityRank))
+    if let maximumCount, normalized.count > maximumCount {
+      return Array(normalized.prefix(maximumCount))
     }
     return normalized
   }
 
   private func loadPriorityQueue(for listId: String) {
-    if listId.isEmpty {
-      priorityTaskIds = []
-      return
-    }
-    priorityTaskIds = Self.normalizedPriorityQueue(priorityTaskIdsByListId[listId] ?? [])
+    priorityTaskIds = priorityQueueStore.load(for: listId)
+  }
+
+  private func loadPendingObsidianSyncQueue(for listId: String) {
+    pendingObsidianSyncTaskIds = pendingSyncQueueStore.load(for: listId)
   }
 
   private func savePriorityQueue(_ queue: [Int]) {
-    let normalized = Self.normalizedPriorityQueue(queue)
+    let normalized = Self.normalizedTaskIdQueue(queue, maximumCount: Self.maxPriorityRank)
     priorityTaskIds = normalized
 
     guard !listId.isEmpty else { return }
-    priorityTaskIdsByListId[listId] = normalized
-    UserDefaults.standard.set(priorityTaskIdsByListId, forKey: Self.priorityQueuesDefaultsKey)
+    priorityQueueStore.save(normalized, for: listId)
+  }
+
+  private func savePendingObsidianSyncQueue(_ queue: [Int]) {
+    let normalized = Self.normalizedTaskIdQueue(queue)
+    pendingObsidianSyncTaskIds = normalized
+
+    guard !listId.isEmpty else { return }
+    pendingSyncQueueStore.save(normalized, for: listId)
+  }
+
+  @MainActor private func enqueuePendingObsidianSync(taskId: Int) {
+    var queue = pendingObsidianSyncTaskIds
+    queue.removeAll { $0 == taskId }
+    queue.append(taskId)
+    savePendingObsidianSyncQueue(queue)
+  }
+
+  @MainActor private func dequeuePendingObsidianSync(taskId: Int) {
+    savePendingObsidianSyncQueue(pendingObsidianSyncTaskIds.filter { $0 != taskId })
+  }
+
+  private func setupNetworkMonitor() {
+    reachabilityMonitor.onStatusChange = { [weak self] reachable in
+      guard let self else { return }
+      Task { @MainActor in
+        self.isNetworkReachable = reachable
+        guard reachable, !self.pendingObsidianSyncTaskIds.isEmpty else { return }
+        await self.processPendingObsidianSyncQueue()
+      }
+    }
+    reachabilityMonitor.start()
   }
 
   @MainActor private func removeTasksFromPriorityQueue(_ taskIds: Set<Int>) {
@@ -997,6 +1203,14 @@ class CheckvistManager: ObservableObject {
     let filtered = priorityTaskIds.filter { openTaskIds.contains($0) }
     if filtered != priorityTaskIds {
       savePriorityQueue(filtered)
+    }
+  }
+
+  @MainActor private func reconcilePendingObsidianSyncQueueWithOpenTasks() {
+    let openTaskIds = Set(tasks.map(\.id))
+    let filtered = pendingObsidianSyncTaskIds.filter { openTaskIds.contains($0) }
+    if filtered != pendingObsidianSyncTaskIds {
+      savePendingObsidianSyncQueue(filtered)
     }
   }
 
@@ -1044,7 +1258,7 @@ class CheckvistManager: ObservableObject {
 
   @MainActor func resetOnboardingForDebug() {
     #if DEBUG
-      token = nil
+      session.clearToken()
       errorMessage = nil
       let resetState = OnboardingResetPolicy.reset(
         OnboardingResetState(
@@ -1084,116 +1298,69 @@ class CheckvistManager: ObservableObject {
   // MARK: - Navigation
 
   @MainActor func nextTask() {
-    let count = visibleTasks.count
-    guard count > 0 else { return }
-    let clampedIndex = min(max(currentSiblingIndex, 0), count - 1)
-    currentSiblingIndex = (clampedIndex + 1) % count
+    guard
+      let nextIndex = navigationCoordinator.nextSiblingIndex(
+        currentSiblingIndex: currentSiblingIndex,
+        visibleCount: visibleTasks.count)
+    else { return }
+    currentSiblingIndex = nextIndex
   }
 
   @MainActor func previousTask() {
-    let count = visibleTasks.count
-    guard count > 0 else { return }
-    let clampedIndex = min(max(currentSiblingIndex, 0), count - 1)
-    currentSiblingIndex = (clampedIndex - 1 + count) % count
+    guard
+      let previousIndex = navigationCoordinator.previousSiblingIndex(
+        currentSiblingIndex: currentSiblingIndex,
+        visibleCount: visibleTasks.count)
+    else { return }
+    currentSiblingIndex = previousIndex
   }
 
   /// Navigate into the current task's children
   @MainActor func enterChildren() {
-    guard let task = currentTask, !currentTaskChildren.isEmpty else { return }
-    rootScopeFocusLevel = 0
-    currentParentId = task.id
-    currentSiblingIndex = 0
+    guard
+      let selection = navigationCoordinator.enterChildren(
+        currentTask: currentTask,
+        childCount: currentTaskChildren.count)
+    else { return }
+    rootScopeFocusLevel = selection.rootScopeFocusLevel
+    currentParentId = selection.currentParentId
+    currentSiblingIndex = selection.currentSiblingIndex
   }
 
   /// Navigate back up to the parent level
   @MainActor func exitToParent() {
-    guard currentParentId != 0 else { return }
-    rootScopeFocusLevel = 0
-    // Find the parent task and make it the selected sibling
-    if let parent = tasks.first(where: { $0.id == currentParentId }) {
-      let grandparentId = parent.parentId ?? 0
-      let siblings = tasks.filter { ($0.parentId ?? 0) == grandparentId }
-      currentParentId = grandparentId
-      currentSiblingIndex = siblings.firstIndex(where: { $0.id == parent.id }) ?? 0
-    } else {
-      currentParentId = 0
-      currentSiblingIndex = 0
-    }
+    guard
+      let selection = navigationCoordinator.exitToParent(
+        currentParentId: currentParentId,
+        tasks: tasks)
+    else { return }
+    rootScopeFocusLevel = selection.rootScopeFocusLevel
+    currentParentId = selection.currentParentId
+    currentSiblingIndex = selection.currentSiblingIndex
   }
 
   @MainActor func navigateTo(task: CheckvistTask) {
-    let parentId = task.parentId ?? 0
-    let siblings = tasks.filter { ($0.parentId ?? 0) == parentId }
-    rootScopeFocusLevel = 0
-    currentParentId = parentId
-    currentSiblingIndex = siblings.firstIndex(where: { $0.id == task.id }) ?? 0
+    let selection = navigationCoordinator.navigate(to: task, tasks: tasks)
+    rootScopeFocusLevel = selection.rootScopeFocusLevel
+    currentParentId = selection.currentParentId
+    currentSiblingIndex = selection.currentSiblingIndex
   }
   // MARK: - API
-
-  private enum AuthenticatedRequestError: Error {
-    case authenticationUnavailable
-    case invalidResponse
-  }
 
   @MainActor
   private func performAuthenticatedRequest(
     _ buildRequest: (String) throws -> URLRequest
   ) async throws -> (Data, HTTPURLResponse) {
-    var retryState = AuthRetryState(hasRetriedAfterUnauthorized: false)
-
-    while true {
-      if token == nil {
-        let ok = await login()
-        if !ok {
-          throw AuthenticatedRequestError.authenticationUnavailable
-        }
-      }
-
-      guard let validToken = token else {
-        throw AuthenticatedRequestError.authenticationUnavailable
-      }
-
-      let request = try buildRequest(validToken)
-      let (data, response) = try await apiClient.data(for: request)
-      guard let httpResponse = response as? HTTPURLResponse else {
-        throw AuthenticatedRequestError.invalidResponse
-      }
-
-      if httpResponse.statusCode == 401 {
-        token = nil
-        let retry = AuthRetryPolicy.decisionForUnauthorized(state: retryState)
-        retryState = retry.nextState
-        if retry.decision == .retryAuthentication {
-          continue
-        }
-      }
-
-      return (data, httpResponse)
-    }
+    let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedRemoteKey = remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    return try await session.performAuthenticatedRequest(
+      username: normalizedUsername,
+      remoteKey: normalizedRemoteKey,
+      buildRequest
+    )
   }
 
   @MainActor func login() async -> Bool {
-    if isLoginInProgress {
-      return await withCheckedContinuation { continuation in
-        loginWaiters.append(continuation)
-      }
-    }
-
-    isLoginInProgress = true
-    let result = await executeLoginRequest()
-    isLoginInProgress = false
-
-    let waiters = loginWaiters
-    loginWaiters = []
-    for waiter in waiters {
-      waiter.resume(returning: result)
-    }
-
-    return result
-  }
-
-  @MainActor
-  private func executeLoginRequest() async -> Bool {
     loadRemoteKeyFromKeychainIfNeeded()
     let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
     let normalizedRemoteKey = remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1206,42 +1373,15 @@ class CheckvistManager: ObservableObject {
     defer { endLoading() }
     errorMessage = nil
 
-    guard let url = URL(string: "https://checkvist.com/auth/login.json") else {
-      errorMessage = "Invalid login URL."
-      return false
-    }
-
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
-
-    let body: [String: String] = [
-      "username": normalizedUsername, "remote_key": normalizedRemoteKey,
-    ]
-
     do {
-      request.httpBody = try JSONSerialization.data(withJSONObject: body)
-      let (data, response) = try await apiClient.data(for: request)
-
-      guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+      let success = try await session.login(
+        username: normalizedUsername,
+        remoteKey: normalizedRemoteKey
+      )
+      guard success else {
         errorMessage = "Login failed. Check your credentials."
         return false
       }
-
-      if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let tokenString = json["token"] as? String
-      {
-        self.token = tokenString
-      } else if let tokenString = String(data: data, encoding: .utf8)?
-        .trimmingCharacters(in: CharacterSet(charactersIn: "\" \n"))
-      {
-        self.token = tokenString
-      } else {
-        errorMessage = "Failed to parse token."
-        return false
-      }
-
       return true
     } catch {
       errorMessage = "Network error: \(error.localizedDescription)"
@@ -1256,56 +1396,30 @@ class CheckvistManager: ObservableObject {
     defer { endLoading() }
     errorMessage = nil
 
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json") else {
-      errorMessage = "Invalid list URL."
-      return
-    }
-
     do {
-      let (data, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue(
-          "CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
-        return request
-      }
+      let fetchedTasks = try await taskRepository.fetchTasks(
+        listId: listId,
+        performAuthenticatedRequest: performAuthenticatedRequest(_:)
+      )
 
-      guard (200...299).contains(httpResponse.statusCode) else {
-        errorMessage = "Failed to fetch tasks."
-        return
-      }
-
-      let decoder = JSONDecoder()
-      let allTasks = try decoder.decode([CheckvistTask].self, from: data)
-
-      // Only open tasks, walk depth-first respecting Checkvist's tree order
-      let open = allTasks.filter { $0.status == 0 }
-
-      // Build a depth-first order: sort each level by position, recurse children
-      // The API returns a flat list occasionally mixed up by creation time, so we must reconstruct the tree locally
-      func depthFirst(parentId: Int, all: [CheckvistTask]) -> [CheckvistTask] {
-        let children =
-          all
-          .filter { ($0.parentId ?? 0) == parentId }
-          .sorted { ($0.position ?? 0) < ($1.position ?? 0) }
-        return children.flatMap { [$0] + depthFirst(parentId: $0.id, all: all) }
-      }
-      let sortedForest = depthFirst(parentId: 0, all: open)
-
-      self.tasks = sortedForest
+      self.tasks = fetchedTasks
+      taskRepository.persistTaskCache(
+        CheckvistTaskCachePayload(listId: listId, fetchedAt: Date(), tasks: fetchedTasks))
       reconcilePriorityQueueWithOpenTasks()
-      if currentSiblingIndex >= sortedForest.count { currentSiblingIndex = 0 }
-      let validTaskIds = Set(sortedForest.map(\.id))
+      reconcilePendingObsidianSyncQueueWithOpenTasks()
+      if currentSiblingIndex >= fetchedTasks.count { currentSiblingIndex = 0 }
+      let validTaskIds = Set(fetchedTasks.map(\.id))
       self.timerByTaskId = self.timerByTaskId.filter { validTaskIds.contains($0.key) }
       if !listId.isEmpty && canAttemptLogin {
         onboardingCompleted = true
       }
 
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       if errorMessage == nil {
         errorMessage = "Authentication required."
       }
+    } catch let error as CheckvistTaskRepositoryError {
+      errorMessage = error.localizedDescription
     } catch {
       errorMessage = "Failed to fetch tasks: \(error.localizedDescription)"
     }
@@ -1366,7 +1480,7 @@ class CheckvistManager: ObservableObject {
         }
         errorMessage = "Failed to \(endpoint) task."
       }
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       if let optimisticSnapshot {
         restoreTasksSnapshot(optimisticSnapshot)
       }
@@ -1393,7 +1507,7 @@ class CheckvistManager: ObservableObject {
       } else {
         self.errorMessage = "Failed to fetch lists."
       }
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       if errorMessage == nil {
         errorMessage = "Authentication required."
       }
@@ -1436,7 +1550,7 @@ class CheckvistManager: ObservableObject {
       } else {
         errorMessage = "Failed to update task."
       }
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       if errorMessage == nil {
         errorMessage = "Authentication required."
       }
@@ -1504,7 +1618,7 @@ class CheckvistManager: ObservableObject {
         removeOptimisticTask(id: optimisticTaskId)
         errorMessage = "Failed to add task."
       }
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       removeOptimisticTask(id: optimisticTaskId)
       if errorMessage == nil {
         errorMessage = "Authentication required."
@@ -1550,7 +1664,7 @@ class CheckvistManager: ObservableObject {
         removeOptimisticTask(id: optimisticTaskId)
         errorMessage = "Failed to add task."
       }
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       removeOptimisticTask(id: optimisticTaskId)
       if errorMessage == nil {
         errorMessage = "Authentication required."
@@ -1689,7 +1803,7 @@ class CheckvistManager: ObservableObject {
       } else {
         errorMessage = "Failed to delete task."
       }
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       if errorMessage == nil {
         errorMessage = "Authentication required."
       }
@@ -1744,6 +1858,201 @@ class CheckvistManager: ObservableObject {
       let url = match.url
     {
       NSWorkspace.shared.open(url)
+    }
+  }
+
+  // MARK: - Obsidian Sync
+
+  @discardableResult
+  @MainActor func chooseObsidianInboxFolder() -> Bool {
+    do {
+      if let selectedPath = try obsidianSyncService.chooseInboxFolder() {
+        obsidianInboxPath = selectedPath
+        errorMessage = nil
+        return true
+      }
+      return false
+    } catch {
+      errorMessage = "Failed to save Obsidian folder access."
+      return false
+    }
+  }
+
+  @MainActor func clearObsidianInboxFolder() {
+    obsidianSyncService.clearInboxFolder()
+    obsidianInboxPath = ""
+  }
+
+  @MainActor func linkCurrentTaskToObsidianFolder(taskId explicitTaskId: Int? = nil) {
+    guard
+      let task = explicitTaskId.flatMap({ id in tasks.first(where: { $0.id == id }) })
+        ?? currentTask
+    else {
+      errorMessage = "No task selected."
+      return
+    }
+
+    do {
+      if let linkedPath = try obsidianSyncService.chooseLinkedFolder(
+        forTaskId: task.id,
+        taskContent: task.content
+      ) {
+        _ = linkedPath
+        errorMessage = nil
+      }
+    } catch {
+      errorMessage = "Failed to link Obsidian folder."
+    }
+  }
+
+  @MainActor func clearCurrentTaskObsidianFolderLink(taskId explicitTaskId: Int? = nil) {
+    guard let targetTaskId = explicitTaskId ?? currentTask?.id else {
+      errorMessage = "No task selected."
+      return
+    }
+
+    obsidianSyncService.clearLinkedFolder(forTaskId: targetTaskId)
+    errorMessage = nil
+  }
+
+  @MainActor func hasObsidianFolderLink(taskId: Int) -> Bool {
+    obsidianSyncService.hasLinkedFolder(forTaskId: taskId)
+  }
+
+  private func obsidianLinkedFolderAncestorTaskId(
+    for task: CheckvistTask, taskList: [CheckvistTask]
+  ) -> Int? {
+    let taskById = Dictionary(uniqueKeysWithValues: taskList.map { ($0.id, $0) })
+    var candidateTask: CheckvistTask? = task
+
+    while let current = candidateTask {
+      if obsidianSyncService.hasLinkedFolder(forTaskId: current.id) {
+        return current.id
+      }
+
+      guard let parentId = current.parentId, parentId != 0 else { break }
+      candidateTask = taskById[parentId]
+    }
+
+    return nil
+  }
+
+  @MainActor func syncCurrentTaskToObsidian(taskId explicitTaskId: Int? = nil) async {
+    await syncCurrentTaskToObsidian(taskId: explicitTaskId, openMode: .standard)
+  }
+
+  @MainActor func openCurrentTaskInNewObsidianWindow(taskId explicitTaskId: Int? = nil) async {
+    await syncCurrentTaskToObsidian(taskId: explicitTaskId, openMode: .newWindow)
+  }
+
+  @MainActor private func syncCurrentTaskToObsidian(
+    taskId explicitTaskId: Int? = nil,
+    openMode: ObsidianOpenMode
+  ) async {
+    guard let targetTaskId = explicitTaskId ?? currentTask?.id else {
+      errorMessage = "No task selected."
+      return
+    }
+    guard !listId.isEmpty else {
+      errorMessage = "List ID not set."
+      return
+    }
+
+    if isNetworkReachable {
+      let previousErrorMessage = errorMessage
+      await fetchTopTask()
+      if let task = tasks.first(where: { $0.id == targetTaskId }) {
+        let linkedFolderTaskId = obsidianLinkedFolderAncestorTaskId(for: task, taskList: tasks)
+        if linkedFolderTaskId == nil && obsidianInboxPath.isEmpty && !chooseObsidianInboxFolder() {
+          return
+        }
+        do {
+          _ = try obsidianSyncService.syncTask(
+            task,
+            listId: listId,
+            linkedFolderTaskId: linkedFolderTaskId,
+            openMode: openMode
+          )
+          dequeuePendingObsidianSync(taskId: targetTaskId)
+          errorMessage = nil
+        } catch {
+          enqueuePendingObsidianSync(taskId: targetTaskId)
+          errorMessage =
+            error.localizedDescription.isEmpty
+            ? "Sync failed. Added to pending queue."
+            : error.localizedDescription
+        }
+        return
+      }
+
+      if errorMessage == nil || errorMessage == previousErrorMessage {
+        errorMessage = "Task not found after refresh."
+        return
+      }
+    }
+
+    guard let cachedPayload = taskRepository.loadTaskCache(for: listId) else {
+      enqueuePendingObsidianSync(taskId: targetTaskId)
+      errorMessage = "Offline and no cache available. Added to pending queue."
+      return
+    }
+    guard let cachedTask = cachedPayload.tasks.first(where: { $0.id == targetTaskId }) else {
+      enqueuePendingObsidianSync(taskId: targetTaskId)
+      errorMessage = "Offline cache missing this task. Added to pending queue."
+      return
+    }
+
+    let linkedFolderTaskId = obsidianLinkedFolderAncestorTaskId(
+      for: cachedTask, taskList: cachedPayload.tasks)
+    if linkedFolderTaskId == nil && obsidianInboxPath.isEmpty && !chooseObsidianInboxFolder() {
+      return
+    }
+
+    do {
+      _ = try obsidianSyncService.syncTask(
+        cachedTask,
+        listId: listId,
+        linkedFolderTaskId: linkedFolderTaskId,
+        openMode: openMode
+      )
+      if taskRepository.isCacheOutdated(cachedPayload) {
+        enqueuePendingObsidianSync(taskId: targetTaskId)
+      }
+      errorMessage = nil
+    } catch {
+      enqueuePendingObsidianSync(taskId: targetTaskId)
+      errorMessage = "Offline sync failed. Added to pending queue."
+    }
+  }
+
+  @MainActor private func processPendingObsidianSyncQueue() async {
+    guard isNetworkReachable else { return }
+    guard !pendingObsidianSyncTaskIds.isEmpty else { return }
+    guard !hasPendingSyncProcessingTask else { return }
+    hasPendingSyncProcessingTask = true
+    defer { hasPendingSyncProcessingTask = false }
+
+    let pendingTaskIds = pendingObsidianSyncTaskIds
+    await fetchTopTask()
+    guard isNetworkReachable else { return }
+
+    for taskId in pendingTaskIds {
+      guard let task = tasks.first(where: { $0.id == taskId }) else {
+        dequeuePendingObsidianSync(taskId: taskId)
+        continue
+      }
+      do {
+        let linkedFolderTaskId = obsidianLinkedFolderAncestorTaskId(for: task, taskList: tasks)
+        _ = try obsidianSyncService.syncTask(
+          task,
+          listId: listId,
+          linkedFolderTaskId: linkedFolderTaskId,
+          openMode: .standard
+        )
+        dequeuePendingObsidianSync(taskId: taskId)
+      } catch {
+        // Keep queued; we'll retry on the next connectivity transition.
+      }
     }
   }
 
@@ -1883,7 +2192,7 @@ class CheckvistManager: ObservableObject {
         return false
       }
       return true
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       return false
     } catch {
       await MainActor.run {
@@ -2043,6 +2352,14 @@ class CheckvistManager: ObservableObject {
       sendCurrentTaskToPriorityBack()
     case .clearPriority:
       clearPriorityForCurrentTask()
+    case .syncObsidian:
+      await syncCurrentTaskToObsidian()
+    case .syncObsidianNewWindow:
+      await openCurrentTaskInNewObsidianWindow()
+    case .linkObsidianFolder:
+      linkCurrentTaskToObsidianFolder()
+    case .clearObsidianFolderLink:
+      clearCurrentTaskObsidianFolderLink()
     case .unknown(let raw):
       errorMessage = "Unknown command: \(raw)"
       logger.error("Unknown command: \(raw, privacy: .public)")
@@ -2108,7 +2425,7 @@ class CheckvistManager: ObservableObject {
         errorMessage = "Failed to indent task."
         return
       }
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       if errorMessage == nil {
         errorMessage = "Authentication required."
       }
@@ -2143,7 +2460,7 @@ class CheckvistManager: ObservableObject {
         errorMessage = "Failed to unindent task."
         return
       }
-    } catch AuthenticatedRequestError.authenticationUnavailable {
+    } catch CheckvistSessionError.authenticationUnavailable {
       if errorMessage == nil {
         errorMessage = "Authentication required."
       }

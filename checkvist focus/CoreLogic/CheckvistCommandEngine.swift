@@ -34,6 +34,10 @@ enum CheckvistCommand: Equatable {
   case priority(Int)
   case priorityBack
   case clearPriority
+  case syncObsidian
+  case syncObsidianNewWindow
+  case linkObsidianFolder
+  case clearObsidianFolderLink
   case unknown(String)
 }
 
@@ -76,6 +80,22 @@ enum CheckvistCommandEngine {
     .init(
       label: "Clear priority", command: "clear priority",
       preview: "Remove selected task from priority list", keybind: "-",
+      submitImmediately: true),
+    .init(
+      label: "Open in Obsidian", command: "sync obsidian",
+      preview: "Write selected task and notes, then open it in Obsidian", keybind: "o",
+      submitImmediately: true),
+    .init(
+      label: "Open in Obsidian (New Window)", command: "open obsidian new window",
+      preview: "Write selected task and open it in a new Obsidian window", keybind: "O",
+      submitImmediately: true),
+    .init(
+      label: "Link Obsidian folder", command: "link obsidian folder",
+      preview: "Choose a folder for this task and its subtasks", keybind: nil,
+      submitImmediately: true),
+    .init(
+      label: "Clear Obsidian folder link", command: "clear obsidian folder",
+      preview: "Remove the linked folder for this task subtree", keybind: nil,
       submitImmediately: true),
     .init(
       label: "Switch list", command: "list ", preview: "Find and switch list", keybind: "Shift+L",
@@ -184,6 +204,22 @@ enum CheckvistCommandEngine {
     }
     if cmd == "clear priority" || cmd == "unpriority" {
       return .clearPriority
+    }
+    if cmd == "sync obsidian" || cmd == "send to obsidian" || cmd == "obsidian" {
+      return .syncObsidian
+    }
+    if cmd == "open obsidian new window" || cmd == "obsidian new window"
+      || cmd == "open in new window"
+    {
+      return .syncObsidianNewWindow
+    }
+    if cmd == "link obsidian folder" || cmd == "link folder" || cmd == "obsidian folder" {
+      return .linkObsidianFolder
+    }
+    if cmd == "clear obsidian folder" || cmd == "unlink obsidian folder"
+      || cmd == "clear folder link"
+    {
+      return .clearObsidianFolderLink
     }
     return .unknown(input)
   }

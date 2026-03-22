@@ -186,8 +186,7 @@ struct SettingsView: View {
           }
         }
         .disabled(
-          checkvistManager.isLoading || !checkvistManager.canAttemptLogin
-            || checkvistManager.listId.isEmpty)
+          checkvistManager.isLoading || isLoadingLists || !checkvistManager.canAttemptLogin)
       }
 
       if let errorMessage = checkvistManager.errorMessage {
@@ -214,6 +213,37 @@ struct SettingsView: View {
         if #available(macOS 13.0, *) {
           Toggle("Launch at login", isOn: $checkvistManager.launchAtLogin)
         }
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Obsidian Inbox")
+          if checkvistManager.obsidianInboxPath.isEmpty {
+            Text("No folder selected")
+              .foregroundColor(.secondary)
+              .font(.caption)
+          } else {
+            Text(checkvistManager.obsidianInboxPath)
+              .font(.caption)
+              .textSelection(.enabled)
+          }
+
+          HStack {
+            Button("Choose Folder") {
+              checkvistManager.chooseObsidianInboxFolder()
+            }
+            if !checkvistManager.obsidianInboxPath.isEmpty {
+              Button("Clear") {
+                checkvistManager.clearObsidianInboxFolder()
+              }
+            }
+            Spacer()
+            if checkvistManager.hasPendingObsidianSync {
+              Text(checkvistManager.pendingSyncMenuBarPrefix)
+                .font(.caption)
+                .foregroundColor(.orange)
+            }
+          }
+        }
+        .padding(.top, 4)
 
         HStack {
           Toggle("Global hotkey", isOn: $checkvistManager.globalHotkeyEnabled)
