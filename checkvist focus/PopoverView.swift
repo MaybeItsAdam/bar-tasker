@@ -17,7 +17,7 @@ enum PopoverLayout {
   @MainActor
   static func preferredHeight(for manager: CheckvistManager) -> CGFloat {
     if manager.needsInitialSetup {
-      return 360
+      return 430
     }
 
     let dividerHeight: CGFloat = 1
@@ -362,7 +362,7 @@ struct PopoverView: View {
     VStack(alignment: .leading, spacing: 10) {
       Text("Welcome to Checkvist Focus")
         .font(.headline)
-      Text("Set up your account once, then choose a checklist by name.")
+      Text("Set up your account once, choose a checklist by name, and pick optional integrations.")
         .font(.caption)
         .foregroundColor(.secondary)
 
@@ -406,6 +406,36 @@ struct PopoverView: View {
         Text("No lists loaded yet. You can also paste a List ID in Settings.")
           .font(.caption2)
           .foregroundColor(.secondary)
+      }
+
+      Divider()
+
+      Toggle("Enable Obsidian integration", isOn: $manager.obsidianIntegrationEnabled)
+
+      if manager.obsidianIntegrationEnabled {
+        if manager.obsidianInboxPath.isEmpty {
+          Text("No Obsidian inbox folder selected.")
+            .font(.caption2)
+            .foregroundColor(.secondary)
+        } else {
+          Text(manager.obsidianInboxPath)
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+        }
+
+        HStack(spacing: 8) {
+          Button(
+            manager.obsidianInboxPath.isEmpty ? "Choose Obsidian Folder" : "Change Obsidian Folder"
+          ) {
+            _ = manager.chooseObsidianInboxFolder()
+          }
+          if !manager.obsidianInboxPath.isEmpty {
+            Button("Clear") {
+              manager.clearObsidianInboxFolder()
+            }
+          }
+        }
       }
       Spacer(minLength: 0)
     }
@@ -1085,25 +1115,31 @@ struct PopoverView: View {
       Divider()
       Button("Indent ⇥") { Task { await manager.indentTask(task) } }
       Button("Unindent ⇧⇥") { Task { await manager.unindentTask(task) } }
-      Divider()
-      Button("Link Obsidian Folder") {
-        manager.currentSiblingIndex = index
-        manager.linkCurrentTaskToObsidianFolder(taskId: task.id)
-      }
-      if manager.hasObsidianFolderLink(taskId: task.id) {
-        Button("Clear Obsidian Folder Link") {
+      if manager.obsidianIntegrationEnabled {
+        Divider()
+        Button("Create & Link Obsidian Folder") {
           manager.currentSiblingIndex = index
-          manager.clearCurrentTaskObsidianFolderLink(taskId: task.id)
+          manager.createAndLinkCurrentTaskObsidianFolder(taskId: task.id)
         }
-      }
-      Divider()
-      Button("Open in Obsidian o") {
-        manager.currentSiblingIndex = index
-        Task { await manager.syncCurrentTaskToObsidian(taskId: task.id) }
-      }
-      Button("Open in New Obsidian Window O") {
-        manager.currentSiblingIndex = index
-        Task { await manager.openCurrentTaskInNewObsidianWindow(taskId: task.id) }
+        Button("Link Obsidian Folder") {
+          manager.currentSiblingIndex = index
+          manager.linkCurrentTaskToObsidianFolder(taskId: task.id)
+        }
+        if manager.hasObsidianFolderLink(taskId: task.id) {
+          Button("Clear Obsidian Folder Link") {
+            manager.currentSiblingIndex = index
+            manager.clearCurrentTaskObsidianFolderLink(taskId: task.id)
+          }
+        }
+        Divider()
+        Button("Open in Obsidian o") {
+          manager.currentSiblingIndex = index
+          Task { await manager.syncCurrentTaskToObsidian(taskId: task.id) }
+        }
+        Button("Open in New Obsidian Window O") {
+          manager.currentSiblingIndex = index
+          Task { await manager.openCurrentTaskInNewObsidianWindow(taskId: task.id) }
+        }
       }
       Divider()
       Button("Delete", role: .destructive) {

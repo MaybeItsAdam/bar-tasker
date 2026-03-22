@@ -46,6 +46,13 @@ struct KeyboardShortcutRouter {
       && manager.currentSiblingIndex == 0
       && (!manager.visibleTasks.isEmpty || manager.currentParentId == 0)
 
+    #if DEBUG
+      if cmd && shift && !ctrl && !option && chars.lowercased() == "k" && !isFocused {
+        manager.toggleDebugKeychainStorageMode()
+        return true
+      }
+    #endif
+
     // Reliable fallback for command/actions prompt.
     if cmd && !shift && !ctrl && !option && chars.lowercased() == "k" && !isFocused {
       manager.keyBuffer = ""

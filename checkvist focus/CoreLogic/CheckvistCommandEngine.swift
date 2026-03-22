@@ -37,6 +37,7 @@ enum CheckvistCommand: Equatable {
   case syncObsidian
   case syncObsidianNewWindow
   case linkObsidianFolder
+  case createObsidianFolder
   case clearObsidianFolderLink
   case unknown(String)
 }
@@ -92,6 +93,10 @@ enum CheckvistCommandEngine {
     .init(
       label: "Link Obsidian folder", command: "link obsidian folder",
       preview: "Choose a folder for this task and its subtasks", keybind: nil,
+      submitImmediately: true),
+    .init(
+      label: "Create Obsidian folder", command: "create obsidian folder",
+      preview: "Create and link a new folder for this task subtree", keybind: nil,
       submitImmediately: true),
     .init(
       label: "Clear Obsidian folder link", command: "clear obsidian folder",
@@ -215,6 +220,11 @@ enum CheckvistCommandEngine {
     }
     if cmd == "link obsidian folder" || cmd == "link folder" || cmd == "obsidian folder" {
       return .linkObsidianFolder
+    }
+    if cmd == "create obsidian folder" || cmd == "new obsidian folder"
+      || cmd == "make obsidian folder"
+    {
+      return .createObsidianFolder
     }
     if cmd == "clear obsidian folder" || cmd == "unlink obsidian folder"
       || cmd == "clear folder link"

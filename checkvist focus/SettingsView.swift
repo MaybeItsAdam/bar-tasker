@@ -133,10 +133,6 @@ struct SettingsView: View {
           .textFieldStyle(RoundedBorderTextFieldStyle())
           .autocorrectionDisabled()
 
-        #if DEBUG
-          Toggle("Ignore Keychain (dev only)", isOn: $checkvistManager.ignoreKeychainInDebug)
-        #endif
-
         Button("Connect & Load Lists") {
           Task { await loadLists(assignFirstIfMissing: true) }
         }
@@ -211,40 +207,47 @@ struct SettingsView: View {
       Section(header: Text("Preferences")) {
         Toggle("Confirm before deleting tasks", isOn: $checkvistManager.confirmBeforeDelete)
         Toggle("Enable sc breadcrumb shortcut", isOn: $checkvistManager.enableTaskContextShortcut)
+        Toggle("Enable Obsidian integration", isOn: $checkvistManager.obsidianIntegrationEnabled)
         if #available(macOS 13.0, *) {
           Toggle("Launch at login", isOn: $checkvistManager.launchAtLogin)
         }
 
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Obsidian Inbox")
-          if checkvistManager.obsidianInboxPath.isEmpty {
-            Text("No folder selected")
-              .foregroundColor(.secondary)
-              .font(.caption)
-          } else {
-            Text(checkvistManager.obsidianInboxPath)
-              .font(.caption)
-              .textSelection(.enabled)
-          }
-
-          HStack {
-            Button("Choose Folder") {
-              checkvistManager.chooseObsidianInboxFolder()
+        if checkvistManager.obsidianIntegrationEnabled {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Obsidian Inbox")
+            if checkvistManager.obsidianInboxPath.isEmpty {
+              Text("No folder selected")
+                .foregroundColor(.secondary)
+                .font(.caption)
+            } else {
+              Text(checkvistManager.obsidianInboxPath)
+                .font(.caption)
+                .textSelection(.enabled)
             }
-            if !checkvistManager.obsidianInboxPath.isEmpty {
-              Button("Clear") {
-                checkvistManager.clearObsidianInboxFolder()
+
+            HStack {
+              Button("Choose Folder") {
+                checkvistManager.chooseObsidianInboxFolder()
+              }
+              if !checkvistManager.obsidianInboxPath.isEmpty {
+                Button("Clear") {
+                  checkvistManager.clearObsidianInboxFolder()
+                }
+              }
+              Spacer()
+              if checkvistManager.hasPendingObsidianSync {
+                Text(checkvistManager.pendingSyncMenuBarPrefix)
+                  .font(.caption)
+                  .foregroundColor(.orange)
               }
             }
-            Spacer()
-            if checkvistManager.hasPendingObsidianSync {
-              Text(checkvistManager.pendingSyncMenuBarPrefix)
-                .font(.caption)
-                .foregroundColor(.orange)
-            }
           }
+          .padding(.top, 4)
+        } else {
+          Text("Obsidian integration is disabled.")
+            .foregroundColor(.secondary)
+            .font(.caption)
         }
-        .padding(.top, 4)
 
         HStack {
           Toggle("Global hotkey", isOn: $checkvistManager.globalHotkeyEnabled)
@@ -291,6 +294,9 @@ struct SettingsView: View {
 
       #if DEBUG
         Section(header: Text("Debug")) {
+          Text("Shortcut: Cmd+Shift+K toggles keychain mode for development.")
+            .font(.caption)
+            .foregroundColor(.secondary)
           Button("Reset onboarding state") {
             checkvistManager.resetOnboardingForDebug()
           }

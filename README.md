@@ -88,6 +88,7 @@ Command mode supports:
 - `sync obsidian`
 - `open obsidian new window`
 - `link obsidian folder`
+- `create obsidian folder`
 - `clear obsidian folder`
 
 ## Obsidian integration

@@ -420,12 +420,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if event.type == .rightMouseUp {
       let menu = NSMenu()
       menu.addItem(withTitle: "Refresh", action: #selector(menuRefresh), keyEquivalent: "")
-      let obsidianItem = NSMenuItem(
-        title: "Open in Obsidian",
-        action: #selector(menuSyncToObsidian),
-        keyEquivalent: "O")
-      obsidianItem.keyEquivalentModifierMask = [.command, .shift]
-      menu.addItem(obsidianItem)
+      if checkvistManager.obsidianIntegrationEnabled {
+        let obsidianItem = NSMenuItem(
+          title: "Open in Obsidian",
+          action: #selector(menuSyncToObsidian),
+          keyEquivalent: "O")
+        obsidianItem.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(obsidianItem)
+      }
       let settingsItem = NSMenuItem(
         title: "Preferences...", action: #selector(menuSettings), keyEquivalent: ",")
       settingsItem.keyEquivalentModifierMask = [.command]

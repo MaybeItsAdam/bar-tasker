@@ -101,6 +101,41 @@ final class ObsidianSyncService {
     return selectedURL.path
   }
 
+  @MainActor
+  func createAndLinkFolder(forTaskId taskId: Int, taskContent: String) throws -> String? {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.allowsMultipleSelection = false
+    panel.canCreateDirectories = true
+    panel.prompt = "Choose Parent"
+    panel.message =
+      "Choose where to create a new Obsidian folder for \"\(taskContent)\" and link it."
+
+    guard panel.runModal() == .OK, let parentURL = panel.url else { return nil }
+
+    let accessed = parentURL.startAccessingSecurityScopedResource()
+    defer {
+      if accessed {
+        parentURL.stopAccessingSecurityScopedResource()
+      }
+    }
+
+    let preferredName = sanitizeTaskFileName(taskContent)
+    let createdFolderURL = try uniqueFolderURL(in: parentURL, preferredName: preferredName)
+    try FileManager.default.createDirectory(at: createdFolderURL, withIntermediateDirectories: true)
+
+    let bookmark = try createdFolderURL.bookmarkData(
+      options: [.withSecurityScope],
+      includingResourceValuesForKeys: nil,
+      relativeTo: nil
+    )
+
+    linkedFolderBookmarksByTaskId[taskId] = bookmark.base64EncodedString()
+    persistLinkedFolderBookmarks()
+    return createdFolderURL.path
+  }
+
   func clearLinkedFolder(forTaskId taskId: Int) {
     linkedFolderBookmarksByTaskId.removeValue(forKey: taskId)
     persistLinkedFolderBookmarks()
@@ -326,6 +361,20 @@ final class ObsidianSyncService {
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     return cleaned.isEmpty ? "Task" : cleaned
+  }
+
+  private func uniqueFolderURL(in parentURL: URL, preferredName: String) throws -> URL {
+    let fileManager = FileManager.default
+    var candidateURL = parentURL.appendingPathComponent(preferredName, isDirectory: true)
+    var suffix = 2
+
+    while fileManager.fileExists(atPath: candidateURL.path) {
+      candidateURL = parentURL.appendingPathComponent(
+        "\(preferredName)-\(suffix)", isDirectory: true)
+      suffix += 1
+    }
+
+    return candidateURL
   }
 
   private func latestRemoteUpdateDate(for task: CheckvistTask) -> Date? {

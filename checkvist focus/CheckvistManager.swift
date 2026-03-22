@@ -388,6 +388,7 @@ class CheckvistManager: ObservableObject {
   static let maxPriorityRank = 9
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
   private static let pendingObsidianSyncDefaultsKey = "pendingObsidianSyncTaskIdsByListId"
+  private static let obsidianIntegrationEnabledDefaultsKey = "obsidianIntegrationEnabled"
 
   // MARK: - Timer
   @Published var timedTaskId: Int? = nil
@@ -448,6 +449,7 @@ class CheckvistManager: ObservableObject {
   @Published var confirmBeforeDelete: Bool
   @Published var launchAtLogin: Bool
   @Published var ignoreKeychainInDebug: Bool
+  @Published var obsidianIntegrationEnabled: Bool
   @Published var globalHotkeyEnabled: Bool
   /// Carbon keyCode for the global hotkey (default 49 = Space)
   @Published var globalHotkeyKeyCode: Int
@@ -960,11 +962,19 @@ class CheckvistManager: ObservableObject {
   init() {
     let storedUsername = UserDefaults.standard.string(forKey: "checkvistUsername") ?? ""
     let storedListId = UserDefaults.standard.string(forKey: "checkvistListId") ?? ""
+    let storedObsidianInboxPath = obsidianSyncService.inboxPath
     self.username = storedUsername
     self.listId = storedListId
     self.pendingObsidianSyncTaskIds = pendingSyncQueueStore.load(for: storedListId)
     self.priorityTaskIds = priorityQueueStore.load(for: storedListId)
-    self.obsidianInboxPath = obsidianSyncService.inboxPath
+    self.obsidianInboxPath = storedObsidianInboxPath
+    if let storedObsidianIntegrationEnabled =
+      UserDefaults.standard.object(forKey: Self.obsidianIntegrationEnabledDefaultsKey) as? Bool
+    {
+      self.obsidianIntegrationEnabled = storedObsidianIntegrationEnabled
+    } else {
+      self.obsidianIntegrationEnabled = !storedObsidianInboxPath.isEmpty
+    }
     self.confirmBeforeDelete =
       UserDefaults.standard.object(forKey: "confirmBeforeDelete") as? Bool ?? true
     self.showTaskBreadcrumbContext =
@@ -983,7 +993,7 @@ class CheckvistManager: ObservableObject {
         UserDefaults.standard.object(
           forKey: CheckvistCredentialStore.ignoreKeychainInDebugDefaultsKey)
         as? Bool
-        ?? false
+        ?? true
     #else
       self.ignoreKeychainInDebug = true
     #endif
@@ -1015,7 +1025,7 @@ class CheckvistManager: ObservableObject {
         UserDefaults.standard.object(
           forKey: CheckvistCredentialStore.ignoreKeychainInDebugDefaultsKey)
         as? Bool
-        ?? false
+        ?? true
       useKeychainStorageAtInit = !ignoreAtInit
     #else
       useKeychainStorageAtInit = true
@@ -1055,6 +1065,11 @@ class CheckvistManager: ObservableObject {
         self?.loadPendingObsidianSyncQueue(for: value)
       }.store(in: &cancellables)
     $confirmBeforeDelete.sink { UserDefaults.standard.set($0, forKey: "confirmBeforeDelete") }
+      .store(in: &cancellables)
+    $obsidianIntegrationEnabled
+      .sink {
+        UserDefaults.standard.set($0, forKey: Self.obsidianIntegrationEnabledDefaultsKey)
+      }
       .store(in: &cancellables)
     $showTaskBreadcrumbContext.sink {
       UserDefaults.standard.set($0, forKey: "showTaskBreadcrumbContext")
@@ -1191,7 +1206,11 @@ class CheckvistManager: ObservableObject {
       guard let self else { return }
       Task { @MainActor in
         self.isNetworkReachable = reachable
-        guard reachable, !self.pendingObsidianSyncTaskIds.isEmpty else { return }
+        guard
+          reachable,
+          self.obsidianIntegrationEnabled,
+          !self.pendingObsidianSyncTaskIds.isEmpty
+        else { return }
         await self.processPendingObsidianSyncQueue()
       }
     }
@@ -1261,6 +1280,16 @@ class CheckvistManager: ObservableObject {
     )
     remoteKey = nextState.remoteKey
     hasAttemptedRemoteKeyBootstrap = nextState.hasAttemptedBootstrap
+  }
+
+  @MainActor func toggleDebugKeychainStorageMode() {
+    #if DEBUG
+      ignoreKeychainInDebug.toggle()
+      errorMessage =
+        ignoreKeychainInDebug
+        ? "Dev mode: keychain disabled (no password prompts)."
+        : "Dev mode: keychain enabled."
+    #endif
   }
 
   @MainActor func resetOnboardingForDebug() {
@@ -1870,6 +1899,14 @@ class CheckvistManager: ObservableObject {
 
   // MARK: - Obsidian Sync
 
+  @MainActor private func ensureObsidianIntegrationEnabled() -> Bool {
+    guard obsidianIntegrationEnabled else {
+      errorMessage = "Enable Obsidian integration in onboarding or Preferences first."
+      return false
+    }
+    return true
+  }
+
   @discardableResult
   @MainActor func chooseObsidianInboxFolder() -> Bool {
     do {
@@ -1891,6 +1928,7 @@ class CheckvistManager: ObservableObject {
   }
 
   @MainActor func linkCurrentTaskToObsidianFolder(taskId explicitTaskId: Int? = nil) {
+    guard ensureObsidianIntegrationEnabled() else { return }
     guard
       let task = explicitTaskId.flatMap({ id in tasks.first(where: { $0.id == id }) })
         ?? currentTask
@@ -1909,6 +1947,29 @@ class CheckvistManager: ObservableObject {
       }
     } catch {
       errorMessage = "Failed to link Obsidian folder."
+    }
+  }
+
+  @MainActor func createAndLinkCurrentTaskObsidianFolder(taskId explicitTaskId: Int? = nil) {
+    guard ensureObsidianIntegrationEnabled() else { return }
+    guard
+      let task = explicitTaskId.flatMap({ id in tasks.first(where: { $0.id == id }) })
+        ?? currentTask
+    else {
+      errorMessage = "No task selected."
+      return
+    }
+
+    do {
+      if let createdPath = try obsidianSyncService.createAndLinkFolder(
+        forTaskId: task.id,
+        taskContent: task.content
+      ) {
+        _ = createdPath
+        errorMessage = nil
+      }
+    } catch {
+      errorMessage = "Failed to create and link Obsidian folder."
     }
   }
 
@@ -1956,6 +2017,7 @@ class CheckvistManager: ObservableObject {
     taskId explicitTaskId: Int? = nil,
     openMode: ObsidianOpenMode
   ) async {
+    guard ensureObsidianIntegrationEnabled() else { return }
     guard let targetTaskId = explicitTaskId ?? currentTask?.id else {
       errorMessage = "No task selected."
       return
@@ -2033,6 +2095,7 @@ class CheckvistManager: ObservableObject {
   }
 
   @MainActor private func processPendingObsidianSyncQueue() async {
+    guard obsidianIntegrationEnabled else { return }
     guard isNetworkReachable else { return }
     guard !pendingObsidianSyncTaskIds.isEmpty else { return }
     guard !hasPendingSyncProcessingTask else { return }
@@ -2365,6 +2428,8 @@ class CheckvistManager: ObservableObject {
       await openCurrentTaskInNewObsidianWindow()
     case .linkObsidianFolder:
       linkCurrentTaskToObsidianFolder()
+    case .createObsidianFolder:
+      createAndLinkCurrentTaskObsidianFolder()
     case .clearObsidianFolderLink:
       clearCurrentTaskObsidianFolderLink()
     case .unknown(let raw):
