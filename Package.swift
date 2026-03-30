@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-  name: "bar-tasker-corelogic",
+  name: "bar-tasker-core",
   platforms: [.macOS(.v15)],
   products: [
     .library(name: "BarTaskerCore", targets: ["BarTaskerCore"])
