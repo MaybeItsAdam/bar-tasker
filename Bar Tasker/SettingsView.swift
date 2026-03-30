@@ -206,7 +206,6 @@ struct SettingsView: View {
 
       Section(header: Text("Preferences")) {
         Toggle("Confirm before deleting tasks", isOn: $checkvistManager.confirmBeforeDelete)
-        Toggle("Enable sc breadcrumb shortcut", isOn: $checkvistManager.enableTaskContextShortcut)
         Toggle("Enable Obsidian integration", isOn: $checkvistManager.obsidianIntegrationEnabled)
         Toggle(
           "Enable Google Calendar integration",

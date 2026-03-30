@@ -375,7 +375,6 @@ class CheckvistManager: ObservableObject {
   @Published var filterText: String = ""
   @Published var hideFuture: Bool = false
   @Published var showTaskBreadcrumbContext: Bool
-  @Published var enableTaskContextShortcut: Bool
   @Published var rootTaskView: RootTaskView
   @Published var selectedRootDueBucketRawValue: Int
   @Published var selectedRootTag: String
@@ -1070,8 +1069,6 @@ class CheckvistManager: ObservableObject {
       UserDefaults.standard.object(forKey: "confirmBeforeDelete") as? Bool ?? true
     self.showTaskBreadcrumbContext =
       UserDefaults.standard.object(forKey: "showTaskBreadcrumbContext") as? Bool ?? false
-    self.enableTaskContextShortcut =
-      UserDefaults.standard.object(forKey: "enableTaskContextShortcut") as? Bool ?? false
     self.rootTaskView =
       RootTaskView(rawValue: UserDefaults.standard.object(forKey: "rootTaskView") as? Int ?? 1)
       ?? .due
@@ -1206,10 +1203,6 @@ class CheckvistManager: ObservableObject {
       .store(in: &cancellables)
     $showTaskBreadcrumbContext.sink {
       UserDefaults.standard.set($0, forKey: "showTaskBreadcrumbContext")
-    }
-    .store(in: &cancellables)
-    $enableTaskContextShortcut.sink {
-      UserDefaults.standard.set($0, forKey: "enableTaskContextShortcut")
     }
     .store(in: &cancellables)
     $rootTaskView.sink {
