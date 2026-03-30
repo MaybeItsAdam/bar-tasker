@@ -446,6 +446,17 @@ struct PopoverView: View {
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
+    case .mcp:
+      return (
+        "Enable MCP",
+        "Optional AI integrations using the built-in MCP server.",
+        "Enable",
+        {
+          manager.mcpIntegrationEnabled = true
+          manager.refreshMCPServerCommandPath()
+          manager.dismissActiveOnboardingDialog(permanently: true)
+        }
+      )
     }
   }
 

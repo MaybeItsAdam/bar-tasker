@@ -318,6 +318,7 @@ class CheckvistManager: ObservableObject {
     case checkvist
     case obsidian
     case googleCalendar
+    case mcp
 
     var id: String { rawValue }
   }
@@ -1197,8 +1198,9 @@ class CheckvistManager: ObservableObject {
       }
       .store(in: &cancellables)
     $mcpIntegrationEnabled
-      .sink {
+      .sink { [weak self] in
         UserDefaults.standard.set($0, forKey: Self.mcpIntegrationEnabledDefaultsKey)
+        self?.refreshOnboardingDialogState()
       }
       .store(in: &cancellables)
     $showTaskBreadcrumbContext.sink {
@@ -1510,6 +1512,8 @@ class CheckvistManager: ObservableObject {
       return !obsidianIntegrationEnabled || obsidianInboxPath.isEmpty
     case .googleCalendar:
       return !googleCalendarIntegrationEnabled
+    case .mcp:
+      return !mcpIntegrationEnabled
     }
   }
 
