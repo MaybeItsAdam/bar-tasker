@@ -3,7 +3,7 @@ import Foundation
 @MainActor
 final class CheckvistSession {
   private let apiClient: CheckvistAPIClient
-  private let userAgent = "CheckvistFocus/1.0 (Macintosh; Mac OS X)"
+  private let userAgent = "BarTasker/1.0 (Macintosh; Mac OS X)"
   private var token: String?
   private var isLoginInProgress = false
   private var loginWaiters: [CheckedContinuation<Bool, Never>] = []

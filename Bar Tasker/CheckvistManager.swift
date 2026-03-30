@@ -274,7 +274,7 @@ struct CheckvistList: Codable, Identifiable {
 
 @MainActor
 class CheckvistManager: ObservableObject {
-  private let logger = Logger(subsystem: "uk.co.maybeitsadam.checkvist-focus", category: "manager")
+  private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "manager")
 
   enum RootDueBucket: Int, CaseIterable {
     case overdue
@@ -343,7 +343,21 @@ class CheckvistManager: ObservableObject {
   @Published var lastUndo: UndoableAction? = nil
 
   // MARK: - Filters & Quick Entry
-  enum QuickEntryMode { case search, addSibling, addChild, editTask, command }
+  enum QuickEntryMode {
+    case search
+    case addSibling
+    case addChild
+    case editTask
+    case command
+    case quickAddDefault
+    case quickAddSpecific
+  }
+
+  enum QuickAddLocationMode: Int, CaseIterable {
+    case defaultRoot
+    case specificParentTask
+  }
+
   enum TimerMode: Int, CaseIterable {
     case visible
     case hidden
@@ -389,6 +403,14 @@ class CheckvistManager: ObservableObject {
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
   private static let pendingObsidianSyncDefaultsKey = "pendingObsidianSyncTaskIdsByListId"
   private static let obsidianIntegrationEnabledDefaultsKey = "obsidianIntegrationEnabled"
+  private static let googleCalendarIntegrationEnabledDefaultsKey =
+    "googleCalendarIntegrationEnabled"
+  private static let mcpIntegrationEnabledDefaultsKey = "mcpIntegrationEnabled"
+  private static let quickAddHotkeyEnabledDefaultsKey = "quickAddHotkeyEnabled"
+  private static let quickAddHotkeyKeyCodeDefaultsKey = "quickAddHotkeyKeyCode"
+  private static let quickAddHotkeyModifiersDefaultsKey = "quickAddHotkeyModifiers"
+  private static let quickAddLocationModeDefaultsKey = "quickAddLocationModeRawValue"
+  private static let quickAddSpecificParentTaskIdDefaultsKey = "quickAddSpecificParentTaskId"
 
   // MARK: - Timer
   @Published var timedTaskId: Int? = nil
@@ -450,16 +472,26 @@ class CheckvistManager: ObservableObject {
   @Published var launchAtLogin: Bool
   @Published var ignoreKeychainInDebug: Bool
   @Published var obsidianIntegrationEnabled: Bool
+  @Published var googleCalendarIntegrationEnabled: Bool
+  @Published var mcpIntegrationEnabled: Bool
   @Published var globalHotkeyEnabled: Bool
   /// Carbon keyCode for the global hotkey (default 49 = Space)
   @Published var globalHotkeyKeyCode: Int
   /// Carbon modifier mask (default 0x0800 = optionKey i.e. ⌥)
   @Published var globalHotkeyModifiers: Int
+  @Published var quickAddHotkeyEnabled: Bool
+  /// Carbon keyCode for the quick add hotkey (default 11 = B)
+  @Published var quickAddHotkeyKeyCode: Int
+  /// Carbon modifier mask (default 0x0A00 = shift+option)
+  @Published var quickAddHotkeyModifiers: Int
+  @Published var quickAddLocationMode: QuickAddLocationMode
+  @Published var quickAddSpecificParentTaskId: String
 
   /// Max width of the menu bar text
   @Published var maxTitleWidth: Double
   @Published var onboardingCompleted: Bool
   @Published private(set) var obsidianInboxPath: String
+  @Published private(set) var mcpServerCommandPath: String
   @Published private(set) var pendingObsidianSyncTaskIds: [Int]
   @Published private(set) var isNetworkReachable: Bool = true
 
@@ -477,6 +509,24 @@ class CheckvistManager: ObservableObject {
 
   var hasListSelection: Bool {
     !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  var quickAddSpecificParentTaskIdValue: Int? {
+    let raw = quickAddSpecificParentTaskId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !raw.isEmpty, let value = Int(raw), value > 0 else { return nil }
+    return value
+  }
+
+  var hasResolvedMCPServerCommand: Bool {
+    !mcpServerCommandPath.isEmpty
+  }
+
+  var mcpClientConfigurationPreview: String {
+    mcpIntegrationPlugin.makeClientConfigurationJSON(
+      credentials: activeCredentials,
+      listId: listId,
+      redactSecrets: true
+    )
   }
 
   var needsInitialSetup: Bool {
@@ -939,10 +989,11 @@ class CheckvistManager: ObservableObject {
   private var hasPendingSyncProcessingTask = false
   private var hasAttemptedRemoteKeyBootstrap = false
   private let credentialStore = CheckvistCredentialStore()
-  private let session = CheckvistSession()
+  private let checkvistSyncPlugin: any CheckvistSyncPlugin
+  private let obsidianPlugin: any ObsidianIntegrationPlugin
+  private let googleCalendarPlugin: any GoogleCalendarIntegrationPlugin
+  private let mcpIntegrationPlugin: any MCPIntegrationPlugin
   private let navigationCoordinator = TaskNavigationCoordinator()
-  private let taskRepository = CheckvistTaskRepository()
-  private let obsidianSyncService = ObsidianSyncService()
   private let reachabilityMonitor = NetworkReachabilityMonitor()
   private let priorityQueueStore = ListScopedTaskIDStore(
     defaultsKey: CheckvistManager.priorityQueuesDefaultsKey,
@@ -959,10 +1010,30 @@ class CheckvistManager: ObservableObject {
     #endif
   }
 
-  init() {
+  private var activeCredentials: CheckvistCredentials {
+    CheckvistCredentials(username: username, remoteKey: remoteKey)
+  }
+
+  init(pluginRegistry: FocusPluginRegistry) {
+    let resolvedCheckvistSyncPlugin =
+      pluginRegistry.activeCheckvistSyncPlugin ?? NativeCheckvistSyncPlugin()
+    let resolvedObsidianPlugin =
+      pluginRegistry.activeObsidianPlugin
+      ?? NativeObsidianIntegrationPlugin()
+    let resolvedGoogleCalendarPlugin =
+      pluginRegistry.activeGoogleCalendarPlugin
+      ?? NativeGoogleCalendarIntegrationPlugin()
+    let resolvedMCPIntegrationPlugin =
+      pluginRegistry.activeMCPIntegrationPlugin
+      ?? NativeMCPIntegrationPlugin()
+    self.checkvistSyncPlugin = resolvedCheckvistSyncPlugin
+    self.obsidianPlugin = resolvedObsidianPlugin
+    self.googleCalendarPlugin = resolvedGoogleCalendarPlugin
+    self.mcpIntegrationPlugin = resolvedMCPIntegrationPlugin
+
     let storedUsername = UserDefaults.standard.string(forKey: "checkvistUsername") ?? ""
     let storedListId = UserDefaults.standard.string(forKey: "checkvistListId") ?? ""
-    let storedObsidianInboxPath = obsidianSyncService.inboxPath
+    let storedObsidianInboxPath = resolvedObsidianPlugin.inboxPath
     self.username = storedUsername
     self.listId = storedListId
     self.pendingObsidianSyncTaskIds = pendingSyncQueueStore.load(for: storedListId)
@@ -975,6 +1046,15 @@ class CheckvistManager: ObservableObject {
     } else {
       self.obsidianIntegrationEnabled = !storedObsidianInboxPath.isEmpty
     }
+    self.googleCalendarIntegrationEnabled =
+      UserDefaults.standard.object(forKey: Self.googleCalendarIntegrationEnabledDefaultsKey)
+      as? Bool
+      ?? true
+    self.mcpIntegrationEnabled =
+      UserDefaults.standard.object(forKey: Self.mcpIntegrationEnabledDefaultsKey)
+      as? Bool
+      ?? true
+    self.mcpServerCommandPath = resolvedMCPIntegrationPlugin.serverCommandURL()?.path ?? ""
     self.confirmBeforeDelete =
       UserDefaults.standard.object(forKey: "confirmBeforeDelete") as? Bool ?? true
     self.showTaskBreadcrumbContext =
@@ -1003,6 +1083,20 @@ class CheckvistManager: ObservableObject {
       UserDefaults.standard.object(forKey: "globalHotkeyKeyCode") as? Int ?? 49  // Space
     self.globalHotkeyModifiers =
       UserDefaults.standard.object(forKey: "globalHotkeyModifiers") as? Int ?? 0x0800  // ⌥
+    self.quickAddHotkeyEnabled =
+      UserDefaults.standard.object(forKey: Self.quickAddHotkeyEnabledDefaultsKey) as? Bool ?? false
+    self.quickAddHotkeyKeyCode =
+      UserDefaults.standard.object(forKey: Self.quickAddHotkeyKeyCodeDefaultsKey) as? Int ?? 11  // B
+    self.quickAddHotkeyModifiers =
+      UserDefaults.standard.object(forKey: Self.quickAddHotkeyModifiersDefaultsKey) as? Int
+      ?? 0x0A00  // ⇧⌥
+    self.quickAddLocationMode =
+      QuickAddLocationMode(
+        rawValue: UserDefaults.standard.object(forKey: Self.quickAddLocationModeDefaultsKey)
+          as? Int ?? 0
+      ) ?? .defaultRoot
+    self.quickAddSpecificParentTaskId =
+      UserDefaults.standard.string(forKey: Self.quickAddSpecificParentTaskIdDefaultsKey) ?? ""
     self.maxTitleWidth = UserDefaults.standard.object(forKey: "maxTitleWidth") as? Double ?? 150.0
     if let storedOnboarding =
       UserDefaults.standard.object(forKey: CheckvistCredentialStore.onboardingCompletedDefaultsKey)
@@ -1038,6 +1132,10 @@ class CheckvistManager: ObservableObject {
     setupNetworkMonitor()
   }
 
+  convenience init() {
+    self.init(pluginRegistry: .nativeFirst())
+  }
+
   deinit {
     reachabilityMonitor.stop()
   }
@@ -1047,14 +1145,14 @@ class CheckvistManager: ObservableObject {
       .dropFirst()
       .sink { [weak self] value in
         UserDefaults.standard.set(value, forKey: "checkvistUsername")
-        self?.session.clearToken()
+        self?.checkvistSyncPlugin.clearAuthentication()
       }.store(in: &cancellables)
     $remoteKey
       .dropFirst()
       .removeDuplicates()
       .sink { [weak self] value in
         guard let self else { return }
-        self.session.clearToken()
+        self.checkvistSyncPlugin.clearAuthentication()
         self.credentialStore.persistRemoteKey(value, useKeychainStorage: self.usesKeychainStorage)
       }.store(in: &cancellables)
     $listId
@@ -1069,6 +1167,16 @@ class CheckvistManager: ObservableObject {
     $obsidianIntegrationEnabled
       .sink {
         UserDefaults.standard.set($0, forKey: Self.obsidianIntegrationEnabledDefaultsKey)
+      }
+      .store(in: &cancellables)
+    $googleCalendarIntegrationEnabled
+      .sink {
+        UserDefaults.standard.set($0, forKey: Self.googleCalendarIntegrationEnabledDefaultsKey)
+      }
+      .store(in: &cancellables)
+    $mcpIntegrationEnabled
+      .sink {
+        UserDefaults.standard.set($0, forKey: Self.mcpIntegrationEnabledDefaultsKey)
       }
       .store(in: &cancellables)
     $showTaskBreadcrumbContext.sink {
@@ -1119,6 +1227,26 @@ class CheckvistManager: ObservableObject {
       .store(in: &cancellables)
     $globalHotkeyModifiers.sink { UserDefaults.standard.set($0, forKey: "globalHotkeyModifiers") }
       .store(in: &cancellables)
+    $quickAddHotkeyEnabled.sink {
+      UserDefaults.standard.set($0, forKey: Self.quickAddHotkeyEnabledDefaultsKey)
+    }
+    .store(in: &cancellables)
+    $quickAddHotkeyKeyCode.sink {
+      UserDefaults.standard.set($0, forKey: Self.quickAddHotkeyKeyCodeDefaultsKey)
+    }
+    .store(in: &cancellables)
+    $quickAddHotkeyModifiers.sink {
+      UserDefaults.standard.set($0, forKey: Self.quickAddHotkeyModifiersDefaultsKey)
+    }
+    .store(in: &cancellables)
+    $quickAddLocationMode.sink {
+      UserDefaults.standard.set($0.rawValue, forKey: Self.quickAddLocationModeDefaultsKey)
+    }
+    .store(in: &cancellables)
+    $quickAddSpecificParentTaskId.sink {
+      UserDefaults.standard.set($0, forKey: Self.quickAddSpecificParentTaskIdDefaultsKey)
+    }
+    .store(in: &cancellables)
     $maxTitleWidth.sink { UserDefaults.standard.set($0, forKey: "maxTitleWidth") }.store(
       in: &cancellables)
     $onboardingCompleted
@@ -1294,7 +1422,7 @@ class CheckvistManager: ObservableObject {
 
   @MainActor func resetOnboardingForDebug() {
     #if DEBUG
-      session.clearToken()
+      checkvistSyncPlugin.clearAuthentication()
       errorMessage = nil
       let resetState = OnboardingResetPolicy.reset(
         OnboardingResetState(
@@ -1383,24 +1511,10 @@ class CheckvistManager: ObservableObject {
   }
   // MARK: - API
 
-  @MainActor
-  private func performAuthenticatedRequest(
-    _ buildRequest: (String) throws -> URLRequest
-  ) async throws -> (Data, HTTPURLResponse) {
-    let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
-    let normalizedRemoteKey = remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    return try await session.performAuthenticatedRequest(
-      username: normalizedUsername,
-      remoteKey: normalizedRemoteKey,
-      buildRequest
-    )
-  }
-
   @MainActor func login() async -> Bool {
     loadRemoteKeyFromKeychainIfNeeded()
-    let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
-    let normalizedRemoteKey = remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !normalizedUsername.isEmpty, !normalizedRemoteKey.isEmpty else {
+    let credentials = activeCredentials
+    guard !credentials.normalizedUsername.isEmpty, !credentials.normalizedRemoteKey.isEmpty else {
       errorMessage = "Username or Remote Key is missing."
       return false
     }
@@ -1410,10 +1524,7 @@ class CheckvistManager: ObservableObject {
     errorMessage = nil
 
     do {
-      let success = try await session.login(
-        username: normalizedUsername,
-        remoteKey: normalizedRemoteKey
-      )
+      let success = try await checkvistSyncPlugin.login(credentials: credentials)
       guard success else {
         errorMessage = "Login failed. Check your credentials."
         return false
@@ -1433,19 +1544,29 @@ class CheckvistManager: ObservableObject {
     errorMessage = nil
 
     do {
-      let fetchedTasks = try await taskRepository.fetchTasks(
+      let previousTasks = self.tasks
+      let fetchedTasks = try await checkvistSyncPlugin.fetchOpenTasks(
         listId: listId,
-        performAuthenticatedRequest: performAuthenticatedRequest(_:)
+        credentials: activeCredentials
       )
 
       self.tasks = fetchedTasks
-      taskRepository.persistTaskCache(
-        CheckvistTaskCachePayload(listId: listId, fetchedAt: Date(), tasks: fetchedTasks))
+      checkvistSyncPlugin.persistTaskCache(listId: listId, tasks: fetchedTasks)
       reconcilePriorityQueueWithOpenTasks()
       reconcilePendingObsidianSyncQueueWithOpenTasks()
       if currentSiblingIndex >= fetchedTasks.count { currentSiblingIndex = 0 }
-      let validTaskIds = Set(fetchedTasks.map(\.id))
-      self.timerByTaskId = self.timerByTaskId.filter { validTaskIds.contains($0.key) }
+      let latestOpenTaskIDs = Set(fetchedTasks.map(\.id))
+      let previousTimerNodes = previousTasks.map {
+        CheckvistTimerNode(id: $0.id, parentId: $0.parentId)
+      }
+      self.timerByTaskId = TimerElapsedReassignmentPolicy.remapElapsed(
+        previousNodes: previousTimerNodes,
+        latestOpenTaskIDs: latestOpenTaskIDs,
+        elapsedByTaskID: self.timerByTaskId
+      )
+      if let activeTimerTaskID = timedTaskId, !latestOpenTaskIDs.contains(activeTimerTaskID) {
+        stopTimer()
+      }
       if !listId.isEmpty && canAttemptLogin {
         onboardingCompleted = true
       }
@@ -1454,8 +1575,6 @@ class CheckvistManager: ObservableObject {
       if errorMessage == nil {
         errorMessage = "Authentication required."
       }
-    } catch let error as CheckvistTaskRepositoryError {
-      errorMessage = error.localizedDescription
     } catch {
       errorMessage = "Failed to fetch tasks: \(error.localizedDescription)"
     }
@@ -1490,26 +1609,29 @@ class CheckvistManager: ObservableObject {
       }
     }
 
-    guard
-      let url = URL(
-        string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id)/\(endpoint).json")
-    else { return }
+    guard let action = CheckvistTaskAction(rawValue: endpoint) else { return }
+    let ancestorTaskIDsToKeepOpen =
+      (!isUndo && endpoint == "close") ? ancestorTaskIDs(for: task, in: tasks) : []
 
     let optimisticSnapshot: OptimisticCompletionSnapshot? =
       (!isUndo && (endpoint == "close" || endpoint == "invalidate"))
       ? applyOptimisticCompletion(for: task.id) : nil
 
     do {
-      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue(
-          "CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
-        return request
-      }
-      if (200...299).contains(httpResponse.statusCode) {
+      let success = try await checkvistSyncPlugin.performTaskAction(
+        listId: listId,
+        taskId: task.id,
+        action: action,
+        credentials: activeCredentials
+      )
+      if success {
         await fetchTopTask()
+        if !ancestorTaskIDsToKeepOpen.isEmpty {
+          let reopenedAny = await reopenMissingAncestorTasksIfNeeded(ancestorTaskIDsToKeepOpen)
+          if reopenedAny {
+            await fetchTopTask()
+          }
+        }
       } else {
         if let optimisticSnapshot {
           restoreTasksSnapshot(optimisticSnapshot)
@@ -1527,22 +1649,61 @@ class CheckvistManager: ObservableObject {
       errorMessage = "Error: \(error.localizedDescription)"
     }
   }
-  @MainActor func fetchLists() async {
-    guard let url = URL(string: "https://checkvist.com/checklists.json") else { return }
 
+  private func ancestorTaskIDs(for task: CheckvistTask, in taskList: [CheckvistTask]) -> [Int] {
+    var taskByID: [Int: CheckvistTask] = [:]
+    for listedTask in taskList {
+      taskByID[listedTask.id] = listedTask
+    }
+
+    var ancestorIDs: [Int] = []
+    var nextParentID = task.parentId ?? 0
+    while nextParentID != 0 {
+      ancestorIDs.append(nextParentID)
+      guard let parent = taskByID[nextParentID] else { break }
+      nextParentID = parent.parentId ?? 0
+    }
+
+    return ancestorIDs
+  }
+
+  @MainActor private func reopenMissingAncestorTasksIfNeeded(_ ancestorTaskIDs: [Int]) async -> Bool
+  {
+    let openTaskIDs = Set(tasks.map(\.id))
+    let missingAncestorIDs = ancestorTaskIDs.filter { !openTaskIDs.contains($0) }
+    guard !missingAncestorIDs.isEmpty else { return false }
+
+    var reopenedAny = false
+    for ancestorID in missingAncestorIDs {
+      do {
+        let success = try await checkvistSyncPlugin.performTaskAction(
+          listId: listId,
+          taskId: ancestorID,
+          action: .reopen,
+          credentials: activeCredentials
+        )
+        if success {
+          reopenedAny = true
+        }
+      } catch CheckvistSessionError.authenticationUnavailable {
+        if errorMessage == nil {
+          errorMessage = "Authentication required."
+        }
+        break
+      } catch {
+        if errorMessage == nil {
+          errorMessage = "Task completed, but a parent task could not be kept open."
+        }
+      }
+    }
+
+    return reopenedAny
+  }
+
+  @MainActor func fetchLists() async {
     do {
-      let (data, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        return request
-      }
-      if (200...299).contains(httpResponse.statusCode) {
-        let lists = try JSONDecoder().decode([CheckvistList].self, from: data)
-        self.availableLists = lists.filter { !($0.archived ?? false) }
-      } else {
-        self.errorMessage = "Failed to fetch lists."
-      }
+      let lists = try await checkvistSyncPlugin.fetchLists(credentials: activeCredentials)
+      self.availableLists = lists
     } catch CheckvistSessionError.authenticationUnavailable {
       if errorMessage == nil {
         errorMessage = "Authentication required."
@@ -1563,25 +1724,15 @@ class CheckvistManager: ObservableObject {
       lastUndo = .update(taskId: task.id, oldContent: task.content, oldDue: task.due)
     }
 
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id).json")
-    else { return }
-
-    var taskDict: [String: Any] = [:]
-    if let c = content { taskDict["content"] = c }
-    if let d = due { taskDict["due"] = d }
-
     do {
-      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(
-          "CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": taskDict])
-        return request
-      }
-      if (200...299).contains(httpResponse.statusCode) {
+      let success = try await checkvistSyncPlugin.updateTask(
+        listId: listId,
+        taskId: task.id,
+        content: content,
+        due: due,
+        credentials: activeCredentials
+      )
+      if success {
         await fetchTopTask()
       } else {
         errorMessage = "Failed to update task."
@@ -1605,17 +1756,6 @@ class CheckvistManager: ObservableObject {
     defer { endLoading() }
     errorMessage = nil
 
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json?parse=true")
-    else {
-      removeOptimisticTask(id: optimisticTaskId)
-      return
-    }
-
-    var taskPayload: [String: Any] = ["content": content]
-    if currentParentId != 0 {
-      taskPayload["parent_id"] = currentParentId
-    }
-
     // Find current position to insert right below
     var apiPosition = 0
     let target = insertAfterTask ?? currentTask
@@ -1632,23 +1772,19 @@ class CheckvistManager: ObservableObject {
       apiPosition = 1
     }
 
-    if apiPosition > 0 { taskPayload["position"] = apiPosition }
+    let parentIdForCreate = currentParentId == 0 ? nil : currentParentId
+    let positionForCreate: Int? = apiPosition > 0 ? apiPosition : nil
 
     do {
-      let (data, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(
-          "CheckvistFocus/1.0 (Macintosh; Mac OS X)", forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": taskPayload])
-        return request
-      }
-      if (200...299).contains(httpResponse.statusCode) {
-        if let newTask = try? JSONDecoder().decode(CheckvistTask.self, from: data) {
-          lastUndo = .add(taskId: newTask.id)
-        }
+      let newTask = try await checkvistSyncPlugin.createTask(
+        listId: listId,
+        content: content,
+        parentId: parentIdForCreate,
+        position: positionForCreate,
+        credentials: activeCredentials
+      )
+      if let newTask {
+        lastUndo = .add(taskId: newTask.id)
         await fetchTopTask()
       } else {
         removeOptimisticTask(id: optimisticTaskId)
@@ -1670,31 +1806,20 @@ class CheckvistManager: ObservableObject {
     let optimisticTask = insertOptimisticChildTask(content: content, parentId: parentId)
     let optimisticTaskId = optimisticTask.id
 
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json?parse=true")
-    else {
-      removeOptimisticTask(id: optimisticTaskId)
-      return
-    }
     beginLoading()
     defer { endLoading() }
     errorMessage = nil
 
     do {
-      let (data, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: [
-          "task": ["content": content, "parent_id": parentId, "position": 1]
-        ])
-        return request
-      }
-      if (200...299).contains(httpResponse.statusCode) {
-        if let newTask = try? JSONDecoder().decode(CheckvistTask.self, from: data) {
-          lastUndo = .add(taskId: newTask.id)
-        }
+      let newTask = try await checkvistSyncPlugin.createTask(
+        listId: listId,
+        content: content,
+        parentId: parentId,
+        position: 1,
+        credentials: activeCredentials
+      )
+      if let newTask {
+        lastUndo = .add(taskId: newTask.id)
         await fetchTopTask()
       } else {
         removeOptimisticTask(id: optimisticTaskId)
@@ -1708,6 +1833,84 @@ class CheckvistManager: ObservableObject {
     } catch {
       removeOptimisticTask(id: optimisticTaskId)
       errorMessage = "Error: \(error.localizedDescription)"
+    }
+  }
+
+  @MainActor
+  func beginQuickAddEntry(preferSpecificLocation: Bool? = nil) -> Bool {
+    let useSpecificLocation =
+      preferSpecificLocation ?? (quickAddLocationMode == .specificParentTask)
+    if useSpecificLocation && quickAddSpecificParentTaskIdValue == nil {
+      errorMessage = "Set a valid Quick Add parent task ID in Preferences first."
+      return false
+    }
+
+    pendingDeleteConfirmation = false
+    commandSuggestionIndex = 0
+    quickEntryMode = useSpecificLocation ? .quickAddSpecific : .quickAddDefault
+    filterText = ""
+    isQuickEntryFocused = true
+    return true
+  }
+
+  @MainActor
+  func setQuickAddSpecificLocationToCurrentTask() {
+    guard let currentTask else {
+      errorMessage = "No task selected."
+      return
+    }
+    quickAddSpecificParentTaskId = String(currentTask.id)
+    quickAddLocationMode = .specificParentTask
+    errorMessage = nil
+  }
+
+  @MainActor
+  func submitQuickAddTask(content: String, useSpecificLocation: Bool) async {
+    let normalizedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedContent.isEmpty else { return }
+    guard !listId.isEmpty else {
+      errorMessage = "List ID not set."
+      return
+    }
+
+    let parentTaskId: Int?
+    if useSpecificLocation {
+      guard let specificTaskId = quickAddSpecificParentTaskIdValue else {
+        errorMessage = "Set a valid Quick Add parent task ID in Preferences first."
+        return
+      }
+      parentTaskId = specificTaskId
+    } else {
+      parentTaskId = nil
+    }
+
+    beginLoading()
+    defer { endLoading() }
+    errorMessage = nil
+
+    do {
+      let createdTask = try await checkvistSyncPlugin.createTask(
+        listId: listId,
+        content: normalizedContent,
+        parentId: parentTaskId,
+        position: 1,
+        credentials: activeCredentials
+      )
+      guard let createdTask else {
+        errorMessage = "Quick add failed."
+        return
+      }
+      lastUndo = .add(taskId: createdTask.id)
+      await fetchTopTask()
+      quickEntryMode = .search
+      filterText = ""
+      isQuickEntryFocused = false
+    } catch CheckvistSessionError.authenticationUnavailable {
+      if errorMessage == nil {
+        errorMessage = "Authentication required."
+      }
+    } catch {
+      errorMessage = "Quick add failed: \(error.localizedDescription)"
     }
   }
 
@@ -1820,21 +2023,16 @@ class CheckvistManager: ObservableObject {
       lastUndo = nil  // Clear undo history since we don't support recovering hard-deleted tasks yet
     }
 
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id).json")
-    else { return }
-
     beginLoading()
     defer { endLoading() }
 
     do {
-      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
-        return request
-      }
-      if (200...299).contains(httpResponse.statusCode) {
+      let success = try await checkvistSyncPlugin.deleteTask(
+        listId: listId,
+        taskId: task.id,
+        credentials: activeCredentials
+      )
+      if success {
         await fetchTopTask()
       } else {
         errorMessage = "Failed to delete task."
@@ -1897,6 +2095,89 @@ class CheckvistManager: ObservableObject {
     }
   }
 
+  // MARK: - Google Calendar
+
+  @MainActor private func ensureGoogleCalendarIntegrationEnabled() -> Bool {
+    guard googleCalendarIntegrationEnabled else {
+      errorMessage = "Enable Google Calendar integration in onboarding or Preferences first."
+      return false
+    }
+    return true
+  }
+
+  @MainActor func openCurrentTaskInGoogleCalendar(taskId explicitTaskId: Int? = nil) {
+    guard ensureGoogleCalendarIntegrationEnabled() else { return }
+
+    let selectedTask: CheckvistTask?
+    if let explicitTaskId {
+      selectedTask = tasks.first(where: { $0.id == explicitTaskId })
+    } else {
+      selectedTask = currentTask
+    }
+    guard let selectedTask else {
+      errorMessage = "No task selected."
+      return
+    }
+
+    guard
+      let googleCalendarURL = googleCalendarPlugin.makeCreateEventURL(
+        task: selectedTask,
+        listId: listId,
+        now: Date()
+      )
+    else {
+      errorMessage = "Could not create Google Calendar event URL."
+      return
+    }
+
+    NSWorkspace.shared.open(googleCalendarURL)
+    errorMessage = nil
+  }
+
+  // MARK: - MCP
+
+  @MainActor private func ensureMCPIntegrationEnabled() -> Bool {
+    guard mcpIntegrationEnabled else {
+      errorMessage = "Enable MCP integration in Preferences first."
+      return false
+    }
+    return true
+  }
+
+  @MainActor func refreshMCPServerCommandPath() {
+    mcpServerCommandPath = mcpIntegrationPlugin.serverCommandURL()?.path ?? ""
+  }
+
+  @MainActor func copyMCPClientConfigurationToClipboard() {
+    guard ensureMCPIntegrationEnabled() else { return }
+    refreshMCPServerCommandPath()
+
+    let config = mcpIntegrationPlugin.makeClientConfigurationJSON(
+      credentials: activeCredentials,
+      listId: listId,
+      redactSecrets: false
+    )
+    NSPasteboard.general.clearContents()
+    _ = NSPasteboard.general.setString(config, forType: .string)
+
+    if mcpServerCommandPath.isEmpty {
+      errorMessage =
+        "MCP config copied with placeholder app path. Set BAR_TASKER_MCP_EXECUTABLE_PATH if your app is outside /Applications."
+    } else {
+      errorMessage = nil
+    }
+  }
+
+  @MainActor func openMCPServerGuide() {
+    guard ensureMCPIntegrationEnabled() else { return }
+    guard let guideURL = mcpIntegrationPlugin.guideURL() else {
+      errorMessage = "MCP guide not found. See docs/mcp-server.md in the repo."
+      return
+    }
+    NSWorkspace.shared.open(guideURL)
+    errorMessage = nil
+  }
+
   // MARK: - Obsidian Sync
 
   @MainActor private func ensureObsidianIntegrationEnabled() -> Bool {
@@ -1910,7 +2191,7 @@ class CheckvistManager: ObservableObject {
   @discardableResult
   @MainActor func chooseObsidianInboxFolder() -> Bool {
     do {
-      if let selectedPath = try obsidianSyncService.chooseInboxFolder() {
+      if let selectedPath = try obsidianPlugin.chooseInboxFolder() {
         obsidianInboxPath = selectedPath
         errorMessage = nil
         return true
@@ -1923,7 +2204,7 @@ class CheckvistManager: ObservableObject {
   }
 
   @MainActor func clearObsidianInboxFolder() {
-    obsidianSyncService.clearInboxFolder()
+    obsidianPlugin.clearInboxFolder()
     obsidianInboxPath = ""
   }
 
@@ -1938,7 +2219,7 @@ class CheckvistManager: ObservableObject {
     }
 
     do {
-      if let linkedPath = try obsidianSyncService.chooseLinkedFolder(
+      if let linkedPath = try obsidianPlugin.chooseLinkedFolder(
         forTaskId: task.id,
         taskContent: task.content
       ) {
@@ -1961,7 +2242,7 @@ class CheckvistManager: ObservableObject {
     }
 
     do {
-      if let createdPath = try obsidianSyncService.createAndLinkFolder(
+      if let createdPath = try obsidianPlugin.createAndLinkFolder(
         forTaskId: task.id,
         taskContent: task.content
       ) {
@@ -1979,12 +2260,12 @@ class CheckvistManager: ObservableObject {
       return
     }
 
-    obsidianSyncService.clearLinkedFolder(forTaskId: targetTaskId)
+    obsidianPlugin.clearLinkedFolder(forTaskId: targetTaskId)
     errorMessage = nil
   }
 
   @MainActor func hasObsidianFolderLink(taskId: Int) -> Bool {
-    obsidianSyncService.hasLinkedFolder(forTaskId: taskId)
+    obsidianPlugin.hasLinkedFolder(forTaskId: taskId)
   }
 
   private func obsidianLinkedFolderAncestorTaskId(
@@ -1994,7 +2275,7 @@ class CheckvistManager: ObservableObject {
     var candidateTask: CheckvistTask? = task
 
     while let current = candidateTask {
-      if obsidianSyncService.hasLinkedFolder(forTaskId: current.id) {
+      if obsidianPlugin.hasLinkedFolder(forTaskId: current.id) {
         return current.id
       }
 
@@ -2036,11 +2317,12 @@ class CheckvistManager: ObservableObject {
           return
         }
         do {
-          _ = try obsidianSyncService.syncTask(
+          _ = try obsidianPlugin.syncTask(
             task,
             listId: listId,
             linkedFolderTaskId: linkedFolderTaskId,
-            openMode: openMode
+            openMode: openMode,
+            syncDate: Date()
           )
           dequeuePendingObsidianSync(taskId: targetTaskId)
           errorMessage = nil
@@ -2060,7 +2342,7 @@ class CheckvistManager: ObservableObject {
       }
     }
 
-    guard let cachedPayload = taskRepository.loadTaskCache(for: listId) else {
+    guard let cachedPayload = checkvistSyncPlugin.loadTaskCache(for: listId) else {
       enqueuePendingObsidianSync(taskId: targetTaskId)
       errorMessage = "Offline and no cache available. Added to pending queue."
       return
@@ -2078,13 +2360,14 @@ class CheckvistManager: ObservableObject {
     }
 
     do {
-      _ = try obsidianSyncService.syncTask(
+      _ = try obsidianPlugin.syncTask(
         cachedTask,
         listId: listId,
         linkedFolderTaskId: linkedFolderTaskId,
-        openMode: openMode
+        openMode: openMode,
+        syncDate: Date()
       )
-      if taskRepository.isCacheOutdated(cachedPayload) {
+      if checkvistSyncPlugin.isTaskCacheOutdated(cachedPayload) {
         enqueuePendingObsidianSync(taskId: targetTaskId)
       }
       errorMessage = nil
@@ -2113,11 +2396,12 @@ class CheckvistManager: ObservableObject {
       }
       do {
         let linkedFolderTaskId = obsidianLinkedFolderAncestorTaskId(for: task, taskList: tasks)
-        _ = try obsidianSyncService.syncTask(
+        _ = try obsidianPlugin.syncTask(
           task,
           listId: listId,
           linkedFolderTaskId: linkedFolderTaskId,
-          openMode: .standard
+          openMode: .standard,
+          syncDate: Date()
         )
         dequeuePendingObsidianSync(taskId: taskId)
       } catch {
@@ -2240,22 +2524,14 @@ class CheckvistManager: ObservableObject {
   }
 
   private func commitReorderRequest(taskId: Int, position: Int) async -> Bool {
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(taskId).json")
-    else { return false }
-
     do {
-      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: [
-          "task": ["position": position]
-        ])
-        return request
-      }
-      if !(200...299).contains(httpResponse.statusCode) {
+      let success = try await checkvistSyncPlugin.moveTask(
+        listId: listId,
+        taskId: taskId,
+        position: position,
+        credentials: activeCredentials
+      )
+      if !success {
         await MainActor.run {
           self.errorMessage = "Failed to move task."
         }
@@ -2336,7 +2612,7 @@ class CheckvistManager: ObservableObject {
       await invalidateCurrentTask()
     case .due(let raw):
       guard !raw.isEmpty else {
-        errorMessage = "Missing due date. Try: due today"
+        errorMessage = "Missing due date/time. Try: due today 14:30"
         return
       }
       let resolved = Self.resolveDueDate(raw)
@@ -2432,6 +2708,8 @@ class CheckvistManager: ObservableObject {
       createAndLinkCurrentTaskObsidianFolder()
     case .clearObsidianFolderLink:
       clearCurrentTaskObsidianFolderLink()
+    case .syncGoogleCalendar:
+      openCurrentTaskInGoogleCalendar()
     case .unknown(let raw):
       errorMessage = "Unknown command: \(raw)"
       logger.error("Unknown command: \(raw, privacy: .public)")
@@ -2479,21 +2757,14 @@ class CheckvistManager: ObservableObject {
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }), idx > 0 else { return }
     let newParent = siblings[idx - 1]
 
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id).json")
-    else { return }
     do {
-      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: [
-          "task": ["parent_id": newParent.id]
-        ])
-        return request
-      }
-      if !(200...299).contains(httpResponse.statusCode) {
+      let success = try await checkvistSyncPlugin.reparentTask(
+        listId: listId,
+        taskId: task.id,
+        parentId: newParent.id,
+        credentials: activeCredentials
+      )
+      if !success {
         errorMessage = "Failed to indent task."
         return
       }
@@ -2514,21 +2785,14 @@ class CheckvistManager: ObservableObject {
     guard let parent = tasks.first(where: { $0.id == parentId }) else { return }
     let newParentId = parent.parentId ?? 0
 
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(task.id).json")
-    else { return }
-    let body: [String: Any] =
-      newParentId == 0 ? ["task": ["parent_id": NSNull()]] : ["task": ["parent_id": newParentId]]
     do {
-      let (_, httpResponse) = try await performAuthenticatedRequest { validToken in
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("CheckvistFocus/1.0", forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return request
-      }
-      if !(200...299).contains(httpResponse.statusCode) {
+      let success = try await checkvistSyncPlugin.reparentTask(
+        listId: listId,
+        taskId: task.id,
+        parentId: newParentId == 0 ? nil : newParentId,
+        credentials: activeCredentials
+      )
+      if !success {
         errorMessage = "Failed to unindent task."
         return
       }

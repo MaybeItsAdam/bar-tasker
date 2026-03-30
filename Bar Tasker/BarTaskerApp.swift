@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct CheckvistFocusApp: App {
+struct BarTaskerApp: App {
   // AppDelegate owns the single CheckvistManager instance
   @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 

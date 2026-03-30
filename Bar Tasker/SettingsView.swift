@@ -208,6 +208,11 @@ struct SettingsView: View {
         Toggle("Confirm before deleting tasks", isOn: $checkvistManager.confirmBeforeDelete)
         Toggle("Enable sc breadcrumb shortcut", isOn: $checkvistManager.enableTaskContextShortcut)
         Toggle("Enable Obsidian integration", isOn: $checkvistManager.obsidianIntegrationEnabled)
+        Toggle(
+          "Enable Google Calendar integration",
+          isOn: $checkvistManager.googleCalendarIntegrationEnabled
+        )
+        Toggle("Enable MCP integration", isOn: $checkvistManager.mcpIntegrationEnabled)
         if #available(macOS 13.0, *) {
           Toggle("Launch at login", isOn: $checkvistManager.launchAtLogin)
         }
@@ -249,6 +254,61 @@ struct SettingsView: View {
             .font(.caption)
         }
 
+        if checkvistManager.googleCalendarIntegrationEnabled {
+          Text("Google Calendar action opens a prefilled event in your browser.")
+            .foregroundColor(.secondary)
+            .font(.caption)
+        } else {
+          Text("Google Calendar integration is disabled.")
+            .foregroundColor(.secondary)
+            .font(.caption)
+        }
+
+        if checkvistManager.mcpIntegrationEnabled {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("MCP Server")
+            if checkvistManager.hasResolvedMCPServerCommand {
+              Text(checkvistManager.mcpServerCommandPath)
+                .font(.caption)
+                .textSelection(.enabled)
+            } else {
+              Text("App command path not detected. Set BAR_TASKER_MCP_EXECUTABLE_PATH if needed.")
+                .foregroundColor(.secondary)
+                .font(.caption)
+            }
+
+            HStack {
+              Button("Refresh Path") {
+                checkvistManager.refreshMCPServerCommandPath()
+              }
+              Button("Copy Client Config") {
+                checkvistManager.copyMCPClientConfigurationToClipboard()
+              }
+              Button("Open Guide") {
+                checkvistManager.openMCPServerGuide()
+              }
+              Spacer()
+            }
+
+            ScrollView {
+              Text(checkvistManager.mcpClientConfigurationPreview)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 120, maxHeight: 180)
+
+            Text("Preview is redacted. Copied config includes your saved credentials.")
+              .foregroundColor(.secondary)
+              .font(.caption)
+          }
+          .padding(.top, 4)
+        } else {
+          Text("MCP integration is disabled.")
+            .foregroundColor(.secondary)
+            .font(.caption)
+        }
+
         HStack {
           Toggle("Global hotkey", isOn: $checkvistManager.globalHotkeyEnabled)
           Spacer()
@@ -260,6 +320,47 @@ struct SettingsView: View {
             .frame(width: 120, height: 22)
           }
         }
+
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Quick Add location")
+          Picker("", selection: $checkvistManager.quickAddLocationMode) {
+            Text("Default (List root)").tag(CheckvistManager.QuickAddLocationMode.defaultRoot)
+            Text("Specific task ID").tag(CheckvistManager.QuickAddLocationMode.specificParentTask)
+          }
+          .labelsHidden()
+          .pickerStyle(.segmented)
+
+          if checkvistManager.quickAddLocationMode == .specificParentTask {
+            HStack {
+              TextField("Parent task ID", text: $checkvistManager.quickAddSpecificParentTaskId)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 180)
+              Button("Use selected task") {
+                checkvistManager.setQuickAddSpecificLocationToCurrentTask()
+              }
+              .disabled(checkvistManager.currentTask == nil)
+            }
+            Text("Quick Add creates new tasks as children of this task ID.")
+              .font(.caption)
+              .foregroundColor(.secondary)
+          }
+        }
+        .padding(.top, 4)
+
+        HStack {
+          Toggle("Quick Add hotkey", isOn: $checkvistManager.quickAddHotkeyEnabled)
+          Spacer()
+          if checkvistManager.quickAddHotkeyEnabled {
+            HotkeyRecorderField(
+              keyCode: $checkvistManager.quickAddHotkeyKeyCode,
+              modifiers: $checkvistManager.quickAddHotkeyModifiers
+            )
+            .frame(width: 120, height: 22)
+          }
+        }
+        Text("Press this to open a focused Quick Add prompt at the configured location.")
+          .font(.caption)
+          .foregroundColor(.secondary)
 
         VStack(alignment: .leading) {
           Text("Max Menu Bar Width: \(Int(checkvistManager.maxTitleWidth))px")

@@ -42,7 +42,9 @@ enum PopoverLayout {
     }
     if !manager.pendingDeleteConfirmation
       && (manager.quickEntryMode == .search
-        && (manager.isQuickEntryFocused || !manager.filterText.isEmpty))
+        || manager.quickEntryMode == .quickAddDefault
+        || manager.quickEntryMode == .quickAddSpecific)
+      && (manager.isQuickEntryFocused || !manager.filterText.isEmpty)
     {
       fixedHeight += 40
     }
@@ -343,11 +345,14 @@ struct PopoverView: View {
 
       // Prompt + autocomplete at bottom so tasks remain visible above.
       if !manager.pendingDeleteConfirmation && !manager.needsInitialSetup {
-        if (manager.quickEntryMode == .search
-          && (manager.isQuickEntryFocused || !manager.filterText.isEmpty))
+        let shouldShowPrompt =
+          ((manager.quickEntryMode == .search
+            || manager.quickEntryMode == .quickAddDefault
+            || manager.quickEntryMode == .quickAddSpecific)
+            && (manager.isQuickEntryFocused || !manager.filterText.isEmpty))
           || (manager.quickEntryMode == .command
             && (manager.isQuickEntryFocused || !manager.filterText.isEmpty))
-        {
+        if shouldShowPrompt {
           quickEntryBar()
         }
       }
@@ -360,7 +365,7 @@ struct PopoverView: View {
 
   var setupView: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Text("Welcome to Checkvist Focus")
+      Text("Welcome to Bar Tasker")
         .font(.headline)
       Text("Set up your account once, choose a checklist by name, and pick optional integrations.")
         .font(.caption)
@@ -411,6 +416,10 @@ struct PopoverView: View {
       Divider()
 
       Toggle("Enable Obsidian integration", isOn: $manager.obsidianIntegrationEnabled)
+      Toggle(
+        "Enable Google Calendar integration",
+        isOn: $manager.googleCalendarIntegrationEnabled
+      )
 
       if manager.obsidianIntegrationEnabled {
         if manager.obsidianInboxPath.isEmpty {
@@ -436,6 +445,11 @@ struct PopoverView: View {
             }
           }
         }
+      }
+      if manager.googleCalendarIntegrationEnabled {
+        Text("Google Calendar action opens a prefilled event in your browser.")
+          .font(.caption2)
+          .foregroundColor(.secondary)
       }
       Spacer(minLength: 0)
     }
@@ -1095,7 +1109,7 @@ struct PopoverView: View {
         manager.filterText = task.content
         manager.isQuickEntryFocused = true
       }
-      Button("Due Date dd") {
+      Button("Due Date/Time dd") {
         manager.currentSiblingIndex = index
         manager.quickEntryMode = .command
         manager.commandSuggestionIndex = 0
@@ -1141,6 +1155,13 @@ struct PopoverView: View {
           Task { await manager.openCurrentTaskInNewObsidianWindow(taskId: task.id) }
         }
       }
+      if manager.googleCalendarIntegrationEnabled {
+        Divider()
+        Button("Add to Google Calendar gc") {
+          manager.currentSiblingIndex = index
+          manager.openCurrentTaskInGoogleCalendar(taskId: task.id)
+        }
+      }
       Divider()
       Button("Delete", role: .destructive) {
         manager.currentSiblingIndex = index
@@ -1164,6 +1185,8 @@ struct PopoverView: View {
     case .addChild: return "arrow.turn.down.right"
     case .editTask: return "pencil"
     case .command: return "terminal"
+    case .quickAddDefault: return "plus.circle"
+    case .quickAddSpecific: return "plus.circle.fill"
     }
   }
 
@@ -1174,7 +1197,15 @@ struct PopoverView: View {
     case .addChild: return "Add task"
     case .editTask: return "Edit task..."
     case .command:
-      return "Action… (done, due [date], tag [name], priority [1-9], priority back)"
+      return
+        "Action… (done, due [date/time], tag [name], priority [1-9], google calendar)"
+    case .quickAddDefault:
+      return "Quick add to list root"
+    case .quickAddSpecific:
+      if let taskId = manager.quickAddSpecificParentTaskIdValue {
+        return "Quick add under task #\(taskId)"
+      }
+      return "Quick add under specific task (set parent ID in Preferences)"
     }
   }
 
@@ -1202,6 +1233,10 @@ struct PopoverView: View {
       let cmd = manager.filterText
       escapeAction()
       Task { await manager.executeCommandInput(cmd) }
+    case .quickAddDefault:
+      submitQuickAdd(useSpecificLocation: false)
+    case .quickAddSpecific:
+      submitQuickAdd(useSpecificLocation: true)
     default: break
     }
   }
@@ -1265,6 +1300,14 @@ struct PopoverView: View {
     }
     let content = manager.filterText
     Task { await manager.addTaskAsChild(content: content, parentId: parent.id) }
+  }
+
+  func submitQuickAdd(useSpecificLocation: Bool) {
+    guard !manager.filterText.isEmpty else { return }
+    let content = manager.filterText
+    Task {
+      await manager.submitQuickAddTask(content: content, useSpecificLocation: useSpecificLocation)
+    }
   }
 
   @ViewBuilder

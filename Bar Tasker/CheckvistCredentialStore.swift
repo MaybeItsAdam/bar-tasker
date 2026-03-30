@@ -3,13 +3,14 @@ import OSLog
 import Security
 
 final class CheckvistCredentialStore {
-  static let keychainService = "uk.co.maybeitsadam.checkvist-focus"
+  static let keychainService = "uk.co.maybeitsadam.bar-tasker"
+  static let legacyKeychainService = "uk.co.maybeitsadam.checkvist-focus"
   static let remoteKeyDefaultsKey = "checkvistRemoteKey"
   static let ignoreKeychainInDebugDefaultsKey = "ignoreKeychainInDebug"
   static let onboardingCompletedDefaultsKey = "onboardingCompleted"
 
   private let defaults: UserDefaults
-  private let logger = Logger(subsystem: "uk.co.maybeitsadam.checkvist-focus", category: "keychain")
+  private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "keychain")
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
@@ -72,6 +73,24 @@ final class CheckvistCredentialStore {
       let data = result as? Data
     {
       return String(data: data, encoding: .utf8)
+    }
+
+    // Compatibility: migrate legacy entries scoped to the old app service name.
+    let legacyServiceQuery: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: Self.legacyKeychainService,
+      kSecAttrAccount as String: key,
+      kSecReturnData as String: true,
+    ]
+    var legacyServiceResult: AnyObject?
+    if SecItemCopyMatching(legacyServiceQuery as CFDictionary, &legacyServiceResult)
+      == errSecSuccess,
+      let legacyData = legacyServiceResult as? Data,
+      let legacyValue = String(data: legacyData, encoding: .utf8)
+    {
+      setKeychainValue(legacyValue, forKey: key)
+      SecItemDelete(legacyServiceQuery as CFDictionary)
+      return legacyValue
     }
 
     // Compatibility: migrate legacy entries that were saved without kSecAttrService.

@@ -39,6 +39,7 @@ enum CheckvistCommand: Equatable {
   case linkObsidianFolder
   case createObsidianFolder
   case clearObsidianFolderLink
+  case syncGoogleCalendar
   case unknown(String)
 }
 
@@ -62,6 +63,10 @@ enum CheckvistCommandEngine {
     .init(
       label: "Due next week", command: "due next week", preview: "Set due date to next week",
       keybind: "dd", submitImmediately: true),
+    .init(
+      label: "Due today at time", command: "due today ",
+      preview: "Set due date with time (for example 14:30 or 9am)", keybind: "dt",
+      submitImmediately: false),
     .init(
       label: "Clear due date", command: "clear due", preview: "Remove due date", keybind: "dd",
       submitImmediately: true),
@@ -101,6 +106,10 @@ enum CheckvistCommandEngine {
     .init(
       label: "Clear Obsidian folder link", command: "clear obsidian folder",
       preview: "Remove the linked folder for this task subtree", keybind: nil,
+      submitImmediately: true),
+    .init(
+      label: "Add to Google Calendar", command: "sync google calendar",
+      preview: "Open Google Calendar with a prefilled event for selected task", keybind: "gc",
       submitImmediately: true),
     .init(
       label: "Switch list", command: "list ", preview: "Find and switch list", keybind: "Shift+L",
@@ -231,45 +240,257 @@ enum CheckvistCommandEngine {
     {
       return .clearObsidianFolderLink
     }
+    if cmd == "sync google calendar" || cmd == "google calendar" || cmd == "gcal"
+      || cmd == "open google calendar" || cmd == "calendar"
+    {
+      return .syncGoogleCalendar
+    }
     return .unknown(input)
   }
 
   static func resolveDueDate(_ input: String, now: Date = Date(), calendar: Calendar = .current)
     -> String
   {
+    let rawInput = input.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !rawInput.isEmpty else { return input }
+
     let cal = calendar
-    let isoFormatter: DateFormatter = {
+    let dateOnlyFormatter: DateFormatter = {
       let formatter = DateFormatter()
       formatter.calendar = cal
+      formatter.locale = Locale(identifier: "en_US_POSIX")
+      formatter.timeZone = cal.timeZone
       formatter.dateFormat = "yyyy-MM-dd"
       return formatter
     }()
+    let dateTimeFormatter: DateFormatter = {
+      let formatter = DateFormatter()
+      formatter.calendar = cal
+      formatter.locale = Locale(identifier: "en_US_POSIX")
+      formatter.timeZone = cal.timeZone
+      formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+      return formatter
+    }()
 
-    switch input.lowercased() {
-    case "today":
-      return isoFormatter.string(from: now)
-    case "tomorrow":
-      guard let date = cal.date(byAdding: .day, value: 1, to: now) else { return input }
-      return isoFormatter.string(from: date)
-    case "next week":
-      guard let date = cal.date(byAdding: .weekOfYear, value: 1, to: now) else { return input }
-      return isoFormatter.string(from: date)
-    case "next month":
-      guard let date = cal.date(byAdding: .month, value: 1, to: now) else { return input }
-      return isoFormatter.string(from: date)
-    case "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday":
-      let weekdays = [
-        "sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4,
-        "thursday": 5, "friday": 6, "saturday": 7,
-      ]
-      guard let target = weekdays[input.lowercased()] else { return input }
-      let current = cal.component(.weekday, from: now)
-      var diff = target - current
-      if diff <= 0 { diff += 7 }
-      guard let date = cal.date(byAdding: .day, value: diff, to: now) else { return input }
-      return isoFormatter.string(from: date)
-    default:
-      return input
+    let normalized = rawInput.lowercased()
+
+    if let relative = resolveRelativeDateExpression(normalized, now: now, calendar: cal) {
+      if let timeText = relative.timeText {
+        guard
+          let timeComponents = parseTimeComponents(from: timeText),
+          let dateTime = combine(date: relative.baseDate, with: timeComponents, calendar: cal)
+        else {
+          return rawInput
+        }
+        return dateTimeFormatter.string(from: dateTime)
+      }
+      return dateOnlyFormatter.string(from: relative.baseDate)
     }
+
+    if let relativeOffsetDate = resolveRelativeOffsetExpression(normalized, now: now, calendar: cal)
+    {
+      return dateTimeFormatter.string(from: relativeOffsetDate)
+    }
+
+    if let absolute = resolveAbsoluteDateExpression(normalized, calendar: cal) {
+      if let timeText = absolute.timeText {
+        guard
+          let timeComponents = parseTimeComponents(from: timeText),
+          let dateTime = combine(date: absolute.baseDate, with: timeComponents, calendar: cal)
+        else {
+          return rawInput
+        }
+        return dateTimeFormatter.string(from: dateTime)
+      }
+      return dateOnlyFormatter.string(from: absolute.baseDate)
+    }
+
+    if let timeComponents = parseTimeComponents(from: normalized),
+      let dateTime = combine(date: now, with: timeComponents, calendar: cal)
+    {
+      return dateTimeFormatter.string(from: dateTime)
+    }
+
+    return rawInput
+  }
+
+  private static func resolveRelativeDateExpression(
+    _ normalized: String,
+    now: Date,
+    calendar: Calendar
+  ) -> (baseDate: Date, timeText: String?)? {
+    if let timeText = timeSuffix(for: normalized, keyword: "today") {
+      return (now, timeText.isEmpty ? nil : timeText)
+    }
+    if let timeText = timeSuffix(for: normalized, keyword: "tomorrow"),
+      let date = calendar.date(byAdding: .day, value: 1, to: now)
+    {
+      return (date, timeText.isEmpty ? nil : timeText)
+    }
+    if let timeText = timeSuffix(for: normalized, keyword: "next week"),
+      let date = calendar.date(byAdding: .weekOfYear, value: 1, to: now)
+    {
+      return (date, timeText.isEmpty ? nil : timeText)
+    }
+    if let timeText = timeSuffix(for: normalized, keyword: "next month"),
+      let date = calendar.date(byAdding: .month, value: 1, to: now)
+    {
+      return (date, timeText.isEmpty ? nil : timeText)
+    }
+
+    let weekdays = [
+      "sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4,
+      "thursday": 5, "friday": 6, "saturday": 7,
+    ]
+    for (weekdayName, weekdayValue) in weekdays {
+      guard let timeText = timeSuffix(for: normalized, keyword: weekdayName) else { continue }
+      let currentWeekday = calendar.component(.weekday, from: now)
+      var diff = weekdayValue - currentWeekday
+      if diff <= 0 { diff += 7 }
+      guard let date = calendar.date(byAdding: .day, value: diff, to: now) else { continue }
+      return (date, timeText.isEmpty ? nil : timeText)
+    }
+
+    return nil
+  }
+
+  private static func resolveRelativeOffsetExpression(
+    _ normalized: String,
+    now: Date,
+    calendar: Calendar
+  ) -> Date? {
+    let pattern = #"^in\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+    let range = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
+    guard let match = regex.firstMatch(in: normalized, options: [], range: range) else {
+      return nil
+    }
+    guard
+      let amountRange = Range(match.range(at: 1), in: normalized),
+      let unitRange = Range(match.range(at: 2), in: normalized),
+      let amount = Int(normalized[amountRange]),
+      amount > 0
+    else {
+      return nil
+    }
+
+    let unit = String(normalized[unitRange])
+    let component: Calendar.Component
+    switch unit {
+    case "m", "min", "mins", "minute", "minutes":
+      component = .minute
+    case "h", "hr", "hrs", "hour", "hours":
+      component = .hour
+    case "d", "day", "days":
+      component = .day
+    default:
+      return nil
+    }
+
+    return calendar.date(byAdding: component, value: amount, to: now)
+  }
+
+  private static func resolveAbsoluteDateExpression(_ normalized: String, calendar: Calendar)
+    -> (baseDate: Date, timeText: String?)?
+  {
+    let datePart: String
+    let timePart: String?
+    if let separatorIndex = normalized.firstIndex(where: { $0 == " " || $0 == "t" }) {
+      datePart = String(normalized[..<separatorIndex])
+      let remainder = normalized[normalized.index(after: separatorIndex)...]
+      let trimmedRemainder = String(remainder).trimmingCharacters(in: .whitespaces)
+      timePart = trimmedRemainder.isEmpty ? nil : trimmedRemainder
+    } else {
+      datePart = normalized
+      timePart = nil
+    }
+
+    let components = datePart.split(separator: "-", omittingEmptySubsequences: false)
+    guard components.count == 3, components[0].count == 4 else { return nil }
+    guard
+      let year = Int(components[0]),
+      let month = Int(components[1]),
+      let day = Int(components[2])
+    else {
+      return nil
+    }
+
+    var dateComponents = DateComponents()
+    dateComponents.calendar = calendar
+    dateComponents.timeZone = calendar.timeZone
+    dateComponents.year = year
+    dateComponents.month = month
+    dateComponents.day = day
+    guard let date = calendar.date(from: dateComponents) else { return nil }
+    return (date, timePart)
+  }
+
+  private static func timeSuffix(for normalized: String, keyword: String) -> String? {
+    guard normalized == keyword || normalized.hasPrefix(keyword + " ") else { return nil }
+    return String(normalized.dropFirst(keyword.count)).trimmingCharacters(in: .whitespaces)
+  }
+
+  private static func parseTimeComponents(from rawTime: String) -> DateComponents? {
+    var normalized = rawTime.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if normalized.hasPrefix("at ") {
+      normalized = String(normalized.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    guard !normalized.isEmpty else { return nil }
+
+    if normalized == "noon" {
+      return DateComponents(hour: 12, minute: 0, second: 0)
+    }
+    if normalized == "midnight" {
+      return DateComponents(hour: 0, minute: 0, second: 0)
+    }
+
+    let twelveHourPattern = #"^(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap]m)$"#
+    if let captures = captureGroups(pattern: twelveHourPattern, in: normalized), captures.count >= 3
+    {
+      guard var hour = Int(captures[0]) else { return nil }
+      let minute = Int(captures[1]) ?? 0
+      let meridiem = captures[2]
+      if meridiem == "pm" && hour != 12 { hour += 12 }
+      if meridiem == "am" && hour == 12 { hour = 0 }
+      return DateComponents(hour: hour, minute: minute, second: 0)
+    }
+
+    let twentyFourHourPattern = #"^([01]?\d|2[0-3])(?::([0-5]\d))?$"#
+    if let captures = captureGroups(pattern: twentyFourHourPattern, in: normalized),
+      captures.count >= 2
+    {
+      guard let hour = Int(captures[0]) else { return nil }
+      let minute = Int(captures[1]) ?? 0
+      return DateComponents(hour: hour, minute: minute, second: 0)
+    }
+
+    return nil
+  }
+
+  private static func captureGroups(pattern: String, in text: String) -> [String]? {
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+    let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+    guard let match = regex.firstMatch(in: text, options: [], range: fullRange) else { return nil }
+
+    var groups: [String] = []
+    for captureIndex in 1..<match.numberOfRanges {
+      let captureRange = match.range(at: captureIndex)
+      guard captureRange.location != NSNotFound, let range = Range(captureRange, in: text) else {
+        groups.append("")
+        continue
+      }
+      groups.append(String(text[range]))
+    }
+    return groups
+  }
+
+  private static func combine(date: Date, with time: DateComponents, calendar: Calendar) -> Date? {
+    var components = calendar.dateComponents([.year, .month, .day], from: date)
+    components.calendar = calendar
+    components.timeZone = calendar.timeZone
+    components.hour = time.hour
+    components.minute = time.minute
+    components.second = time.second ?? 0
+    return calendar.date(from: components)
   }
 }

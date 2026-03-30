@@ -43,8 +43,8 @@ jobs:
 
       - name: Build app
         run: |
-          xcodebuild -project 'checkvist focus.xcodeproj' \
-            -scheme 'checkvist focus' \
+          xcodebuild -project 'Bar Tasker.xcodeproj' \
+            -scheme 'Bar Tasker' \
             -configuration Debug \
             -destination 'platform=macOS' \
             build

@@ -3,20 +3,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$ROOT_DIR"
-XCODEPROJ="$PROJECT_DIR/checkvist focus.xcodeproj"
-SCHEME="checkvist focus"
-APP_NAME="checkvist focus.app"
-VOL_NAME="checkvist focus"
+XCODEPROJ="$PROJECT_DIR/Bar Tasker.xcodeproj"
+SCHEME="Bar Tasker"
+APP_NAME="Bar Tasker.app"
+VOL_NAME="Bar Tasker"
 
 VERSION="${1:-}"
 if [[ -n "$VERSION" ]]; then
-  DMG_BASENAME="checkvist-focus-v${VERSION}"
+  DMG_BASENAME="bar-tasker-v${VERSION}"
 else
-  DMG_BASENAME="checkvist-focus-$(date +%Y%m%d-%H%M%S)"
+  DMG_BASENAME="bar-tasker-$(date +%Y%m%d-%H%M%S)"
 fi
 
 BUILD_DIR="$PROJECT_DIR/build"
-DERIVED_DIR="/tmp/checkvist-focus-derived-release"
+DERIVED_DIR="/tmp/bar-tasker-derived-release"
 STAGE_DIR="$BUILD_DIR/dmg-stage"
 RW_DMG="$BUILD_DIR/${DMG_BASENAME}-rw.dmg"
 FINAL_DMG="$BUILD_DIR/${DMG_BASENAME}.dmg"

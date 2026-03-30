@@ -5,6 +5,13 @@ import SwiftUI
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+  private enum RegisteredHotkeyID: UInt32 {
+    case togglePopover = 1
+    case quickAdd = 2
+  }
+
+  private static let globalHotkeySignature = OSType(0x4356_464B)  // "CVFK"
+
   static private(set) var shared: AppDelegate!
 
   override init() {
@@ -12,19 +19,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     Self.shared = self
   }
 
-  lazy var checkvistManager: CheckvistManager = CheckvistManager()
+  private let pluginRegistry = FocusPluginRegistry.nativeFirst()
+  lazy var checkvistManager: CheckvistManager = CheckvistManager(pluginRegistry: pluginRegistry)
   private var statusItem: NSStatusItem!
   private var window: NSWindow?
   private var preferencesWindow: NSWindow?
   private var keyMonitor: Any?
   private var clickMonitor: Any?
   private var globalHotkeyRef: EventHotKeyRef?
+  private var quickAddHotkeyRef: EventHotKeyRef?
   private var cancellables = Set<AnyCancellable>()
   private var lastToggleTime: Date = Date.distantPast
   private var pendingPopoverResize: DispatchWorkItem?
   private var explicitQuitRequested = false
   private var lastAutoRefreshTime: Date = Date.distantPast
-  private let logger = Logger(subsystem: "uk.co.maybeitsadam.checkvist-focus", category: "keyboard")
+  private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "keyboard")
 
   private var currentPopoverContentSize: NSSize {
     NSSize(
@@ -34,6 +43,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    if BarTaskerMCPServer.isLaunchMode(arguments: ProcessInfo.processInfo.arguments) {
+      launchMCPServerMode()
+      return
+    }
+
     NSApp.setActivationPolicy(.accessory)
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     statusItem.button?.title = "…"
@@ -57,9 +71,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
     InstallEventHandler(
       GetApplicationEventTarget(),
-      { _, _, _ -> OSStatus in
+      { _, eventRef, _ -> OSStatus in
+        guard let eventRef else { return noErr }
+        var hotKeyID = EventHotKeyID()
+        let status = GetEventParameter(
+          eventRef,
+          EventParamName(kEventParamDirectObject),
+          EventParamType(typeEventHotKeyID),
+          nil,
+          MemoryLayout<EventHotKeyID>.size,
+          nil,
+          &hotKeyID
+        )
+        guard status == noErr else { return noErr }
         Task { @MainActor in
-          AppDelegate.shared.togglePopover()
+          AppDelegate.shared.handleGlobalHotkeyPressed(id: hotKeyID.id)
         }
         return noErr
       }, 1, &eventType, nil, nil)
@@ -71,31 +97,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       return self.handleSupplementalKey(event: event) ? nil : event
     }
 
-    // Register global hotkey if enabled
-    if checkvistManager.globalHotkeyEnabled {
-      registerGlobalHotkey()
-    }
+    // Register global hotkeys.
+    registerGlobalHotkeys()
     checkvistManager.$globalHotkeyEnabled
       .dropFirst()
       .receive(on: RunLoop.main)
-      .sink { [weak self] enabled in
-        if enabled { self?.registerGlobalHotkey() } else { self?.unregisterGlobalHotkey() }
+      .sink { [weak self] _ in
+        self?.registerGlobalHotkeys()
       }
       .store(in: &cancellables)
 
-    // Re-register when hotkey key/modifiers change
+    // Re-register when hotkey key/modifiers change.
     checkvistManager.$globalHotkeyKeyCode
       .dropFirst().receive(on: RunLoop.main)
       .sink { [weak self] _ in
-        guard let self, self.checkvistManager.globalHotkeyEnabled else { return }
-        self.registerGlobalHotkey()
+        self?.registerGlobalHotkeys()
       }
       .store(in: &cancellables)
     checkvistManager.$globalHotkeyModifiers
       .dropFirst().receive(on: RunLoop.main)
       .sink { [weak self] _ in
-        guard let self, self.checkvistManager.globalHotkeyEnabled else { return }
-        self.registerGlobalHotkey()
+        self?.registerGlobalHotkeys()
+      }
+      .store(in: &cancellables)
+    checkvistManager.$quickAddHotkeyEnabled
+      .dropFirst().receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        self?.registerGlobalHotkeys()
+      }
+      .store(in: &cancellables)
+    checkvistManager.$quickAddHotkeyKeyCode
+      .dropFirst().receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        self?.registerGlobalHotkeys()
+      }
+      .store(in: &cancellables)
+    checkvistManager.$quickAddHotkeyModifiers
+      .dropFirst().receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        self?.registerGlobalHotkeys()
       }
       .store(in: &cancellables)
 
@@ -132,27 +172,71 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
   }
 
-  // MARK: - Global Hotkey (⌥Space by default)
-
-  private func registerGlobalHotkey() {
-    unregisterGlobalHotkey()
-
-    let hotKeyID = EventHotKeyID(
-      signature: OSType(0x4356_464B),  // "CVFK"
-      id: 1)
-    var ref: EventHotKeyRef?
-    let keyCode = UInt32(checkvistManager.globalHotkeyKeyCode)
-    let modifiers = UInt32(checkvistManager.globalHotkeyModifiers)
-    let status = RegisterEventHotKey(
-      keyCode, modifiers, hotKeyID,
-      GetApplicationEventTarget(), 0, &ref)
-    if status == noErr { globalHotkeyRef = ref }
+  private func launchMCPServerMode() {
+    NSApp.setActivationPolicy(.prohibited)
+    Task.detached(priority: .userInitiated) {
+      await BarTaskerMCPServer().run()
+      await MainActor.run {
+        NSApp.terminate(nil)
+      }
+    }
   }
 
-  private func unregisterGlobalHotkey() {
+  // MARK: - Global Hotkeys
+
+  private func handleGlobalHotkeyPressed(id: UInt32) {
+    guard let registeredID = RegisteredHotkeyID(rawValue: id) else { return }
+    switch registeredID {
+    case .togglePopover:
+      togglePopover()
+    case .quickAdd:
+      triggerQuickAddFromHotkey()
+    }
+  }
+
+  private func registerGlobalHotkeys() {
+    unregisterGlobalHotkeys()
+
+    if checkvistManager.globalHotkeyEnabled {
+      globalHotkeyRef = registerHotkey(
+        id: .togglePopover,
+        keyCode: checkvistManager.globalHotkeyKeyCode,
+        modifiers: checkvistManager.globalHotkeyModifiers
+      )
+    }
+    if checkvistManager.quickAddHotkeyEnabled {
+      quickAddHotkeyRef = registerHotkey(
+        id: .quickAdd,
+        keyCode: checkvistManager.quickAddHotkeyKeyCode,
+        modifiers: checkvistManager.quickAddHotkeyModifiers
+      )
+    }
+  }
+
+  private func registerHotkey(id: RegisteredHotkeyID, keyCode: Int, modifiers: Int)
+    -> EventHotKeyRef?
+  {
+    var hotKeyRef: EventHotKeyRef?
+    let hotKeyID = EventHotKeyID(signature: Self.globalHotkeySignature, id: id.rawValue)
+    let status = RegisterEventHotKey(
+      UInt32(keyCode),
+      UInt32(modifiers),
+      hotKeyID,
+      GetApplicationEventTarget(),
+      0,
+      &hotKeyRef
+    )
+    return status == noErr ? hotKeyRef : nil
+  }
+
+  private func unregisterGlobalHotkeys() {
     if let ref = globalHotkeyRef {
       UnregisterEventHotKey(ref)
       globalHotkeyRef = nil
+    }
+    if let ref = quickAddHotkeyRef {
+      UnregisterEventHotKey(ref)
+      quickAddHotkeyRef = nil
     }
   }
 
@@ -407,7 +491,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   func closeWindow() {
     window?.orderOut(nil)
-    if [.addSibling, .addChild].contains(checkvistManager.quickEntryMode) {
+    if [.addSibling, .addChild, .quickAddDefault, .quickAddSpecific].contains(
+      checkvistManager.quickEntryMode)
+    {
       checkvistManager.filterText = ""
       checkvistManager.quickEntryMode = .search
     }
@@ -427,6 +513,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
           keyEquivalent: "O")
         obsidianItem.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(obsidianItem)
+      }
+      if checkvistManager.googleCalendarIntegrationEnabled {
+        let googleCalendarItem = NSMenuItem(
+          title: "Add to Google Calendar",
+          action: #selector(menuAddToGoogleCalendar),
+          keyEquivalent: "G"
+        )
+        googleCalendarItem.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(googleCalendarItem)
       }
       let settingsItem = NSMenuItem(
         title: "Preferences...", action: #selector(menuSettings), keyEquivalent: ",")
@@ -460,6 +555,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
   }
 
+  @objc func menuAddToGoogleCalendar() {
+    checkvistManager.openCurrentTaskInGoogleCalendar()
+    updateTitle()
+  }
+
   @objc func menuSettings() {
     closeWindow()
     let window = makePreferencesWindowIfNeeded()
@@ -491,7 +591,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     window.tabbingMode = .disallowed
     window.delegate = self
     window.contentViewController = hostingController
-    window.setFrameAutosaveName("CheckvistFocusPreferencesWindow")
+    window.setFrameAutosaveName("BarTaskerPreferencesWindow")
     preferencesWindow = window
     return window
   }
@@ -524,6 +624,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     NSApp.terminate(nil)
   }
 
+  private func triggerQuickAddFromHotkey() {
+    showPopoverWindow()
+    _ = checkvistManager.beginQuickAddEntry()
+    schedulePopoverResize()
+  }
+
+  private func showPopoverWindow() {
+    let w = makeWindowIfNeeded()
+    guard let button = statusItem.button else { return }
+    if w.isVisible {
+      w.makeKeyAndOrderFront(nil)
+      NSApp.activate(ignoringOtherApps: true)
+      return
+    }
+
+    // Position the window directly below the status item, aligned to the right edge.
+    let btnRect = button.convert(button.bounds, to: nil)
+    guard let buttonWindow = button.window else { return }
+    let screenRect = buttonWindow.convertToScreen(btnRect)
+    let paddingY: CGFloat = 4
+    let trX = screenRect.maxX + 10
+    let trY = screenRect.minY - paddingY
+
+    w.setAnchoredTopRight(
+      contentSize: currentPopoverContentSize, topRight: NSPoint(x: trX, y: trY), display: true)
+    w.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
   func togglePopover() {
     let now = Date()
     guard now.timeIntervalSince(lastToggleTime) > 0.2 else { return }
@@ -532,21 +661,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let w = makeWindowIfNeeded()
     if w.isVisible {
       closeWindow()
-    } else if let button = statusItem.button {
-      // Position the window directly below the button, aligned to its right edge
-      let btnRect = button.convert(button.bounds, to: nil)  // To window coords
-      guard let buttonWindow = button.window else { return }
-      let screenRect = buttonWindow.convertToScreen(btnRect)  // To screen coords
-
-      let paddingY: CGFloat = 4  // Small gap below menu bar
-      let trX = screenRect.maxX + 10  // Align right edges (slightly inset for aesthetics)
-      let trY = screenRect.minY - paddingY
-
-      w.setAnchoredTopRight(
-        contentSize: currentPopoverContentSize, topRight: NSPoint(x: trX, y: trY), display: true)
-
-      w.makeKeyAndOrderFront(nil)
-      NSApp.activate(ignoringOtherApps: true)
+    } else {
+      showPopoverWindow()
     }
   }
 
@@ -587,7 +703,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if let m = keyMonitor { NSEvent.removeMonitor(m) }
     if let m = clickMonitor { NSEvent.removeMonitor(m) }
     pendingPopoverResize?.cancel()
-    unregisterGlobalHotkey()
+    unregisterGlobalHotkeys()
   }
 }
 

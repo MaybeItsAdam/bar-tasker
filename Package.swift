@@ -2,19 +2,19 @@
 import PackageDescription
 
 let package = Package(
-  name: "checkvist-focus-corelogic",
+  name: "bar-tasker-corelogic",
   platforms: [.macOS(.v15)],
   products: [
-    .library(name: "CheckvistFocusCore", targets: ["CheckvistFocusCore"])
+    .library(name: "BarTaskerCore", targets: ["BarTaskerCore"])
   ],
   targets: [
     .target(
-      name: "CheckvistFocusCore",
-      path: "checkvist focus/CoreLogic"
+      name: "BarTaskerCore",
+      path: "Bar Tasker/CoreLogic"
     ),
     .testTarget(
-      name: "CheckvistFocusCoreTests",
-      dependencies: ["CheckvistFocusCore"],
+      name: "BarTaskerCoreTests",
+      dependencies: ["BarTaskerCore"],
       path: "corelogic-tests"
     ),
   ]

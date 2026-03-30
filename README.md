@@ -1,6 +1,6 @@
-# <img src="checkvist%20focus/Assets.xcassets/AppIcon.appiconset/ios-1024.png" alt="Checkvist Focus logo" width="28" /> Checkvist Focus
+# <img src="Bar%20Tasker/Assets.xcassets/AppIcon.appiconset/ios-1024.png" alt="Bar Tasker logo" width="28" /> Bar Tasker
 
-A keyboard-first macOS menu bar app for working your Checkvist lists quickly, with due/tag/priority views, timers, and Obsidian export.
+A keyboard-first macOS menu bar app for working your Checkvist lists quickly, with due/tag/priority views, timers, Obsidian export, and Google Calendar handoff.
 
 ## Highlights
 
@@ -9,6 +9,9 @@ A keyboard-first macOS menu bar app for working your Checkvist lists quickly, wi
 - Due view buckets: **Overdue, ASAP, Today, Tomorrow, Next 7 days, Future**.
 - Priority ranking with automatic shifting (`1-9`, `=`, `-`).
 - Obsidian integration with note export, folder linking, and offline fallback.
+- Google Calendar integration to create prefilled events from tasks.
+- Native-first plugin architecture with built-in Checkvist sync, Obsidian, and Google Calendar plugins.
+- Native MCP integration plugin with an embedded MCP stdio server for AI assistants.
 - Global hotkey support for quick popover open/close.
 
 ## Keyboard
@@ -45,7 +48,10 @@ A keyboard-first macOS menu bar app for working your Checkvist lists quickly, wi
 |-----|--------|
 | `/` | Focus search |
 | `H` | Toggle hide-future |
+| `Shift+A` | Quick add using configured quick-add location |
 | `dd` | Open due command |
+| `dt` | Open due command prefilled with `today` |
+| `gc` | Add selected task to Google Calendar |
 | `gg` | Open first URL in task |
 | `gt` / `gu` | Open tag / untag command |
 | `sc` | Toggle breadcrumb context on rows (if enabled in Preferences) |
@@ -81,7 +87,7 @@ A keyboard-first macOS menu bar app for working your Checkvist lists quickly, wi
 Command mode supports:
 
 - `done`, `undone`, `invalidate`
-- `due <value>`, `clear due`
+- `due <value>`, `clear due` (`due today 14:30`, `due tomorrow 9am`, `due 2026-04-01 17:00`)
 - `tag <name>`, `untag <name>`
 - `list <name>`
 - `priority <1-9>`, `priority back`, `clear priority`
@@ -90,6 +96,13 @@ Command mode supports:
 - `link obsidian folder`
 - `create obsidian folder`
 - `clear obsidian folder`
+- `sync google calendar`
+
+## Google Calendar integration
+
+- Opens Google Calendar in your browser with a prefilled event template.
+- Uses due date/time for event timing when present; otherwise uses a short default event.
+- Can be triggered from command mode (`sync google calendar`) or `gc`.
 
 ## Obsidian integration
 
@@ -101,6 +114,20 @@ Command mode supports:
   - uses cached task/note payload when network refresh fails,
   - tracks pending sync queue and retries when connectivity returns.
 
+## Plugin system
+
+- Integrations are now routed through plugin protocols.
+- Built-in defaults are `NativeCheckvistSyncPlugin`, `NativeObsidianIntegrationPlugin`, `NativeGoogleCalendarIntegrationPlugin`, and `NativeMCPIntegrationPlugin`.
+- Plugin contracts and wiring live under `Bar Tasker/Plugins/`.
+- See [Plugin Development Guide](docs/plugins.md) to create and register custom plugins.
+
+## MCP server
+
+- Bar Tasker itself can run as an MCP server via `--mcp-server`.
+- MCP plugin command resolution is app-first, with optional script fallback for local debug/dev flows.
+- Preferences includes MCP plugin controls to refresh app command path, copy client config, and open the guide.
+- See [MCP Server Guide](docs/mcp-server.md) for setup, env vars, and client config.
+
 ## Preferences
 
 Open **Preferences** from the menu bar context menu or `Cmd+,`.
@@ -111,26 +138,29 @@ Configure:
 2. Checkvist remote API key
 3. Checklist selection / list ID
 4. Obsidian inbox folder
-5. Global hotkey and app preferences
+5. Global hotkey and quick-add hotkey
+6. Quick-add target location (list root or specific parent task ID)
+7. MCP plugin controls (app command detection, client config copy, guide link)
+8. Other app preferences
 
 ## Installation
 
 Because this app is open-source and unsigned, Gatekeeper may block first launch.
 
-1. Download the latest `.dmg` from [Releases](https://github.com/MaybeItsAdam/Checkvist-focus/releases).
-2. Drag `Checkvist Focus.app` to `Applications`.
+1. Download the latest `.dmg` from [Releases](https://github.com/MaybeItsAdam/bar-tasker/releases).
+2. Drag `Bar Tasker.app` to `Applications`.
 3. Right-click the app and choose **Open** once.
 
 Or:
 
 ```bash
-xattr -cr /Applications/"Checkvist Focus.app"
+xattr -cr /Applications/"Bar Tasker.app"
 ```
 
 ## Build
 
 ```bash
-xcodebuild -project 'checkvist focus.xcodeproj' -scheme 'checkvist focus' -configuration Debug -destination 'platform=macOS' build
+xcodebuild -project 'Bar Tasker.xcodeproj' -scheme 'Bar Tasker' -configuration Debug -destination 'platform=macOS' build
 swift test
 ```
 

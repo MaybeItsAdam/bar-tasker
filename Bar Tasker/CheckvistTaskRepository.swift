@@ -9,8 +9,8 @@ struct CheckvistTaskCachePayload: Codable {
 
 struct CheckvistTaskRepository {
   private let logger = Logger(
-    subsystem: "uk.co.maybeitsadam.checkvist-focus", category: "task-repository")
-  private static let userAgent = "CheckvistFocus/1.0 (Macintosh; Mac OS X)"
+    subsystem: "uk.co.maybeitsadam.bar-tasker", category: "task-repository")
+  private static let userAgent = "BarTasker/1.0 (Macintosh; Mac OS X)"
   private static let cacheFreshnessInterval: TimeInterval = 15 * 60
 
   func fetchTasks(
@@ -82,7 +82,7 @@ struct CheckvistTaskRepository {
     else { return nil }
 
     let containerDirectory = appSupportDirectory.appendingPathComponent(
-      "Checkvist Focus", isDirectory: true)
+      "Bar Tasker", isDirectory: true)
 
     do {
       try fileManager.createDirectory(at: containerDirectory, withIntermediateDirectories: true)

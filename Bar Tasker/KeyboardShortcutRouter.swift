@@ -371,8 +371,17 @@ struct KeyboardShortcutRouter {
           manager.filterText = "due "
           manager.isQuickEntryFocused = true
           return true
+        case "dt":
+          manager.quickEntryMode = .command
+          manager.commandSuggestionIndex = 0
+          manager.filterText = "due today "
+          manager.isQuickEntryFocused = true
+          return true
         case "gg":
           manager.openTaskLink()
+          return true
+        case "gc":
+          manager.openCurrentTaskInGoogleCalendar()
           return true
         case "gt":
           manager.quickEntryMode = .command
@@ -502,6 +511,12 @@ struct KeyboardShortcutRouter {
       manager.commandSuggestionIndex = 0
       manager.filterText = "list "
       manager.isQuickEntryFocused = true
+      return true
+    }
+
+    // Shift+A - quick add using the configured quick add location.
+    if chars == "a" && shift && !ctrl && !cmd && !option && !isFocused {
+      _ = manager.beginQuickAddEntry()
       return true
     }
 
