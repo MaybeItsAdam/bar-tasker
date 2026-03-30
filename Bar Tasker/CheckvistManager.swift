@@ -314,6 +314,14 @@ class CheckvistManager: ObservableObject {
     }
   }
 
+  enum OnboardingDialog: String, CaseIterable, Identifiable {
+    case checkvist
+    case obsidian
+    case googleCalendar
+
+    var id: String { rawValue }
+  }
+
   @Published var username: String
   @Published var remoteKey: String
   @Published var listId: String
@@ -411,6 +419,7 @@ class CheckvistManager: ObservableObject {
   private static let quickAddHotkeyModifiersDefaultsKey = "quickAddHotkeyModifiers"
   private static let quickAddLocationModeDefaultsKey = "quickAddLocationModeRawValue"
   private static let quickAddSpecificParentTaskIdDefaultsKey = "quickAddSpecificParentTaskId"
+  private static let dismissedOnboardingDialogsDefaultsKey = "dismissedOnboardingDialogs"
 
   // MARK: - Timer
   @Published var timedTaskId: Int? = nil
@@ -490,10 +499,13 @@ class CheckvistManager: ObservableObject {
   /// Max width of the menu bar text
   @Published var maxTitleWidth: Double
   @Published var onboardingCompleted: Bool
+  @Published var activeOnboardingDialog: OnboardingDialog?
   @Published private(set) var obsidianInboxPath: String
   @Published private(set) var mcpServerCommandPath: String
   @Published private(set) var pendingObsidianSyncTaskIds: [Int]
   @Published private(set) var isNetworkReachable: Bool = true
+
+  private var dismissedOnboardingDialogs: Set<OnboardingDialog>
 
   var hasCredentials: Bool {
     !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -529,9 +541,8 @@ class CheckvistManager: ObservableObject {
     )
   }
 
-  var needsInitialSetup: Bool {
-    !onboardingCompleted || !canAttemptLogin || !hasListSelection
-  }
+  // Setup is non-blocking: the app can always run in offline-first mode.
+  var needsInitialSetup: Bool { false }
 
   /// Tasks visible at the current level, sorted by position
   var currentLevelTasks: [CheckvistTask] {
@@ -1049,7 +1060,7 @@ class CheckvistManager: ObservableObject {
     self.googleCalendarIntegrationEnabled =
       UserDefaults.standard.object(forKey: Self.googleCalendarIntegrationEnabledDefaultsKey)
       as? Bool
-      ?? true
+      ?? false
     self.mcpIntegrationEnabled =
       UserDefaults.standard.object(forKey: Self.mcpIntegrationEnabledDefaultsKey)
       as? Bool
@@ -1112,6 +1123,12 @@ class CheckvistManager: ObservableObject {
       TimerMode(rawValue: UserDefaults.standard.object(forKey: "timerMode") as? Int ?? 0)
       ?? .visible
     self.timerByTaskId = Self.timerDictionaryFromDefaults()
+    self.activeOnboardingDialog = nil
+    let persistedDismissedDialogs =
+      UserDefaults.standard.stringArray(forKey: Self.dismissedOnboardingDialogsDefaultsKey) ?? []
+    self.dismissedOnboardingDialogs = Set(
+      persistedDismissedDialogs.compactMap(OnboardingDialog.init(rawValue:))
+    )
 
     let useKeychainStorageAtInit: Bool
     #if DEBUG
@@ -1130,6 +1147,9 @@ class CheckvistManager: ObservableObject {
 
     setupBindings()
     setupNetworkMonitor()
+    Task { @MainActor [weak self] in
+      self?.presentOnboardingDialogIfNeeded()
+    }
   }
 
   convenience init() {
@@ -1146,6 +1166,7 @@ class CheckvistManager: ObservableObject {
       .sink { [weak self] value in
         UserDefaults.standard.set(value, forKey: "checkvistUsername")
         self?.checkvistSyncPlugin.clearAuthentication()
+        self?.refreshOnboardingDialogState()
       }.store(in: &cancellables)
     $remoteKey
       .dropFirst()
@@ -1154,6 +1175,7 @@ class CheckvistManager: ObservableObject {
         guard let self else { return }
         self.checkvistSyncPlugin.clearAuthentication()
         self.credentialStore.persistRemoteKey(value, useKeychainStorage: self.usesKeychainStorage)
+        self.refreshOnboardingDialogState()
       }.store(in: &cancellables)
     $listId
       .dropFirst()
@@ -1161,17 +1183,20 @@ class CheckvistManager: ObservableObject {
         UserDefaults.standard.set(value, forKey: "checkvistListId")
         self?.loadPriorityQueue(for: value)
         self?.loadPendingObsidianSyncQueue(for: value)
+        self?.refreshOnboardingDialogState()
       }.store(in: &cancellables)
     $confirmBeforeDelete.sink { UserDefaults.standard.set($0, forKey: "confirmBeforeDelete") }
       .store(in: &cancellables)
     $obsidianIntegrationEnabled
-      .sink {
-        UserDefaults.standard.set($0, forKey: Self.obsidianIntegrationEnabledDefaultsKey)
+      .sink { [weak self] value in
+        UserDefaults.standard.set(value, forKey: Self.obsidianIntegrationEnabledDefaultsKey)
+        self?.refreshOnboardingDialogState()
       }
       .store(in: &cancellables)
     $googleCalendarIntegrationEnabled
-      .sink {
-        UserDefaults.standard.set($0, forKey: Self.googleCalendarIntegrationEnabledDefaultsKey)
+      .sink { [weak self] value in
+        UserDefaults.standard.set(value, forKey: Self.googleCalendarIntegrationEnabledDefaultsKey)
+        self?.refreshOnboardingDialogState()
       }
       .store(in: &cancellables)
     $mcpIntegrationEnabled
@@ -1448,6 +1473,10 @@ class CheckvistManager: ObservableObject {
       UserDefaults.standard.removeObject(forKey: "checkvistListId")
       UserDefaults.standard.removeObject(
         forKey: CheckvistCredentialStore.onboardingCompletedDefaultsKey)
+      dismissedOnboardingDialogs = []
+      activeOnboardingDialog = nil
+      UserDefaults.standard.removeObject(forKey: Self.dismissedOnboardingDialogsDefaultsKey)
+      presentOnboardingDialogIfNeeded()
     #endif
   }
 
@@ -1457,6 +1486,50 @@ class CheckvistManager: ObservableObject {
 
   @MainActor func markOnboardingRequired() {
     onboardingCompleted = false
+  }
+
+  // MARK: - Offline-first onboarding dialogs
+
+  @MainActor func presentOnboardingDialogIfNeeded() {
+    guard activeOnboardingDialog == nil else { return }
+    for dialog in OnboardingDialog.allCases where shouldPresentOnboardingDialog(dialog) {
+      activeOnboardingDialog = dialog
+      return
+    }
+  }
+
+  @MainActor func dismissActiveOnboardingDialog(permanently: Bool) {
+    guard let dialog = activeOnboardingDialog else { return }
+    if permanently {
+      dismissedOnboardingDialogs.insert(dialog)
+      persistDismissedOnboardingDialogs()
+    }
+    activeOnboardingDialog = nil
+    presentOnboardingDialogIfNeeded()
+  }
+
+  private func shouldPresentOnboardingDialog(_ dialog: OnboardingDialog) -> Bool {
+    guard !dismissedOnboardingDialogs.contains(dialog) else { return false }
+    switch dialog {
+    case .checkvist:
+      return !canAttemptLogin || !hasListSelection
+    case .obsidian:
+      return !obsidianIntegrationEnabled || obsidianInboxPath.isEmpty
+    case .googleCalendar:
+      return !googleCalendarIntegrationEnabled
+    }
+  }
+
+  private func persistDismissedOnboardingDialogs() {
+    let rawValues = dismissedOnboardingDialogs.map(\.rawValue).sorted()
+    UserDefaults.standard.set(rawValues, forKey: Self.dismissedOnboardingDialogsDefaultsKey)
+  }
+
+  @MainActor private func refreshOnboardingDialogState() {
+    if let activeOnboardingDialog, !shouldPresentOnboardingDialog(activeOnboardingDialog) {
+      self.activeOnboardingDialog = nil
+    }
+    presentOnboardingDialogIfNeeded()
   }
 
   // MARK: - Navigation
@@ -2099,7 +2172,7 @@ class CheckvistManager: ObservableObject {
 
   @MainActor private func ensureGoogleCalendarIntegrationEnabled() -> Bool {
     guard googleCalendarIntegrationEnabled else {
-      errorMessage = "Enable Google Calendar integration in onboarding or Preferences first."
+      errorMessage = "Enable Google Calendar integration in Preferences first."
       return false
     }
     return true
@@ -2182,7 +2255,7 @@ class CheckvistManager: ObservableObject {
 
   @MainActor private func ensureObsidianIntegrationEnabled() -> Bool {
     guard obsidianIntegrationEnabled else {
-      errorMessage = "Enable Obsidian integration in onboarding or Preferences first."
+      errorMessage = "Enable Obsidian integration in Preferences first."
       return false
     }
     return true
@@ -2193,6 +2266,7 @@ class CheckvistManager: ObservableObject {
     do {
       if let selectedPath = try obsidianPlugin.chooseInboxFolder() {
         obsidianInboxPath = selectedPath
+        refreshOnboardingDialogState()
         errorMessage = nil
         return true
       }
@@ -2206,6 +2280,7 @@ class CheckvistManager: ObservableObject {
   @MainActor func clearObsidianInboxFolder() {
     obsidianPlugin.clearInboxFolder()
     obsidianInboxPath = ""
+    refreshOnboardingDialogState()
   }
 
   @MainActor func linkCurrentTaskToObsidianFolder(taskId explicitTaskId: Int? = nil) {

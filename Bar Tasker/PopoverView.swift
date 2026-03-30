@@ -304,7 +304,6 @@ struct QuickEntryField: NSViewRepresentable {
 
 struct PopoverView: View {
   @EnvironmentObject var manager: CheckvistManager
-  @State private var setupLoading = false
 
   var body: some View {
     let panelHeight = PopoverLayout.preferredHeight(for: manager)
@@ -328,14 +327,9 @@ struct PopoverView: View {
         Divider()
       }
 
-      if manager.needsInitialSetup {
-        setupView
-          .frame(maxHeight: .infinity, alignment: .top)
-      } else {
-        // Task list — keyboard navigable
-        taskList
-          .frame(maxHeight: .infinity, alignment: .top)
-      }
+      // Task list — keyboard navigable
+      taskList
+        .frame(maxHeight: .infinity, alignment: .top)
       Divider()
 
       // Delete confirmation banner
@@ -344,7 +338,7 @@ struct PopoverView: View {
       }
 
       // Prompt + autocomplete at bottom so tasks remain visible above.
-      if !manager.pendingDeleteConfirmation && !manager.needsInitialSetup {
+      if !manager.pendingDeleteConfirmation {
         let shouldShowPrompt =
           ((manager.quickEntryMode == .search
             || manager.quickEntryMode == .quickAddDefault
@@ -361,99 +355,60 @@ struct PopoverView: View {
     .frame(width: PopoverLayout.width, height: panelHeight, alignment: .top)
     .background(.regularMaterial)
     .clipShape(RoundedRectangle(cornerRadius: PopoverLayout.cornerRadius))
+    .onAppear {
+      manager.presentOnboardingDialogIfNeeded()
+    }
+    .alert(item: $manager.activeOnboardingDialog) { dialog in
+      onboardingAlert(for: dialog)
+    }
   }
 
-  var setupView: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("Welcome to Bar Tasker")
-        .font(.headline)
-      Text("Set up your account once, choose a checklist by name, and pick optional integrations.")
-        .font(.caption)
-        .foregroundColor(.secondary)
-
-      TextField("Username (email)", text: $manager.username)
-        .textFieldStyle(.roundedBorder)
-        .autocorrectionDisabled()
-      SecureField("OpenAPI key", text: $manager.remoteKey)
-        .textFieldStyle(.roundedBorder)
-
-      Button("Connect & Load Lists") {
-        Task {
-          setupLoading = true
-          defer { setupLoading = false }
-          let ok = await manager.login()
-          guard ok else { return }
-          await manager.fetchLists()
-          if manager.listId.isEmpty, let first = manager.availableLists.first {
-            manager.selectList(first)
-          }
+  private func onboardingAlert(for dialog: CheckvistManager.OnboardingDialog) -> Alert {
+    switch dialog {
+    case .checkvist:
+      return Alert(
+        title: Text("Connect Checkvist"),
+        message: Text(
+          "Bar Tasker works offline first. Connect Checkvist now, or dismiss and do it later in Preferences."
+        ),
+        primaryButton: .default(Text("Open Preferences")) {
+          AppDelegate.shared.menuSettings()
+          manager.dismissActiveOnboardingDialog(permanently: true)
+        },
+        secondaryButton: .cancel(Text("Not Now")) {
+          manager.dismissActiveOnboardingDialog(permanently: true)
         }
-      }
-      .disabled(setupLoading || !manager.canAttemptLogin)
-
-      if !manager.availableLists.isEmpty {
-        Picker("Checklist", selection: $manager.listId) {
-          ForEach(manager.availableLists) { list in
-            Text("\(list.name) (\(list.id))").tag(String(list.id))
-          }
-        }
-        .pickerStyle(.menu)
-
-        Button("Finish Setup") {
-          Task {
-            guard !manager.listId.isEmpty else { return }
-            manager.markOnboardingCompleted()
-            await manager.fetchTopTask()
-          }
-        }
-        .disabled(manager.listId.isEmpty)
-      } else {
-        Text("No lists loaded yet. You can also paste a List ID in Settings.")
-          .font(.caption2)
-          .foregroundColor(.secondary)
-      }
-
-      Divider()
-
-      Toggle("Enable Obsidian integration", isOn: $manager.obsidianIntegrationEnabled)
-      Toggle(
-        "Enable Google Calendar integration",
-        isOn: $manager.googleCalendarIntegrationEnabled
       )
-
-      if manager.obsidianIntegrationEnabled {
-        if manager.obsidianInboxPath.isEmpty {
-          Text("No Obsidian inbox folder selected.")
-            .font(.caption2)
-            .foregroundColor(.secondary)
-        } else {
-          Text(manager.obsidianInboxPath)
-            .font(.caption2)
-            .foregroundColor(.secondary)
-            .lineLimit(1)
+    case .obsidian:
+      return Alert(
+        title: Text("Enable Obsidian"),
+        message: Text(
+          "You can export tasks to Obsidian notes. Enable now, or dismiss and keep it offline-only."
+        ),
+        primaryButton: .default(Text("Enable")) {
+          manager.obsidianIntegrationEnabled = true
+          _ = manager.chooseObsidianInboxFolder()
+          manager.dismissActiveOnboardingDialog(permanently: true)
+        },
+        secondaryButton: .cancel(Text("Not Now")) {
+          manager.dismissActiveOnboardingDialog(permanently: true)
         }
-
-        HStack(spacing: 8) {
-          Button(
-            manager.obsidianInboxPath.isEmpty ? "Choose Obsidian Folder" : "Change Obsidian Folder"
-          ) {
-            _ = manager.chooseObsidianInboxFolder()
-          }
-          if !manager.obsidianInboxPath.isEmpty {
-            Button("Clear") {
-              manager.clearObsidianInboxFolder()
-            }
-          }
+      )
+    case .googleCalendar:
+      return Alert(
+        title: Text("Enable Google Calendar"),
+        message: Text(
+          "You can open prefilled Google Calendar events from tasks. Enable now, or dismiss."
+        ),
+        primaryButton: .default(Text("Enable")) {
+          manager.googleCalendarIntegrationEnabled = true
+          manager.dismissActiveOnboardingDialog(permanently: true)
+        },
+        secondaryButton: .cancel(Text("Not Now")) {
+          manager.dismissActiveOnboardingDialog(permanently: true)
         }
-      }
-      if manager.googleCalendarIntegrationEnabled {
-        Text("Google Calendar action opens a prefilled event in your browser.")
-          .font(.caption2)
-          .foregroundColor(.secondary)
-      }
-      Spacer(minLength: 0)
+      )
     }
-    .padding(14)
   }
 
   // MARK: - Subviews

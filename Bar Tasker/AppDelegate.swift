@@ -163,12 +163,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     Task { [weak self] in
       try? await Task.sleep(nanoseconds: 500_000_000)
       guard let self else { return }
-      if self.checkvistManager.needsInitialSetup {
-        self.togglePopover()
-      } else {
-        await self.checkvistManager.fetchTopTask()
-        self.updateTitle()
-      }
+      await self.checkvistManager.fetchTopTask()
+      self.updateTitle()
     }
   }
 
