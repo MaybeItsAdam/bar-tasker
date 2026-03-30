@@ -55,6 +55,9 @@ enum PopoverLayout {
       // Input row + autocomplete list block.
       fixedHeight += 220
     }
+    if !manager.pendingDeleteConfirmation && manager.activeOnboardingDialog != nil {
+      fixedHeight += 72
+    }
     if manager.errorMessage != nil {
       fixedHeight += 20
     }
@@ -339,15 +342,19 @@ struct PopoverView: View {
 
       // Prompt + autocomplete at bottom so tasks remain visible above.
       if !manager.pendingDeleteConfirmation {
-        let shouldShowPrompt =
-          ((manager.quickEntryMode == .search
-            || manager.quickEntryMode == .quickAddDefault
-            || manager.quickEntryMode == .quickAddSpecific)
-            && (manager.isQuickEntryFocused || !manager.filterText.isEmpty))
-          || (manager.quickEntryMode == .command
-            && (manager.isQuickEntryFocused || !manager.filterText.isEmpty))
-        if shouldShowPrompt {
-          quickEntryBar()
+        if manager.activeOnboardingDialog != nil {
+          onboardingInlineBar()
+        } else {
+          let shouldShowPrompt =
+            ((manager.quickEntryMode == .search
+              || manager.quickEntryMode == .quickAddDefault
+              || manager.quickEntryMode == .quickAddSpecific)
+              && (manager.isQuickEntryFocused || !manager.filterText.isEmpty))
+            || (manager.quickEntryMode == .command
+              && (manager.isQuickEntryFocused || !manager.filterText.isEmpty))
+          if shouldShowPrompt {
+            quickEntryBar()
+          }
         }
       }
 
@@ -358,53 +365,84 @@ struct PopoverView: View {
     .onAppear {
       manager.presentOnboardingDialogIfNeeded()
     }
-    .alert(item: $manager.activeOnboardingDialog) { dialog in
-      onboardingAlert(for: dialog)
+  }
+
+  @ViewBuilder
+  private func onboardingInlineBar() -> some View {
+    if let dialog = manager.activeOnboardingDialog {
+      let config = onboardingInlineContent(for: dialog)
+      HStack(alignment: .top, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(config.title)
+            .font(.system(size: 12, weight: .semibold))
+          Text(config.message)
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .lineLimit(2)
+        }
+
+        Spacer(minLength: 6)
+
+        HStack(spacing: 6) {
+          Button(config.actionTitle) {
+            config.action()
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+
+          Button {
+            manager.dismissActiveOnboardingDialog(permanently: true)
+          } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 10, weight: .bold))
+              .foregroundColor(.secondary)
+              .frame(width: 16, height: 16)
+              .background(Color.secondary.opacity(0.12))
+              .clipShape(Circle())
+          }
+          .buttonStyle(.plain)
+        }
+      }
+      .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
+      .padding(.vertical, 9)
+      .background(Color.secondary.opacity(0.08))
+    } else {
+      EmptyView()
     }
   }
 
-  private func onboardingAlert(for dialog: CheckvistManager.OnboardingDialog) -> Alert {
+  private func onboardingInlineContent(for dialog: CheckvistManager.OnboardingDialog) -> (
+    title: String, message: String, actionTitle: String, action: () -> Void
+  ) {
     switch dialog {
     case .checkvist:
-      return Alert(
-        title: Text("Connect Checkvist"),
-        message: Text(
-          "Bar Tasker works offline first. Connect Checkvist now, or dismiss and do it later in Preferences."
-        ),
-        primaryButton: .default(Text("Open Preferences")) {
+      return (
+        "Connect Checkvist",
+        "Optional. You can keep using Bar Tasker offline and connect anytime in Preferences.",
+        "Preferences",
+        {
           AppDelegate.shared.menuSettings()
-          manager.dismissActiveOnboardingDialog(permanently: true)
-        },
-        secondaryButton: .cancel(Text("Not Now")) {
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
     case .obsidian:
-      return Alert(
-        title: Text("Enable Obsidian"),
-        message: Text(
-          "You can export tasks to Obsidian notes. Enable now, or dismiss and keep it offline-only."
-        ),
-        primaryButton: .default(Text("Enable")) {
+      return (
+        "Enable Obsidian",
+        "Optional markdown export and folder linking.",
+        "Enable",
+        {
           manager.obsidianIntegrationEnabled = true
           _ = manager.chooseObsidianInboxFolder()
-          manager.dismissActiveOnboardingDialog(permanently: true)
-        },
-        secondaryButton: .cancel(Text("Not Now")) {
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
     case .googleCalendar:
-      return Alert(
-        title: Text("Enable Google Calendar"),
-        message: Text(
-          "You can open prefilled Google Calendar events from tasks. Enable now, or dismiss."
-        ),
-        primaryButton: .default(Text("Enable")) {
+      return (
+        "Enable Google Calendar",
+        "Optional event handoff from task due details.",
+        "Enable",
+        {
           manager.googleCalendarIntegrationEnabled = true
-          manager.dismissActiveOnboardingDialog(permanently: true)
-        },
-        secondaryButton: .cancel(Text("Not Now")) {
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )

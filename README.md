@@ -14,7 +14,7 @@ Bar Tasker is a keyboard-first macOS menu bar app for working Checkvist lists fa
 - Google Calendar event handoff from task metadata.
 - Embedded MCP server for AI assistants.
 - Native-first plugin architecture for all integrations.
-- Dismissable onboarding dialogs for Checkvist, Obsidian, and Google Calendar.
+- Dismissable onboarding boxes for Checkvist, Obsidian, and Google Calendar.
 
 ## Install
 
@@ -40,8 +40,8 @@ Open Preferences (`Cmd+,`) and configure:
 6. Obsidian inbox folder (optional)
 7. MCP integration controls (optional)
 
-On first use, optional onboarding dialogs can guide setup for Checkvist, Obsidian, and Google Calendar.  
-Each dialog is dismissable so the app remains usable in offline-first mode.
+On first use, optional onboarding boxes can guide setup for Checkvist, Obsidian, and Google Calendar.  
+Each box is dismissable so the app remains usable in offline-first mode.
 
 ## Core Keyboard Flow
 
