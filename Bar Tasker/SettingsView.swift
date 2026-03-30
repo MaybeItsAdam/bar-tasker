@@ -115,12 +115,96 @@ struct HotkeyRecorderField: NSViewRepresentable {
 // MARK: - Settings View
 
 struct SettingsView: View {
+  private enum SettingsPane: Hashable {
+    case checkvist
+    case preferences
+    case obsidian
+    case googleCalendar
+    case mcp
+    #if DEBUG
+      case debug
+    #endif
+  }
+
   @EnvironmentObject var checkvistManager: CheckvistManager
   @State private var isLoadingLists = false
   @State private var didAutoloadLists = false
+  @State private var selectedPane: SettingsPane = .checkvist
 
   var body: some View {
-    Form {
+    TabView(selection: $selectedPane) {
+      paneContent {
+        checkvistPane
+      }
+      .tabItem {
+        Label("Checkvist", systemImage: "checkmark.circle")
+      }
+      .tag(SettingsPane.checkvist)
+
+      paneContent {
+        preferencesPane
+      }
+      .tabItem {
+        Label("Preferences", systemImage: "slider.horizontal.3")
+      }
+      .tag(SettingsPane.preferences)
+
+      paneContent {
+        obsidianPluginPane
+      }
+      .tabItem {
+        Label("Obsidian", systemImage: "book.closed")
+      }
+      .tag(SettingsPane.obsidian)
+
+      paneContent {
+        googleCalendarPluginPane
+      }
+      .tabItem {
+        Label("Google Calendar", systemImage: "calendar")
+      }
+      .tag(SettingsPane.googleCalendar)
+
+      paneContent {
+        mcpPluginPane
+      }
+      .tabItem {
+        Label("MCP", systemImage: "link")
+      }
+      .tag(SettingsPane.mcp)
+
+      #if DEBUG
+        paneContent {
+          debugPane
+        }
+        .tabItem {
+          Label("Debug", systemImage: "ladybug")
+        }
+        .tag(SettingsPane.debug)
+      #endif
+    }
+    .task {
+      guard !didAutoloadLists else { return }
+      didAutoloadLists = true
+      if checkvistManager.canAttemptLogin && checkvistManager.availableLists.isEmpty {
+        await loadLists(assignFirstIfMissing: false)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func paneContent<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    ScrollView {
+      Form {
+        content()
+      }
+      .padding(20)
+      .frame(maxWidth: .infinity)
+    }
+  }
+
+  private var checkvistPane: some View {
+    Group {
       Section(header: Text("Checkvist Credentials")) {
         TextField("Username (Email)", text: $checkvistManager.username)
           .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -201,219 +285,227 @@ struct SettingsView: View {
           .font(.caption)
           .padding(.top, 10)
       }
+    }
+  }
 
-      Divider().padding(.vertical, 10)
-
-      Section(header: Text("Preferences")) {
-        Toggle("Confirm before deleting tasks", isOn: $checkvistManager.confirmBeforeDelete)
-        Toggle("Enable Obsidian integration", isOn: $checkvistManager.obsidianIntegrationEnabled)
-        Toggle(
-          "Enable Google Calendar integration",
-          isOn: $checkvistManager.googleCalendarIntegrationEnabled
-        )
-        Toggle("Enable MCP integration", isOn: $checkvistManager.mcpIntegrationEnabled)
-        if #available(macOS 13.0, *) {
-          Toggle("Launch at login", isOn: $checkvistManager.launchAtLogin)
-        }
-
-        if checkvistManager.obsidianIntegrationEnabled {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("Obsidian Inbox")
-            if checkvistManager.obsidianInboxPath.isEmpty {
-              Text("No folder selected")
-                .foregroundColor(.secondary)
-                .font(.caption)
-            } else {
-              Text(checkvistManager.obsidianInboxPath)
-                .font(.caption)
-                .textSelection(.enabled)
-            }
-
-            HStack {
-              Button("Choose Folder") {
-                checkvistManager.chooseObsidianInboxFolder()
-              }
-              if !checkvistManager.obsidianInboxPath.isEmpty {
-                Button("Clear") {
-                  checkvistManager.clearObsidianInboxFolder()
-                }
-              }
-              Spacer()
-              if checkvistManager.hasPendingObsidianSync {
-                Text(checkvistManager.pendingSyncMenuBarPrefix)
-                  .font(.caption)
-                  .foregroundColor(.orange)
-              }
-            }
-          }
-          .padding(.top, 4)
-        } else {
-          Text("Obsidian integration is disabled.")
-            .foregroundColor(.secondary)
-            .font(.caption)
-        }
-
-        if checkvistManager.googleCalendarIntegrationEnabled {
-          Text("Google Calendar action opens a prefilled event in your browser.")
-            .foregroundColor(.secondary)
-            .font(.caption)
-        } else {
-          Text("Google Calendar integration is disabled.")
-            .foregroundColor(.secondary)
-            .font(.caption)
-        }
-
-        if checkvistManager.mcpIntegrationEnabled {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("MCP Server")
-            if checkvistManager.hasResolvedMCPServerCommand {
-              Text(checkvistManager.mcpServerCommandPath)
-                .font(.caption)
-                .textSelection(.enabled)
-            } else {
-              Text("App command path not detected. Set BAR_TASKER_MCP_EXECUTABLE_PATH if needed.")
-                .foregroundColor(.secondary)
-                .font(.caption)
-            }
-
-            HStack {
-              Button("Refresh Path") {
-                checkvistManager.refreshMCPServerCommandPath()
-              }
-              Button("Copy Client Config") {
-                checkvistManager.copyMCPClientConfigurationToClipboard()
-              }
-              Button("Open Guide") {
-                checkvistManager.openMCPServerGuide()
-              }
-              Spacer()
-            }
-
-            ScrollView {
-              Text(checkvistManager.mcpClientConfigurationPreview)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(minHeight: 120, maxHeight: 180)
-
-            Text("Preview is redacted. Copied config includes your saved credentials.")
-              .foregroundColor(.secondary)
-              .font(.caption)
-          }
-          .padding(.top, 4)
-        } else {
-          Text("MCP integration is disabled.")
-            .foregroundColor(.secondary)
-            .font(.caption)
-        }
-
-        HStack {
-          Toggle("Global hotkey", isOn: $checkvistManager.globalHotkeyEnabled)
-          Spacer()
-          if checkvistManager.globalHotkeyEnabled {
-            HotkeyRecorderField(
-              keyCode: $checkvistManager.globalHotkeyKeyCode,
-              modifiers: $checkvistManager.globalHotkeyModifiers
-            )
-            .frame(width: 120, height: 22)
-          }
-        }
-
-        VStack(alignment: .leading, spacing: 6) {
-          Text("Quick Add location")
-          Picker("", selection: $checkvistManager.quickAddLocationMode) {
-            Text("Default (List root)").tag(CheckvistManager.QuickAddLocationMode.defaultRoot)
-            Text("Specific task ID").tag(CheckvistManager.QuickAddLocationMode.specificParentTask)
-          }
-          .labelsHidden()
-          .pickerStyle(.segmented)
-
-          if checkvistManager.quickAddLocationMode == .specificParentTask {
-            HStack {
-              TextField("Parent task ID", text: $checkvistManager.quickAddSpecificParentTaskId)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 180)
-              Button("Use selected task") {
-                checkvistManager.setQuickAddSpecificLocationToCurrentTask()
-              }
-              .disabled(checkvistManager.currentTask == nil)
-            }
-            Text("Quick Add creates new tasks as children of this task ID.")
-              .font(.caption)
-              .foregroundColor(.secondary)
-          }
-        }
-        .padding(.top, 4)
-
-        HStack {
-          Toggle("Quick Add hotkey", isOn: $checkvistManager.quickAddHotkeyEnabled)
-          Spacer()
-          if checkvistManager.quickAddHotkeyEnabled {
-            HotkeyRecorderField(
-              keyCode: $checkvistManager.quickAddHotkeyKeyCode,
-              modifiers: $checkvistManager.quickAddHotkeyModifiers
-            )
-            .frame(width: 120, height: 22)
-          }
-        }
-        Text("Press this to open a focused Quick Add prompt at the configured location.")
-          .font(.caption)
-          .foregroundColor(.secondary)
-
-        VStack(alignment: .leading) {
-          Text("Max Menu Bar Width: \(Int(checkvistManager.maxTitleWidth))px")
-          Slider(value: $checkvistManager.maxTitleWidth, in: 50...800, step: 10)
-        }
-        .padding(.top, 4)
-
-        VStack(alignment: .leading, spacing: 6) {
-          Text("Timer position in menu bar")
-          Picker("", selection: $checkvistManager.timerBarLeading) {
-            Text("After task").tag(false)
-            Text("Before task").tag(true)
-          }
-          .labelsHidden()
-          .pickerStyle(.segmented)
-          .disabled(checkvistManager.timerMode != .visible)
-        }
-        .padding(.top, 4)
-
-        VStack(alignment: .leading, spacing: 6) {
-          Text("Timer mode")
-          Picker("", selection: $checkvistManager.timerMode) {
-            Text("Visible").tag(CheckvistManager.TimerMode.visible)
-            Text("Hidden").tag(CheckvistManager.TimerMode.hidden)
-            Text("Disabled").tag(CheckvistManager.TimerMode.disabled)
-          }
-          .labelsHidden()
-          .pickerStyle(.segmented)
-        }
-        .padding(.top, 4)
+  private var preferencesPane: some View {
+    Section(header: Text("Preferences")) {
+      Toggle("Confirm before deleting tasks", isOn: $checkvistManager.confirmBeforeDelete)
+      if #available(macOS 13.0, *) {
+        Toggle("Launch at login", isOn: $checkvistManager.launchAtLogin)
       }
 
-      #if DEBUG
-        Section(header: Text("Debug")) {
-          Text("Shortcut: Cmd+Shift+K toggles keychain mode for development.")
+      HStack {
+        Toggle("Global hotkey", isOn: $checkvistManager.globalHotkeyEnabled)
+        Spacer()
+        if checkvistManager.globalHotkeyEnabled {
+          HotkeyRecorderField(
+            keyCode: $checkvistManager.globalHotkeyKeyCode,
+            modifiers: $checkvistManager.globalHotkeyModifiers
+          )
+          .frame(width: 120, height: 22)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Quick Add location")
+        Picker("", selection: $checkvistManager.quickAddLocationMode) {
+          Text("Default (List root)").tag(CheckvistManager.QuickAddLocationMode.defaultRoot)
+          Text("Specific task ID").tag(CheckvistManager.QuickAddLocationMode.specificParentTask)
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+
+        if checkvistManager.quickAddLocationMode == .specificParentTask {
+          HStack {
+            TextField("Parent task ID", text: $checkvistManager.quickAddSpecificParentTaskId)
+              .textFieldStyle(.roundedBorder)
+              .frame(maxWidth: 180)
+            Button("Use selected task") {
+              checkvistManager.setQuickAddSpecificLocationToCurrentTask()
+            }
+            .disabled(checkvistManager.currentTask == nil)
+          }
+          Text("Quick Add creates new tasks as children of this task ID.")
             .font(.caption)
             .foregroundColor(.secondary)
-          Button("Reset onboarding state") {
-            checkvistManager.resetOnboardingForDebug()
-          }
-          .foregroundColor(.red)
         }
-      #endif
+      }
+      .padding(.top, 4)
+
+      HStack {
+        Toggle("Quick Add hotkey", isOn: $checkvistManager.quickAddHotkeyEnabled)
+        Spacer()
+        if checkvistManager.quickAddHotkeyEnabled {
+          HotkeyRecorderField(
+            keyCode: $checkvistManager.quickAddHotkeyKeyCode,
+            modifiers: $checkvistManager.quickAddHotkeyModifiers
+          )
+          .frame(width: 120, height: 22)
+        }
+      }
+      Text("Press this to open a focused Quick Add prompt at the configured location.")
+        .font(.caption)
+        .foregroundColor(.secondary)
+
+      VStack(alignment: .leading) {
+        Text("Max Menu Bar Width: \(Int(checkvistManager.maxTitleWidth))px")
+        Slider(value: $checkvistManager.maxTitleWidth, in: 50...800, step: 10)
+      }
+      .padding(.top, 4)
+
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Timer position in menu bar")
+        Picker("", selection: $checkvistManager.timerBarLeading) {
+          Text("After task").tag(false)
+          Text("Before task").tag(true)
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .disabled(checkvistManager.timerMode != .visible)
+      }
+      .padding(.top, 4)
+
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Timer mode")
+        Picker("", selection: $checkvistManager.timerMode) {
+          Text("Visible").tag(CheckvistManager.TimerMode.visible)
+          Text("Hidden").tag(CheckvistManager.TimerMode.hidden)
+          Text("Disabled").tag(CheckvistManager.TimerMode.disabled)
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+      }
+      .padding(.top, 4)
     }
-    .padding(20)
-    .frame(width: 520)
-    .task {
-      guard !didAutoloadLists else { return }
-      didAutoloadLists = true
-      if checkvistManager.canAttemptLogin && checkvistManager.availableLists.isEmpty {
-        await loadLists(assignFirstIfMissing: false)
+  }
+
+  private var obsidianPluginPane: some View {
+    Section(header: Text("Obsidian Plugin")) {
+      Toggle("Enable Obsidian integration", isOn: $checkvistManager.obsidianIntegrationEnabled)
+
+      if checkvistManager.obsidianIntegrationEnabled {
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Obsidian Inbox")
+          if checkvistManager.obsidianInboxPath.isEmpty {
+            Text("No folder selected")
+              .foregroundColor(.secondary)
+              .font(.caption)
+          } else {
+            Text(checkvistManager.obsidianInboxPath)
+              .font(.caption)
+              .textSelection(.enabled)
+          }
+
+          HStack {
+            Button("Choose Folder") {
+              checkvistManager.chooseObsidianInboxFolder()
+            }
+            if !checkvistManager.obsidianInboxPath.isEmpty {
+              Button("Clear") {
+                checkvistManager.clearObsidianInboxFolder()
+              }
+            }
+            Spacer()
+            if checkvistManager.hasPendingObsidianSync {
+              Text(checkvistManager.pendingSyncMenuBarPrefix)
+                .font(.caption)
+                .foregroundColor(.orange)
+            }
+          }
+        }
+        .padding(.top, 4)
+      } else {
+        Text("Obsidian integration is disabled.")
+          .foregroundColor(.secondary)
+          .font(.caption)
       }
     }
   }
+
+  private var googleCalendarPluginPane: some View {
+    Section(header: Text("Google Calendar Plugin")) {
+      Toggle(
+        "Enable Google Calendar integration",
+        isOn: $checkvistManager.googleCalendarIntegrationEnabled
+      )
+
+      if checkvistManager.googleCalendarIntegrationEnabled {
+        Text("Google Calendar action opens a prefilled event in your browser.")
+          .foregroundColor(.secondary)
+          .font(.caption)
+      } else {
+        Text("Google Calendar integration is disabled.")
+          .foregroundColor(.secondary)
+          .font(.caption)
+      }
+    }
+  }
+
+  private var mcpPluginPane: some View {
+    Section(header: Text("MCP Plugin")) {
+      Toggle("Enable MCP integration", isOn: $checkvistManager.mcpIntegrationEnabled)
+
+      if checkvistManager.mcpIntegrationEnabled {
+        VStack(alignment: .leading, spacing: 8) {
+          Text("MCP Server")
+          if checkvistManager.hasResolvedMCPServerCommand {
+            Text(checkvistManager.mcpServerCommandPath)
+              .font(.caption)
+              .textSelection(.enabled)
+          } else {
+            Text("App command path not detected. Set BAR_TASKER_MCP_EXECUTABLE_PATH if needed.")
+              .foregroundColor(.secondary)
+              .font(.caption)
+          }
+
+          HStack {
+            Button("Refresh Path") {
+              checkvistManager.refreshMCPServerCommandPath()
+            }
+            Button("Copy Client Config") {
+              checkvistManager.copyMCPClientConfigurationToClipboard()
+            }
+            Button("Open Guide") {
+              checkvistManager.openMCPServerGuide()
+            }
+            Spacer()
+          }
+
+          ScrollView {
+            Text(checkvistManager.mcpClientConfigurationPreview)
+              .font(.system(.caption, design: .monospaced))
+              .textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .frame(minHeight: 120, maxHeight: 180)
+
+          Text("Preview is redacted. Copied config includes your saved credentials.")
+            .foregroundColor(.secondary)
+            .font(.caption)
+        }
+        .padding(.top, 4)
+      } else {
+        Text("MCP integration is disabled.")
+          .foregroundColor(.secondary)
+          .font(.caption)
+      }
+    }
+  }
+
+  #if DEBUG
+    private var debugPane: some View {
+      Section(header: Text("Debug")) {
+        Text("Shortcut: Cmd+Shift+K toggles keychain mode for development.")
+          .font(.caption)
+          .foregroundColor(.secondary)
+        Button("Reset onboarding state") {
+          checkvistManager.resetOnboardingForDebug()
+        }
+        .foregroundColor(.red)
+      }
+    }
+  #endif
 
   @MainActor
   private func loadLists(assignFirstIfMissing: Bool) async {
