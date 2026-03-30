@@ -115,6 +115,13 @@ struct HotkeyRecorderField: NSViewRepresentable {
 // MARK: - Settings View
 
 struct SettingsView: View {
+  private struct PaneDescriptor: Identifiable {
+    let pane: SettingsPane
+    let title: String
+    let systemImage: String
+    var id: SettingsPane { pane }
+  }
+
   private enum SettingsPane: Hashable {
     case checkvist
     case preferences
@@ -132,56 +139,12 @@ struct SettingsView: View {
   @State private var selectedPane: SettingsPane = .checkvist
 
   var body: some View {
-    TabView(selection: $selectedPane) {
+    VStack(spacing: 0) {
+      settingsNavigationBar
+      Divider()
       paneContent {
-        checkvistPane
+        selectedPaneContent
       }
-      .tabItem {
-        Label("Checkvist", systemImage: "checkmark.circle")
-      }
-      .tag(SettingsPane.checkvist)
-
-      paneContent {
-        preferencesPane
-      }
-      .tabItem {
-        Label("Preferences", systemImage: "slider.horizontal.3")
-      }
-      .tag(SettingsPane.preferences)
-
-      paneContent {
-        obsidianPluginPane
-      }
-      .tabItem {
-        Label("Obsidian", systemImage: "book.closed")
-      }
-      .tag(SettingsPane.obsidian)
-
-      paneContent {
-        googleCalendarPluginPane
-      }
-      .tabItem {
-        Label("Google Calendar", systemImage: "calendar")
-      }
-      .tag(SettingsPane.googleCalendar)
-
-      paneContent {
-        mcpPluginPane
-      }
-      .tabItem {
-        Label("MCP", systemImage: "link")
-      }
-      .tag(SettingsPane.mcp)
-
-      #if DEBUG
-        paneContent {
-          debugPane
-        }
-        .tabItem {
-          Label("Debug", systemImage: "ladybug")
-        }
-        .tag(SettingsPane.debug)
-      #endif
     }
     .task {
       guard !didAutoloadLists else { return }
@@ -189,6 +152,72 @@ struct SettingsView: View {
       if checkvistManager.canAttemptLogin && checkvistManager.availableLists.isEmpty {
         await loadLists(assignFirstIfMissing: false)
       }
+    }
+  }
+
+  private var paneDescriptors: [PaneDescriptor] {
+    var descriptors: [PaneDescriptor] = [
+      .init(pane: .checkvist, title: "Checkvist", systemImage: "checkmark.circle"),
+      .init(pane: .preferences, title: "Preferences", systemImage: "slider.horizontal.3"),
+      .init(pane: .obsidian, title: "Obsidian", systemImage: "book.closed"),
+      .init(pane: .googleCalendar, title: "Google Calendar", systemImage: "calendar"),
+      .init(pane: .mcp, title: "MCP", systemImage: "link"),
+    ]
+    #if DEBUG
+      descriptors.append(.init(pane: .debug, title: "Debug", systemImage: "ladybug"))
+    #endif
+    return descriptors
+  }
+
+  private var settingsNavigationBar: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 8) {
+        ForEach(paneDescriptors) { pane in
+          Button {
+            selectedPane = pane.pane
+          } label: {
+            VStack(spacing: 4) {
+              Image(systemName: pane.systemImage)
+                .font(.system(size: 14, weight: .medium))
+              Text(pane.title)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+            }
+            .frame(minWidth: 88)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+              RoundedRectangle(cornerRadius: 8)
+                .fill(selectedPane == pane.pane ? Color.accentColor.opacity(0.2) : Color.clear)
+            )
+          }
+          .buttonStyle(.plain)
+          .foregroundColor(selectedPane == pane.pane ? .accentColor : .primary)
+        }
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 10)
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  @ViewBuilder
+  private var selectedPaneContent: some View {
+    switch selectedPane {
+    case .checkvist:
+      checkvistPane
+    case .preferences:
+      preferencesPane
+    case .obsidian:
+      obsidianPluginPane
+    case .googleCalendar:
+      googleCalendarPluginPane
+    case .mcp:
+      mcpPluginPane
+    #if DEBUG
+      case .debug:
+        debugPane
+    #endif
     }
   }
 
