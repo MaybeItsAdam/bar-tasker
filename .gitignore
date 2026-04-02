@@ -95,3 +95,9 @@ Icon
 .com.apple.timemachine.donotpresent
 
 .claude
+
+# Python
+__pycache__/
+*.pyc
+
+.env.local

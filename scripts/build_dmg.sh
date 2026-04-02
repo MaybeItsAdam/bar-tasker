@@ -3,20 +3,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$ROOT_DIR"
-XCODEPROJ="$PROJECT_DIR/checkvist focus.xcodeproj"
-SCHEME="checkvist focus"
-APP_NAME="checkvist focus.app"
-VOL_NAME="checkvist focus"
+XCODEPROJ="$PROJECT_DIR/Bar Tasker.xcodeproj"
+SCHEME="Bar Tasker"
+APP_NAME="Bar Tasker.app"
+VOL_NAME="Bar Tasker"
 
 VERSION="${1:-}"
 if [[ -n "$VERSION" ]]; then
-  DMG_BASENAME="checkvist-focus-v${VERSION}"
+  DMG_BASENAME="bar-tasker-v${VERSION}"
 else
-  DMG_BASENAME="checkvist-focus-$(date +%Y%m%d-%H%M%S)"
+  DMG_BASENAME="bar-tasker-$(date +%Y%m%d-%H%M%S)"
 fi
 
 BUILD_DIR="$PROJECT_DIR/build"
-DERIVED_DIR="/tmp/checkvist-focus-derived-release"
+DERIVED_DIR="/tmp/bar-tasker-derived-release"
 STAGE_DIR="$BUILD_DIR/dmg-stage"
 RW_DMG="$BUILD_DIR/${DMG_BASENAME}-rw.dmg"
 FINAL_DMG="$BUILD_DIR/${DMG_BASENAME}.dmg"
@@ -66,13 +66,13 @@ tell application "Finder"
     set current view of container window to icon view
     set toolbar visible of container window to false
     set statusbar visible of container window to false
-    set the bounds of container window to {160, 160, 820, 500}
+    set the bounds of container window to {180, 180, 780, 520}
     set viewOptions to the icon view options of container window
     set arrangement of viewOptions to not arranged
-    set icon size of viewOptions to 120
-    set text size of viewOptions to 14
-    set position of item "Applications" of container window to {220, 230}
-    set position of item "$APPLESCRIPT_APP_NAME" of container window to {560, 230}
+    set icon size of viewOptions to 96
+    set text size of viewOptions to 12
+    set position of item "Applications" of container window to {140, 160}
+    set position of item "$APPLESCRIPT_APP_NAME" of container window to {420, 160}
     close
     open
     update without registering applications

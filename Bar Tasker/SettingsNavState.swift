@@ -1,0 +1,87 @@
+import AppKit
+import Combine
+
+final class SettingsNavState: NSObject, ObservableObject {
+  enum Pane: String {
+    case preferences
+    case keybindings
+    case theme
+    case plugins
+    #if DEBUG
+      case debug
+    #endif
+
+    var title: String {
+      switch self {
+      case .preferences: "Preferences"
+      case .keybindings: "Keybindings"
+      case .theme: "Theme"
+      case .plugins: "Plugins"
+      #if DEBUG
+        case .debug: "Debug"
+      #endif
+      }
+    }
+
+    var systemImage: String {
+      switch self {
+      case .preferences: "slider.horizontal.3"
+      case .keybindings: "keyboard"
+      case .theme: "paintpalette"
+      case .plugins: "puzzlepiece.extension"
+      #if DEBUG
+        case .debug: "ladybug"
+      #endif
+      }
+    }
+
+    static var allPanes: [Pane] {
+      var panes: [Pane] = [.preferences, .keybindings, .theme, .plugins]
+      #if DEBUG
+        panes.append(.debug)
+      #endif
+      return panes
+    }
+  }
+
+  @Published var selectedPane: Pane = .preferences
+  weak var toolbar: NSToolbar?
+}
+
+extension SettingsNavState: NSToolbarDelegate {
+  func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+    Pane.allPanes.map { .init($0.rawValue) }
+  }
+
+  func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+    toolbarDefaultItemIdentifiers(toolbar)
+  }
+
+  func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+    toolbarDefaultItemIdentifiers(toolbar)
+  }
+
+  func toolbar(
+    _ toolbar: NSToolbar,
+    itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+    willBeInsertedIntoToolbar flag: Bool
+  ) -> NSToolbarItem? {
+    guard let pane = Pane(rawValue: itemIdentifier.rawValue) else { return nil }
+    let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+    item.label = pane.title
+    item.image = NSImage(systemSymbolName: pane.systemImage, accessibilityDescription: pane.title)
+    item.target = self
+    item.action = #selector(selectPane(_:))
+    return item
+  }
+
+  @objc private func selectPane(_ sender: NSToolbarItem) {
+    guard let pane = Pane(rawValue: sender.itemIdentifier.rawValue) else { return }
+    selectedPane = pane
+    toolbar?.selectedItemIdentifier = sender.itemIdentifier
+  }
+}
+
+extension SettingsNavState: NSToolbarItemValidation {
+  func validateToolbarItem(_ item: NSToolbarItem) -> Bool { true }
+}

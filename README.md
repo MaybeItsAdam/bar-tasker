@@ -1,191 +1,146 @@
-# <img src="checkvist%20focus/Assets.xcassets/AppIcon.appiconset/ios-1024.png" alt="Checkvist Focus logo" width="28" /> Checkvist Focus
+# <img src="Bar%20Tasker/Assets.xcassets/AppIcon.appiconset/ios-1024.png" alt="Bar Tasker logo" width="28" /> Bar Tasker
 
-A blazing-fast, keyboard-centric macOS Menu Bar application that seamlessly integrates with your [Checkvist](https://checkvist.com/) account to help you focus on your top priorities.
+Bar Tasker is a keyboard-first macOS menu bar app for working Checkvist lists fast, with quick navigation, due/priority workflows, timers, and plugin-based integrations.
 
-## Features
+## What You Get
 
-### Menu Bar
+- Fast menu bar workflow with minimal mouse usage.
+- Root views for `All`, `Due`, `Tags`, and `Priority`.
+- Due-time aware commands (for example `due today 14:30`, `due tomorrow 9am`).
+- Quick-add from keybind to either:
+  - list root, or
+  - a specific parent task ID.
+- Obsidian export/open with folder linking and offline sync queue fallback.
+- Google Calendar event handoff from task metadata.
+- Embedded MCP server for AI assistants.
+- Native-first plugin architecture for all integrations.
+- Dismissable onboarding boxes for Checkvist, Obsidian, and Google Calendar.
 
-The menu bar shows your currently focused task. When timer display is enabled, it shows the selected task's rolled-up timer value (task + descendants).
+## Install
+
+1. Download the latest `.dmg` from [Releases](https://github.com/MaybeItsAdam/bar-tasker/releases).
+2. Move `Bar Tasker.app` into `Applications`.
+3. Right-click once and choose **Open** (unsigned app).
+
+If Gatekeeper blocks launch:
+
+```bash
+xattr -cr /Applications/"Bar Tasker.app"
+```
+
+## First Run Setup
+
+Open Preferences (`Cmd+,`) and configure:
+
+1. Checkvist username
+2. Checkvist remote API key
+3. Checklist/list ID
+4. Global hotkey
+5. Quick-add hotkey and target location
+6. Obsidian inbox folder (optional)
+7. MCP integration controls (optional)
+
+On first use, optional onboarding boxes can guide setup for Checkvist, Obsidian, and Google Calendar.  
+Each box is dismissable so the app remains usable in offline-first mode.
+
+## Core Keyboard Flow
 
 ### Navigation
 
 | Key | Action |
-|-----|--------|
-| `j` / `↓` | Move to next task |
-| `k` / `↑` | Move to previous task |
-| `→` or `l` | Enter subtasks (children) |
-| `←` or `h` | Go back to parent level |
-| `Esc` | Revert selection to when popover opened, close |
+| --- | --- |
+| `j` / `↓` | Next task |
+| `k` / `↑` | Previous task |
+| `l` / `→` | Enter subtasks |
+| `h` / `←` | Exit to parent |
+| `Esc` | Cancel input / close popover |
 
-### Task Completion
-
-Press `Space` to mark the current task done. Completion is tactile and satisfying:
-- Immediate haptic pulse
-- The circle icon springs into a green checkmark
-- A strikethrough line draws across the task text
-- Additional haptic confirmation pulses follow
-- The task then disappears
-
-Press `Shift+Space` to **invalidate** (void) a task instead.
-
-### Timer
+### Task actions
 
 | Key | Action |
-|-----|--------|
-| `t` | Start timer for current task (or switch to a different task's timer) |
-| `p` | Pause / resume the running timer |
+| --- | --- |
+| `Space` | Complete task |
+| `Shift+Space` | Invalidate task |
+| `Enter` | Add sibling |
+| `Shift+Enter` / `Tab` | Add child |
+| `Shift+Tab` | Unindent |
+| `Shift+A` | Quick-add (configured location) |
+| `Cmd+↑` / `Cmd+↓` | Move task |
 
-The timer badge appears beneath the task text and shows elapsed time in the most readable unit:
-- `42s` — seconds (under a minute)
-- `1.4m` / `14m` — minutes (to 2 significant figures)
-- `1.4h` / `14h` — hours (to 2 significant figures)
-
-The timer persists while you navigate and across app relaunches. Parent tasks display rolled-up totals from descendants.
-
-### Searching & Filtering
-
-Press `/` to open search. Type to filter tasks dynamically — results search recursively through all subtasks under the current level. Press `Esc` to clear.
-
-### Editing
+### Integrations
 
 | Key | Action |
-|-----|--------|
-| `i` | Edit task, cursor at start |
-| `a` or `ee` / `ea` | Edit task, cursor at end |
-| `ei` | Edit task, cursor at start (two-key) |
-| `F2` | Edit task, cursor at end |
+| --- | --- |
+| `o` | Open selected task in Obsidian |
+| `O` | Open in new Obsidian window |
+| `gc` | Add selected task to Google Calendar |
 
-Press `Enter` to save, `Esc` to cancel.
+## Command Palette
 
-### Adding Tasks
+Open with `:` / `;` / `Cmd+K`.
 
-| Key | Action |
-|-----|--------|
-| `Enter` | Add sibling task below current |
-| `Shift+Enter` | Add child task |
-| `Tab` | Add child task (in quick-entry field, promotes to child) |
+Supported command families:
 
-Checkvist smart syntax works on creation: `^today`, `^tomorrow`, `^monday`, `^2026-03-15` assign due dates inline.
+- Status: `done`, `undone`, `invalidate`
+- Due: `due <value>`, `clear due`
+- Tags: `tag <name>`, `untag <name>`
+- Priority: `priority <1-9>`, `priority back`, `clear priority`
+- Obsidian: `sync obsidian`, `open obsidian new window`, `link/create/clear obsidian folder`
+- Calendar: `sync google calendar`
 
-### Commands (`:` or `;`)
+## Plugin System
 
-Press `:` or `;` to enter command mode for the current task:
+All external integrations are plugins.
 
-| Command | Action |
-|---------|--------|
-| `done` / `undone` | Mark complete or reopen |
-| `invalidate` | Void the task |
-| `due today` / `due tomorrow` / `due monday` | Set due date |
-| `due 2026-03-15` | Set exact due date |
-| `clear due` | Remove due date |
-| `tag <name>` | Append `#name` tag to task |
-| `untag <name>` | Remove `#name` tag from task |
-| `list <name>` | Switch to a different Checkvist list |
+- Built-ins:
+  - `NativeCheckvistSyncPlugin`
+  - `NativeObsidianIntegrationPlugin`
+  - `NativeGoogleCalendarIntegrationPlugin`
+  - `NativeMCPIntegrationPlugin`
+- Contracts and registry live under `Bar Tasker/Plugins/`.
+- Plugin authoring guide: [docs/plugins.md](docs/plugins.md)
 
-### Action Palette (`Cmd+K`)
+End-user plugin install flow:
 
-Press `Cmd+K` to open action search with autocomplete and keybind hints.
+- Open `Preferences -> Plugins`
+- Click `Install Plugin` (supports folder, `.zip`, `.bartasker-plugin`)
+- Or drop a plugin folder into:
+  - `~/Library/Application Support/Bar Tasker/Plugins`
+- Use `Open Plugins Folder` and `Reload` in the same Plugins pane
 
-- Arrow keys move selection and auto-scroll.
-- `Enter` applies selected action.
-- `Esc` closes.
+Current scope: built-in plugins are fully functional; user-installed plugins are manifest-driven (settings, metadata, lifecycle) and prepared for runtime capability wiring.
 
-Common prompt shortcuts:
+## MCP Server
 
-| Key | Action |
-|-----|--------|
-| `gt` | Open `tag ` prompt |
-| `gu` | Open `untag ` prompt |
-| `Shift+L` | Open `list ` prompt |
+Bar Tasker includes an MCP stdio server and can run with `--mcp-server`.
 
-### Reordering & Structure
+- Configure MCP from Preferences (refresh command path, copy client JSON, open guide).
+- Command resolution is app-first with optional script fallback for local dev/debug.
+- Full setup and client examples: [docs/mcp-server.md](docs/mcp-server.md)
 
-| Key | Action |
-|-----|--------|
-| `Cmd+↑` / `Cmd+↓` | Move task up / down among siblings |
-| `Tab` (not in entry) | Indent task (make child of sibling above) |
-| `Shift+Tab` | Unindent task |
+## Build From Source
 
-### Other Shortcuts
+Requirements:
 
-| Key | Action |
-|-----|--------|
-| `dd` | Open due-date command |
-| `gg` | Open first URL found in task content |
-| `H` (Shift+h) | Toggle "Hide Future" filter (shows only today + overdue) |
-| `sc` | Toggle breadcrumb/task context hints on rows |
-| `Ctrl+←` / `Ctrl+→` | Root scope: previous/next tab |
-| `Ctrl+↑` / `Ctrl+↓` | Root scope: previous/next Due bucket or Tag filter |
-| `↑` from first task | Move focus to root scope tabs |
-| `k` from first task | Move focus to root scope tabs |
-| `h` / `l` while scope focused | Previous/next tab (or filter chip) |
-| `u` | Undo last action (add, complete, edit) |
-| `Fn+Delete` | Delete task (with confirmation prompt) |
-| `/` | Focus search |
+- macOS 15.6+
+- Xcode 17+
 
-### Due Date Display
-
-Due dates appear as color-coded badges on each task row:
-- **Red** — overdue
-- **Orange** — due today
-- **Grey** — upcoming
-
-At the root level, tasks are grouped in this due-order:
-- Use the root selector: **All / Due / Tags**.
-- In **Due**, tasks are ordered: **Overdue**, **ASAP**, **Today**, **Tomorrow**, **Next 7 days**, **Further in the future**.
-
-### Global Hotkey
-
-Configure a system-wide hotkey (default `⌥Space`) in Settings to open/close the popover from any application.
-
----
-
-## Installation (Open Source Release)
-
-Because this app is open-source and not signed with a paid Apple Developer certificate, macOS Gatekeeper will prevent it from running initially.
-
-1. Download the latest `.dmg` from the [Releases page](https://github.com/yourusername/checkvist-focus/releases).
-2. Open the DMG and drag `Checkvist Focus.app` to your **Applications** folder.
-3. **Right-Click (or Control-Click)** on the app icon and select **"Open"**.
-4. Click **"Open"** again in the warning dialog.
-
-Or via Terminal:
-```bash
-xattr -cr /Applications/"Checkvist Focus.app"
-```
-
-## Build DMG (Maintainers)
-
-Generate a polished drag-to-Applications installer DMG with Finder layout:
+Build app and run tests:
 
 ```bash
-./scripts/build_dmg.sh 1.0.0
+xcodebuild -project 'Bar Tasker.xcodeproj' -scheme 'Bar Tasker' -configuration Debug -destination 'platform=macOS' build
+swift test
 ```
 
-The output file is written to `build/checkvist-focus-v1.0.0.dmg`.
+Build DMG:
 
-## Configuration
+```bash
+./scripts/build_dmg.sh <version>
+```
 
-Open **Settings** (right-click the menu bar icon → Settings):
-
-1. **Username** — your Checkvist account email
-2. **OpenAPI Key** — generate from Checkvist profile → Account → OpenAPI key
-3. **List ID** — found in the Checkvist URL: `checkvist.com/checklists/123456` → `123456`
-
-## Architecture
-
-- **Swift 6** + **SwiftUI** for UI and state
-- **AppKit** (`NSStatusItem`, `NSPanel`) for menu bar and keyboard monitoring
-- **Combine** + `@Published` / `ObservableObject` for reactive state
-- **Checkvist OpenAPI** via `URLSession` async/await
-- **Keychain** for secure credential storage
-
-## Build Requirements
-
-- macOS 13.0+
-- Xcode 14.0+
+Swift Package name: `bar-tasker-core`  
+Core module name: `BarTaskerCore`
 
 ## License
 
-MIT License.
+MIT
