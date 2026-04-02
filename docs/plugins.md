@@ -1,94 +1,56 @@
 # Plugin Development Guide
 
-This app now uses a native-first plugin model:
+Bar Tasker ships with native plugins only. Plugins are self-contained and live under:
 
-- `NativeCheckvistSyncPlugin` handles Checkvist auth, sync, CRUD, and task cache.
-- `NativeObsidianIntegrationPlugin` handles Obsidian folder linking and markdown export/open.
-- `NativeGoogleCalendarIntegrationPlugin` handles Google Calendar event URL generation.
-- `NativeMCPIntegrationPlugin` handles MCP app-command/guide discovery and client-config JSON generation.
+- `Bar Tasker/Plugins/Native/Checkvist/`
+- `Bar Tasker/Plugins/Native/Obsidian/`
+- `Bar Tasker/Plugins/Native/GoogleCalendar/`
+- `Bar Tasker/Plugins/Native/MCP/`
 
-These are registered through `FocusPluginRegistry`, then injected into `CheckvistManager`.
+`SettingsView` renders plugin settings from active native plugins through shared protocols.
 
 ## Core Interfaces
 
-Plugin contracts are defined under `Bar Tasker/Plugins/`:
+Plugin contracts are defined under `Bar Tasker/Plugins/Protocols/`:
 
-- `FocusPlugin`
+- `BarTaskerPlugin`
 - `CheckvistSyncPlugin`
 - `ObsidianIntegrationPlugin`
 - `GoogleCalendarIntegrationPlugin`
 - `MCPIntegrationPlugin`
-- `FocusPluginRegistry`
+- `PluginSettingsPageProviding`
 
-## How To Create A Plugin
+Plugin registration lives in `Bar Tasker/Plugins/Registry/BarTaskerPluginRegistry.swift`.
 
-1. Add a new Swift file in `Bar Tasker/`.
-2. Implement one of these protocols:
-   - `CheckvistSyncPlugin` for task backend sync.
-   - `ObsidianIntegrationPlugin` for vault export/open behavior.
-   - `GoogleCalendarIntegrationPlugin` for calendar event handoff behavior.
-   - `MCPIntegrationPlugin` for MCP command discovery and config generation behavior.
-3. Give your plugin a unique `pluginIdentifier`.
-4. Register and activate it in `AppDelegate` before `CheckvistManager` is created.
+## Native Plugin Rules
 
-Example wiring:
+- Keep each plugin self-contained in its own folder (logic + settings UI extension).
+- Do not place plugin-specific services/models in app root.
+- If a plugin has settings, define them in a plugin-local `+Settings.swift` file.
+- `SettingsView` should stay generic and never add plugin-specific switch/case logic.
 
-```swift
-private let pluginRegistry: FocusPluginRegistry = {
-  let registry = FocusPluginRegistry.nativeFirst()
-  registry.register(MyCustomCheckvistPlugin(), activate: true)
-  registry.register(MyCustomObsidianPlugin(), activate: true)
-  registry.register(MyCustomGoogleCalendarPlugin(), activate: true)
-  registry.register(MyCustomMCPPlugin(), activate: true)
-  return registry
-}()
+## Responsibilities By Capability
 
-lazy var checkvistManager: CheckvistManager = CheckvistManager(pluginRegistry: pluginRegistry)
-```
+### Checkvist (`CheckvistSyncPlugin`)
 
-## Checkvist Plugin Responsibilities
+- Authentication/token lifecycle (`login`, `clearAuthentication`).
+- Task/list fetch and task mutation operations.
+- Cache persistence and stale-cache checks.
 
-A `CheckvistSyncPlugin` is responsible for:
+### Obsidian (`ObsidianIntegrationPlugin`)
 
-- Login and token lifecycle (`login`, `clearAuthentication`)
-- Task fetch/list fetch
-- Task mutations (close/reopen/invalidate/update/create/delete/move/reparent)
-- Cache persistence and stale-cache checks used for offline Obsidian sync fallback
+- Inbox/linked-folder selection and clearing.
+- Markdown export/open behavior via `syncTask(...)`.
 
-If your plugin does not support a capability, return `false` for the operation or throw a typed error.
+### Google Calendar (`GoogleCalendarIntegrationPlugin`)
 
-## Obsidian Plugin Responsibilities
+- Event URL composition for selected tasks.
+- Due-date mapping decisions for event timing.
 
-An `ObsidianIntegrationPlugin` is responsible for:
+### MCP (`MCPIntegrationPlugin`)
 
-- Inbox selection and clearing
-- Per-task linked folders
-- Exporting and opening markdown via `syncTask(...)`
-
-The manager handles queueing/retry logic and when to invoke sync; the plugin handles file/vault behavior.
-
-## Google Calendar Plugin Responsibilities
-
-A `GoogleCalendarIntegrationPlugin` is responsible for:
-
-- Building a Google Calendar create-event URL from the selected task
-- Deciding how due date/time maps to event timing
-
-The manager handles when the action is triggered; the plugin handles URL composition.
-
-## MCP Plugin Responsibilities
-
-A `MCPIntegrationPlugin` is responsible for:
-
-- Resolving the Bar Tasker executable command path and optional guide file path.
-- Generating a valid MCP client config JSON payload for copy/paste into MCP clients.
-- Handling placeholder behavior when credentials or command path are unavailable.
-
-The manager handles settings UX (toggle, copy-to-clipboard, open guide); the plugin handles path/config behavior.
-
-## Native-First Rule
-
-Keep core app behavior available with built-in plugins. Add custom plugins by overriding the active plugin in the registry rather than editing view code.
+- Resolve server command and optional guide path.
+- Generate MCP client configuration JSON.
 
 ## Verification
 

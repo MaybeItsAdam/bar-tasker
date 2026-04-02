@@ -5,8 +5,8 @@ import XCTest
 final class TimerElapsedReassignmentPolicyTests: XCTestCase {
   func testRemovedChildElapsedRollsIntoOpenParent() {
     let previousNodes = [
-      CheckvistTimerNode(id: 1, parentId: nil),
-      CheckvistTimerNode(id: 2, parentId: 1),
+      BarTaskerTimerNode(id: 1, parentId: nil),
+      BarTaskerTimerNode(id: 2, parentId: 1),
     ]
     let latestOpenTaskIDs: Set<Int> = [1]
     let elapsedByTaskID: [Int: TimeInterval] = [2: 120]
@@ -22,9 +22,9 @@ final class TimerElapsedReassignmentPolicyTests: XCTestCase {
 
   func testRemovedBranchElapsedRollsIntoNearestOpenAncestor() {
     let previousNodes = [
-      CheckvistTimerNode(id: 1, parentId: nil),
-      CheckvistTimerNode(id: 2, parentId: 1),
-      CheckvistTimerNode(id: 3, parentId: 2),
+      BarTaskerTimerNode(id: 1, parentId: nil),
+      BarTaskerTimerNode(id: 2, parentId: 1),
+      BarTaskerTimerNode(id: 3, parentId: 2),
     ]
     let latestOpenTaskIDs: Set<Int> = [1]
     let elapsedByTaskID: [Int: TimeInterval] = [2: 30, 3: 10]
@@ -40,8 +40,8 @@ final class TimerElapsedReassignmentPolicyTests: XCTestCase {
 
   func testOpenTasksKeepOwnElapsed() {
     let previousNodes = [
-      CheckvistTimerNode(id: 1, parentId: nil),
-      CheckvistTimerNode(id: 2, parentId: 1),
+      BarTaskerTimerNode(id: 1, parentId: nil),
+      BarTaskerTimerNode(id: 2, parentId: 1),
     ]
     let latestOpenTaskIDs: Set<Int> = [1, 2]
     let elapsedByTaskID: [Int: TimeInterval] = [1: 15, 2: 90]
@@ -56,7 +56,7 @@ final class TimerElapsedReassignmentPolicyTests: XCTestCase {
   }
 
   func testRemovedRootElapsedDropsWhenNoOpenAncestorExists() {
-    let previousNodes = [CheckvistTimerNode(id: 1, parentId: nil)]
+    let previousNodes = [BarTaskerTimerNode(id: 1, parentId: nil)]
     let latestOpenTaskIDs: Set<Int> = []
     let elapsedByTaskID: [Int: TimeInterval] = [1: 42]
 

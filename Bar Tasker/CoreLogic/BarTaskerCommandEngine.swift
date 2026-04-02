@@ -1,6 +1,6 @@
 import Foundation
 
-struct CheckvistCommandSuggestion: Equatable {
+struct BarTaskerCommandSuggestion: Equatable, Sendable {
   let label: String
   let command: String
   let preview: String
@@ -8,7 +8,7 @@ struct CheckvistCommandSuggestion: Equatable {
   let submitImmediately: Bool
 }
 
-enum CheckvistCommand: Equatable {
+enum BarTaskerCommand: Equatable, Sendable {
   case done
   case undone
   case invalidate
@@ -16,6 +16,7 @@ enum CheckvistCommand: Equatable {
   case clearDue
   case edit
   case search
+  case openPreferences
   case addSibling
   case addChild
   case openLink
@@ -43,8 +44,9 @@ enum CheckvistCommand: Equatable {
   case unknown(String)
 }
 
-enum CheckvistCommandEngine {
-  static let suggestions: [CheckvistCommandSuggestion] = [
+// swiftlint:disable type_body_length
+enum BarTaskerCommandEngine {
+  static let suggestions: [BarTaskerCommandSuggestion] = [
     .init(
       label: "Mark done", command: "done", preview: "Close selected task", keybind: "Space",
       submitImmediately: true),
@@ -121,6 +123,10 @@ enum CheckvistCommandEngine {
       label: "Focus search", command: "search", preview: "Search tasks", keybind: "/",
       submitImmediately: true),
     .init(
+      label: "Open preferences", command: "preferences",
+      preview: "Open Bar Tasker preferences",
+      keybind: "Cmd+,", submitImmediately: true),
+    .init(
       label: "Add sibling task", command: "add sibling", preview: "Create sibling below selection",
       keybind: "Enter", submitImmediately: true),
     .init(
@@ -159,19 +165,20 @@ enum CheckvistCommandEngine {
       keybind: "h / ←", submitImmediately: true),
   ]
 
-  static func filteredSuggestions(query: String, limit: Int = 8) -> [CheckvistCommandSuggestion] {
-    let q = query.lowercased().trimmingCharacters(in: .whitespaces)
+  static func filteredSuggestions(query: String, limit: Int = 8) -> [BarTaskerCommandSuggestion] {
+    let queryText = query.lowercased().trimmingCharacters(in: .whitespaces)
     let candidates = suggestions.filter { suggestion in
-      q.isEmpty
-        || suggestion.label.lowercased().contains(q)
-        || suggestion.command.lowercased().contains(q)
-        || suggestion.preview.lowercased().contains(q)
-        || (suggestion.keybind?.lowercased().contains(q) ?? false)
+      queryText.isEmpty
+        || suggestion.label.lowercased().contains(queryText)
+        || suggestion.command.lowercased().contains(queryText)
+        || suggestion.preview.lowercased().contains(queryText)
+        || (suggestion.keybind?.lowercased().contains(queryText) ?? false)
     }
     return Array(candidates.prefix(limit))
   }
 
-  static func parse(_ input: String) -> CheckvistCommand {
+  // swiftlint:disable:next cyclomatic_complexity
+  static func parse(_ input: String) -> BarTaskerCommand {
     let cmd = input.lowercased().trimmingCharacters(in: .whitespaces)
     if cmd == "done" { return .done }
     if cmd == "undone" { return .undone }
@@ -183,6 +190,9 @@ enum CheckvistCommandEngine {
     if cmd == "clear due" { return .clearDue }
     if cmd == "edit" { return .edit }
     if cmd == "search" { return .search }
+    if cmd == "preferences" || cmd == "prefs" || cmd == "settings" {
+      return .openPreferences
+    }
     if cmd == "add sibling" { return .addSibling }
     if cmd == "add child" { return .addChild }
     if cmd == "open link" { return .openLink }
@@ -354,13 +364,26 @@ enum CheckvistCommandEngine {
     return nil
   }
 
+  private static let relativeOffsetRegex = makeRegex(
+    #"^in\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$"#)
+  private static let twelveHourRegex = makeRegex(
+    #"^(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap]m)$"#)
+  private static let twentyFourHourRegex = makeRegex(
+    #"^([01]?\d|2[0-3])(?::([0-5]\d))?$"#)
+
+  private static func makeRegex(_ pattern: String) -> NSRegularExpression {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else {
+      fatalError("Invalid regex pattern: \(pattern)")
+    }
+    return regex
+  }
+
   private static func resolveRelativeOffsetExpression(
     _ normalized: String,
     now: Date,
     calendar: Calendar
   ) -> Date? {
-    let pattern = #"^in\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$"#
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+    let regex = relativeOffsetRegex
     let range = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
     guard let match = regex.firstMatch(in: normalized, options: [], range: range) else {
       return nil
@@ -444,9 +467,7 @@ enum CheckvistCommandEngine {
       return DateComponents(hour: 0, minute: 0, second: 0)
     }
 
-    let twelveHourPattern = #"^(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap]m)$"#
-    if let captures = captureGroups(pattern: twelveHourPattern, in: normalized), captures.count >= 3
-    {
+    if let captures = captureGroups(regex: twelveHourRegex, in: normalized), captures.count >= 3 {
       guard var hour = Int(captures[0]) else { return nil }
       let minute = Int(captures[1]) ?? 0
       let meridiem = captures[2]
@@ -455,8 +476,7 @@ enum CheckvistCommandEngine {
       return DateComponents(hour: hour, minute: minute, second: 0)
     }
 
-    let twentyFourHourPattern = #"^([01]?\d|2[0-3])(?::([0-5]\d))?$"#
-    if let captures = captureGroups(pattern: twentyFourHourPattern, in: normalized),
+    if let captures = captureGroups(regex: twentyFourHourRegex, in: normalized),
       captures.count >= 2
     {
       guard let hour = Int(captures[0]) else { return nil }
@@ -467,8 +487,7 @@ enum CheckvistCommandEngine {
     return nil
   }
 
-  private static func captureGroups(pattern: String, in text: String) -> [String]? {
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+  private static func captureGroups(regex: NSRegularExpression, in text: String) -> [String]? {
     let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
     guard let match = regex.firstMatch(in: text, options: [], range: fullRange) else { return nil }
 
@@ -494,3 +513,4 @@ enum CheckvistCommandEngine {
     return calendar.date(from: components)
   }
 }
+// swiftlint:enable type_body_length

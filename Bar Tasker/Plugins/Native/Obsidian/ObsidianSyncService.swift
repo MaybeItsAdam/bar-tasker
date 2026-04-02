@@ -6,6 +6,7 @@ enum ObsidianOpenMode {
   case newWindow
 }
 
+// swiftlint:disable type_body_length
 final class ObsidianSyncService {
   private static let bookmarkDefaultsKey = "obsidianInboxBookmark"
   private static let linkedFolderBookmarksDefaultsKey = "obsidianLinkedFolderBookmarksByTaskId"
@@ -195,31 +196,25 @@ final class ObsidianSyncService {
     guard let bookmarkData = inboxBookmark else {
       throw ObsidianSyncError.inboxFolderNotConfigured
     }
-
-    var isStale = false
-    let resolvedURL = try URL(
-      resolvingBookmarkData: bookmarkData,
-      options: [.withSecurityScope],
-      relativeTo: nil,
-      bookmarkDataIsStale: &isStale
-    )
-
-    if isStale {
-      let refreshedBookmark = try resolvedURL.bookmarkData(
-        options: [.withSecurityScope],
-        includingResourceValuesForKeys: nil,
-        relativeTo: nil
-      )
-      inboxBookmark = refreshedBookmark
-      UserDefaults.standard.set(refreshedBookmark, forKey: Self.bookmarkDefaultsKey)
+    return try resolveSecurityScopedBookmark(bookmarkData) { refreshed in
+      inboxBookmark = refreshed
+      UserDefaults.standard.set(refreshed, forKey: Self.bookmarkDefaultsKey)
     }
-
-    return resolvedURL
   }
 
   private func resolvedLinkedFolderURL(forTaskId taskId: Int) throws -> URL? {
     guard let bookmarkData = bookmarkDataForLinkedTask(taskId) else { return nil }
+    return try resolveSecurityScopedBookmark(bookmarkData) { refreshed in
+      linkedFolderBookmarksByTaskId[taskId] = refreshed.base64EncodedString()
+      persistLinkedFolderBookmarks()
+    }
+  }
 
+  /// Resolves a security-scoped bookmark, refreshing it via `onStale` if the OS reports it stale.
+  private func resolveSecurityScopedBookmark(
+    _ bookmarkData: Data,
+    onStale: (Data) -> Void
+  ) throws -> URL {
     var isStale = false
     let resolvedURL = try URL(
       resolvingBookmarkData: bookmarkData,
@@ -227,17 +222,14 @@ final class ObsidianSyncService {
       relativeTo: nil,
       bookmarkDataIsStale: &isStale
     )
-
     if isStale {
-      let refreshedBookmark = try resolvedURL.bookmarkData(
+      let refreshed = try resolvedURL.bookmarkData(
         options: [.withSecurityScope],
         includingResourceValuesForKeys: nil,
         relativeTo: nil
       )
-      linkedFolderBookmarksByTaskId[taskId] = refreshedBookmark.base64EncodedString()
-      persistLinkedFolderBookmarks()
+      onStale(refreshed)
     }
-
     return resolvedURL
   }
 
@@ -277,12 +269,12 @@ final class ObsidianSyncService {
       fileOpenConfiguration.activates = mode == .standard
       NSWorkspace.shared.open(
         [markdownURL], withApplicationAt: obsidianAppURL, configuration: fileOpenConfiguration
-      ) { _, _ in
-        guard let obsidianURL else { return }
+      ) { [weak self] _, _ in
+        guard let self, let obsidianURL else { return }
         let delay: TimeInterval =
           mode == .newWindow ? Self.newWindowOpenDelay : Self.standardOpenDelay
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-          self.openObsidianURI(obsidianURL, appURL: obsidianAppURL, mode: mode, allowRetry: true)
+          self.openObsidianURI(obsidianURL, appURL: obsidianAppURL, mode: mode)
         }
       }
       return
@@ -311,16 +303,18 @@ final class ObsidianSyncService {
     _ obsidianURL: URL,
     appURL: URL,
     mode: ObsidianOpenMode,
-    allowRetry: Bool
+    remainingRetries: Int = 1
   ) {
     let uriOpenConfiguration = NSWorkspace.OpenConfiguration()
     uriOpenConfiguration.activates = mode == .standard
     NSWorkspace.shared.open(
       [obsidianURL], withApplicationAt: appURL, configuration: uriOpenConfiguration
-    ) { _, error in
-      guard allowRetry, error != nil else { return }
+    ) { [weak self] _, error in
+      guard let self, remainingRetries > 0, error != nil else { return }
       DispatchQueue.main.asyncAfter(deadline: .now() + Self.uriRetryDelay) {
-        self.openObsidianURI(obsidianURL, appURL: appURL, mode: mode, allowRetry: false)
+        self.openObsidianURI(
+          obsidianURL, appURL: appURL, mode: mode,
+          remainingRetries: remainingRetries - 1)
       }
     }
   }
@@ -429,6 +423,7 @@ final class ObsidianSyncService {
     return resolvedURL.path
   }
 }
+// swiftlint:enable type_body_length
 
 enum ObsidianSyncError: LocalizedError {
   case inboxFolderNotConfigured

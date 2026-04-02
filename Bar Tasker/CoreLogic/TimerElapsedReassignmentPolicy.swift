@@ -2,7 +2,7 @@ import Foundation
 
 struct TimerElapsedReassignmentPolicy {
   static func remapElapsed(
-    previousNodes: [CheckvistTimerNode],
+    previousNodes: [BarTaskerTimerNode],
     latestOpenTaskIDs: Set<Int>,
     elapsedByTaskID: [Int: TimeInterval]
   ) -> [Int: TimeInterval] {

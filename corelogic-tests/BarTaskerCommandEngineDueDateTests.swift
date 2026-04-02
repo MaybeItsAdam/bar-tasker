@@ -3,25 +3,25 @@ import XCTest
 
 @testable import BarTaskerCore
 
-final class CheckvistCommandEngineDueDateTests: XCTestCase {
+final class BarTaskerCommandEngineDueDateTests: XCTestCase {
   func testResolveDueDateSupportsRelativeDateTimes() {
     let calendar = makeUTCCalendar()
     let now = makeDate(year: 2026, month: 3, day: 30, hour: 10, minute: 15, calendar: calendar)
 
     XCTAssertEqual(
-      CheckvistCommandEngine.resolveDueDate("today", now: now, calendar: calendar),
+      BarTaskerCommandEngine.resolveDueDate("today", now: now, calendar: calendar),
       "2026-03-30"
     )
     XCTAssertEqual(
-      CheckvistCommandEngine.resolveDueDate("today 14:30", now: now, calendar: calendar),
+      BarTaskerCommandEngine.resolveDueDate("today 14:30", now: now, calendar: calendar),
       "2026-03-30 14:30:00 +0000"
     )
     XCTAssertEqual(
-      CheckvistCommandEngine.resolveDueDate("tomorrow 9am", now: now, calendar: calendar),
+      BarTaskerCommandEngine.resolveDueDate("tomorrow 9am", now: now, calendar: calendar),
       "2026-03-31 09:00:00 +0000"
     )
     XCTAssertEqual(
-      CheckvistCommandEngine.resolveDueDate("monday 11am", now: now, calendar: calendar),
+      BarTaskerCommandEngine.resolveDueDate("monday 11am", now: now, calendar: calendar),
       "2026-04-06 11:00:00 +0000"
     )
   }
@@ -31,11 +31,11 @@ final class CheckvistCommandEngineDueDateTests: XCTestCase {
     let now = makeDate(year: 2026, month: 3, day: 30, hour: 10, minute: 15, calendar: calendar)
 
     XCTAssertEqual(
-      CheckvistCommandEngine.resolveDueDate("2026-4-2", now: now, calendar: calendar),
+      BarTaskerCommandEngine.resolveDueDate("2026-4-2", now: now, calendar: calendar),
       "2026-04-02"
     )
     XCTAssertEqual(
-      CheckvistCommandEngine.resolveDueDate("2026-4-2 8:05pm", now: now, calendar: calendar),
+      BarTaskerCommandEngine.resolveDueDate("2026-4-2 8:05pm", now: now, calendar: calendar),
       "2026-04-02 20:05:00 +0000"
     )
   }
@@ -45,11 +45,11 @@ final class CheckvistCommandEngineDueDateTests: XCTestCase {
     let now = makeDate(year: 2026, month: 3, day: 30, hour: 10, minute: 15, calendar: calendar)
 
     XCTAssertEqual(
-      CheckvistCommandEngine.resolveDueDate("9am", now: now, calendar: calendar),
+      BarTaskerCommandEngine.resolveDueDate("9am", now: now, calendar: calendar),
       "2026-03-30 09:00:00 +0000"
     )
     XCTAssertEqual(
-      CheckvistCommandEngine.resolveDueDate("in 90m", now: now, calendar: calendar),
+      BarTaskerCommandEngine.resolveDueDate("in 90m", now: now, calendar: calendar),
       "2026-03-30 11:45:00 +0000"
     )
   }

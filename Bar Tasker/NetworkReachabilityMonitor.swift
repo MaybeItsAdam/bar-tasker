@@ -1,11 +1,11 @@
 import Foundation
 import Network
 
-final class NetworkReachabilityMonitor {
+final class NetworkReachabilityMonitor: @unchecked Sendable {
   private let monitor = NWPathMonitor()
   private let queue = DispatchQueue(label: "uk.co.maybeitsadam.bar-tasker.network")
 
-  var onStatusChange: ((Bool) -> Void)?
+  var onStatusChange: (@Sendable (Bool) -> Void)?
 
   func start() {
     monitor.pathUpdateHandler = { [weak self] path in

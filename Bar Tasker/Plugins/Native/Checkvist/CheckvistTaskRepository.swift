@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-struct CheckvistTaskCachePayload: Codable {
+struct CheckvistTaskCachePayload: Codable, Sendable {
   let listId: String
   let fetchedAt: Date
   let tasks: [CheckvistTask]

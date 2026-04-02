@@ -100,6 +100,16 @@ All external integrations are plugins.
 - Contracts and registry live under `Bar Tasker/Plugins/`.
 - Plugin authoring guide: [docs/plugins.md](docs/plugins.md)
 
+End-user plugin install flow:
+
+- Open `Preferences -> Plugins`
+- Click `Install Plugin` (supports folder, `.zip`, `.bartasker-plugin`)
+- Or drop a plugin folder into:
+  - `~/Library/Application Support/Bar Tasker/Plugins`
+- Use `Open Plugins Folder` and `Reload` in the same Plugins pane
+
+Current scope: built-in plugins are fully functional; user-installed plugins are manifest-driven (settings, metadata, lifecycle) and prepared for runtime capability wiring.
+
 ## MCP Server
 
 Bar Tasker includes an MCP stdio server and can run with `--mcp-server`.

@@ -153,10 +153,6 @@ final class NativeMCPIntegrationPlugin: MCPIntegrationPlugin {
     let fileManager = FileManager.default
     var candidates: [URL] = []
 
-    if let executableURL = Bundle.main.executableURL {
-      candidates.append(executableURL.standardizedFileURL)
-    }
-
     let installedAppCommand = URL(
       fileURLWithPath: "/Applications/Bar Tasker.app/Contents/MacOS/Bar Tasker")
     candidates.append(installedAppCommand)
@@ -164,6 +160,10 @@ final class NativeMCPIntegrationPlugin: MCPIntegrationPlugin {
     let bundleParent = Bundle.main.bundleURL.deletingLastPathComponent()
     candidates.append(
       bundleParent.appendingPathComponent("Bar Tasker.app/Contents/MacOS/Bar Tasker"))
+
+    if let executableURL = Bundle.main.executableURL {
+      candidates.append(executableURL.standardizedFileURL)
+    }
 
     var deduplicated: [URL] = []
     var seenPaths = Set<String>()

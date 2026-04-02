@@ -1,12 +1,15 @@
 import Foundation
+import OSLog
 
 @MainActor
 final class CheckvistSession {
+  private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "checkvist-session")
   private let apiClient: CheckvistAPIClient
   private let userAgent = "BarTasker/1.0 (Macintosh; Mac OS X)"
   private var token: String?
-  private var isLoginInProgress = false
-  private var loginWaiters: [CheckedContinuation<Bool, Never>] = []
+  /// In-flight login task. Concurrent callers await this instead of firing duplicates.
+  private var activeLoginTask: Task<Bool, Never>?
+  private var activeLoginGeneration: UInt64 = 0
 
   init(apiClient: CheckvistAPIClient = CheckvistAPIClient()) {
     self.apiClient = apiClient
@@ -17,22 +20,24 @@ final class CheckvistSession {
   }
 
   func login(username: String, remoteKey: String) async throws -> Bool {
-    if isLoginInProgress {
-      return await withCheckedContinuation { continuation in
-        loginWaiters.append(continuation)
-      }
+    // If a login is already in flight, coalesce by awaiting its result.
+    if let existing = activeLoginTask {
+      return await existing.value
     }
 
-    isLoginInProgress = true
-    let result = await executeLoginRequest(username: username, remoteKey: remoteKey)
-    isLoginInProgress = false
-
-    let waiters = loginWaiters
-    loginWaiters = []
-    for waiter in waiters {
-      waiter.resume(returning: result)
+    activeLoginGeneration &+= 1
+    let generation = activeLoginGeneration
+    let task = Task<Bool, Never> { [weak self] in
+      guard let self else { return false }
+      return await self.executeLoginRequest(username: username, remoteKey: remoteKey)
     }
+    activeLoginTask = task
 
+    let result = await task.value
+    // Only clear if this is still the active task (not replaced by a newer login).
+    if activeLoginGeneration == generation {
+      activeLoginTask = nil
+    }
     return result
   }
 
@@ -58,7 +63,7 @@ final class CheckvistSession {
       let request = try buildRequest(validToken)
       let (data, response) = try await apiClient.data(for: request)
       guard let httpResponse = response as? HTTPURLResponse else {
-        throw CheckvistSessionError.invalidResponse
+        throw CheckvistSessionError.invalidResponse(statusCode: nil)
       }
 
       if httpResponse.statusCode == 401 {
@@ -117,14 +122,31 @@ final class CheckvistSession {
         return true
       }
 
+      logger.warning("Login response could not be parsed as token.")
       return false
     } catch {
+      logger.error("Login request failed: \(error.localizedDescription, privacy: .public)")
       return false
     }
   }
 }
 
-enum CheckvistSessionError: Error {
+enum CheckvistSessionError: LocalizedError {
   case authenticationUnavailable
-  case invalidResponse
+  case invalidResponse(statusCode: Int?)
+  case requestFailed(underlying: Error)
+
+  var errorDescription: String? {
+    switch self {
+    case .authenticationUnavailable:
+      return "Authentication unavailable — check your username and remote key."
+    case .invalidResponse(let statusCode):
+      if let code = statusCode {
+        return "Unexpected response from Checkvist (HTTP \(code))."
+      }
+      return "Invalid response from Checkvist."
+    case .requestFailed(let underlying):
+      return "Request failed: \(underlying.localizedDescription)"
+    }
+  }
 }

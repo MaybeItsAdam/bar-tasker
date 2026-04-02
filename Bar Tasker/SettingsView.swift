@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 
+// swiftlint:disable file_length
 // MARK: - Carbon modifier constants (avoid importing Carbon in SwiftUI file)
 private let carbonCmdKey = 0x0100
 private let carbonShiftKey = 0x0200
@@ -114,106 +115,93 @@ struct HotkeyRecorderField: NSViewRepresentable {
 
 // MARK: - Settings View
 
+// swiftlint:disable file_length type_body_length
 struct SettingsView: View {
-  private struct PaneDescriptor: Identifiable {
-    let pane: SettingsPane
+  private struct ShortcutReferenceItem: Identifiable {
+    let keys: String
+    let action: String
+    let note: String?
+    var id: String { "\(keys)|\(action)" }
+  }
+
+  private struct ShortcutReferenceGroup: Identifiable {
     let title: String
-    let systemImage: String
-    var id: SettingsPane { pane }
+    let items: [ShortcutReferenceItem]
+    var id: String { title }
   }
 
-  private enum SettingsPane: Hashable {
-    case checkvist
-    case preferences
-    case obsidian
-    case googleCalendar
-    case mcp
-    #if DEBUG
-      case debug
-    #endif
+  private struct ShortcutCategoryDescriptor: Identifiable {
+    let title: String
+    let actions: [BarTaskerManager.ConfigurableShortcutAction]
+    var id: String { title }
   }
 
-  @EnvironmentObject var checkvistManager: CheckvistManager
-  @State private var isLoadingLists = false
-  @State private var didAutoloadLists = false
-  @State private var selectedPane: SettingsPane = .checkvist
+  private struct BuiltInPluginSettingsDescriptor: Identifiable {
+    let pluginIdentifier: String
+    let displayName: String
+    let settingsIconSystemName: String
+    let plugin: any PluginSettingsPageProviding
+    var id: String { pluginIdentifier }
+
+    var shortName: String {
+      if displayName.hasPrefix("Native ") {
+        return String(displayName.dropFirst("Native ".count))
+      }
+      return displayName
+    }
+  }
+
+  private struct PluginCardDescriptor: Identifiable {
+    enum Source {
+      case builtIn(BuiltInPluginSettingsDescriptor)
+      case user(UserPluginManager.InstalledUserPlugin)
+    }
+
+    let id: String
+    let title: String
+    let subtitle: String
+    let settingsIconSystemName: String
+    let source: Source
+  }
+
+  @EnvironmentObject var checkvistManager: BarTaskerManager
+  @EnvironmentObject var navState: SettingsNavState
+  @State private var selectedPluginCardID: String?
+  @State private var themeJSONDraft: String = ""
+  @State private var themeJSONStatusMessage: String = ""
+  @State private var themeJSONStatusIsError: Bool = false
+
+  private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
+    checkvistManager.themeColor(for: token)
+  }
 
   var body: some View {
-    VStack(spacing: 0) {
-      settingsNavigationBar
-      Divider()
-      paneContent {
-        selectedPaneContent
-      }
+    paneContent {
+      selectedPaneContent
     }
+    .tint(checkvistManager.themeAccentColor)
     .task {
-      guard !didAutoloadLists else { return }
-      didAutoloadLists = true
-      if checkvistManager.canAttemptLogin && checkvistManager.availableLists.isEmpty {
-        await loadLists(assignFirstIfMissing: false)
+      syncSelectedPluginCardIfNeeded()
+      if themeJSONDraft.isEmpty {
+        themeJSONDraft = checkvistManager.exportThemeJSON(prettyPrinted: true)
       }
     }
-  }
-
-  private var paneDescriptors: [PaneDescriptor] {
-    var descriptors: [PaneDescriptor] = [
-      .init(pane: .checkvist, title: "Checkvist", systemImage: "checkmark.circle"),
-      .init(pane: .preferences, title: "Preferences", systemImage: "slider.horizontal.3"),
-      .init(pane: .obsidian, title: "Obsidian", systemImage: "book.closed"),
-      .init(pane: .googleCalendar, title: "Google Calendar", systemImage: "calendar"),
-      .init(pane: .mcp, title: "MCP", systemImage: "link"),
-    ]
-    #if DEBUG
-      descriptors.append(.init(pane: .debug, title: "Debug", systemImage: "ladybug"))
-    #endif
-    return descriptors
-  }
-
-  private var settingsNavigationBar: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 8) {
-        ForEach(paneDescriptors) { pane in
-          Button {
-            selectedPane = pane.pane
-          } label: {
-            VStack(spacing: 4) {
-              Image(systemName: pane.systemImage)
-                .font(.system(size: 14, weight: .medium))
-              Text(pane.title)
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-            }
-            .frame(minWidth: 88)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-              RoundedRectangle(cornerRadius: 8)
-                .fill(selectedPane == pane.pane ? Color.accentColor.opacity(0.2) : Color.clear)
-            )
-          }
-          .buttonStyle(.plain)
-          .foregroundColor(selectedPane == pane.pane ? .accentColor : .primary)
-        }
-      }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 10)
-      .frame(maxWidth: .infinity, alignment: .leading)
+    .onChange(of: pluginCardIDs) { _, _ in
+      syncSelectedPluginCardIfNeeded()
     }
   }
 
   @ViewBuilder
   private var selectedPaneContent: some View {
-    switch selectedPane {
-    case .checkvist:
-      checkvistPane
+    switch navState.selectedPane {
     case .preferences:
       preferencesPane
-    case .obsidian:
-      obsidianPluginPane
-    case .googleCalendar:
-      googleCalendarPluginPane
-    case .mcp:
-      mcpPluginPane
+    case .keybindings:
+      keybindingsPane
+    case .theme:
+      themePane
+    case .plugins:
+      pluginsPane
     #if DEBUG
       case .debug:
         debugPane
@@ -221,99 +209,188 @@ struct SettingsView: View {
     }
   }
 
-  @ViewBuilder
-  private func paneContent<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-    ScrollView {
-      Form {
-        content()
-      }
-      .padding(20)
-      .frame(maxWidth: .infinity)
+  private var builtInPluginSettingsPages: [BuiltInPluginSettingsDescriptor] {
+    checkvistManager.activePluginSettingsPages.map {
+      BuiltInPluginSettingsDescriptor(
+        pluginIdentifier: $0.pluginIdentifier,
+        displayName: $0.displayName,
+        settingsIconSystemName: $0.settingsIconSystemName,
+        plugin: $0
+      )
     }
   }
 
-  private var checkvistPane: some View {
-    Group {
-      Section(header: Text("Checkvist Credentials")) {
-        TextField("Username (Email)", text: $checkvistManager.username)
-          .textFieldStyle(RoundedBorderTextFieldStyle())
-          .autocorrectionDisabled()
+  private var pluginCards: [PluginCardDescriptor] {
+    builtInPluginSettingsPages.map { page in
+      PluginCardDescriptor(
+        id: "builtin:\(page.pluginIdentifier)",
+        title: page.shortName,
+        subtitle: pluginStatusLabel(for: page.pluginIdentifier),
+        settingsIconSystemName: page.settingsIconSystemName,
+        source: .builtIn(page)
+      )
+    }
+  }
 
-        SecureField("Remote API Key", text: $checkvistManager.remoteKey)
-          .textFieldStyle(RoundedBorderTextFieldStyle())
+  private var userPluginCards: [PluginCardDescriptor] {
+    checkvistManager.userPluginManager.sortedInstalledPlugins.map { plugin in
+      let enabled = checkvistManager.userPluginManager.isPluginEnabled(plugin.manifest.id)
+      return PluginCardDescriptor(
+        id: "user:\(plugin.manifest.id)",
+        title: plugin.manifest.name,
+        subtitle: enabled ? "Enabled" : "Disabled",
+        settingsIconSystemName: "puzzlepiece",
+        source: .user(plugin)
+      )
+    }
+  }
 
-        TextField("List ID", text: $checkvistManager.listId)
-          .textFieldStyle(RoundedBorderTextFieldStyle())
-          .autocorrectionDisabled()
+  private var allPluginCards: [PluginCardDescriptor] { pluginCards + userPluginCards }
 
-        Button("Connect & Load Lists") {
-          Task { await loadLists(assignFirstIfMissing: true) }
-        }
-        .disabled(
-          checkvistManager.isLoading || isLoadingLists || !checkvistManager.canAttemptLogin)
+  private var pluginCardIDs: [String] {
+    allPluginCards.map(\.id)
+  }
 
-        if !checkvistManager.availableLists.isEmpty {
-          HStack {
-            Picker("Checklist", selection: $checkvistManager.listId) {
-              ForEach(checkvistManager.availableLists) { list in
-                Text("\(list.name) (\(list.id))").tag(String(list.id))
+  private var selectedPluginCard: PluginCardDescriptor? {
+    if let selectedPluginCardID,
+      let selected = allPluginCards.first(where: { $0.id == selectedPluginCardID })
+    {
+      return selected
+    }
+    return pluginCards.first
+  }
+
+  private var pluginsPane: some View {
+    HStack(spacing: 0) {
+      // Sidebar
+      VStack(spacing: 0) {
+        List(selection: $selectedPluginCardID) {
+          Section("Built-in") {
+            ForEach(pluginCards) { card in
+              pluginListRow(for: card).tag(card.id as String?)
+            }
+          }
+          if !userPluginCards.isEmpty {
+            Section("User Plugins") {
+              ForEach(userPluginCards) { card in
+                pluginListRow(for: card).tag(card.id as String?)
               }
             }
-            .pickerStyle(.menu)
-            Spacer(minLength: 8)
-            Button("Reload Lists") {
-              Task { await loadLists(assignFirstIfMissing: false) }
-            }
-            .disabled(checkvistManager.isLoading || isLoadingLists)
+          }
+        }
+        .listStyle(.sidebar)
+
+        Divider()
+        HStack(spacing: 6) {
+          Button {
+            checkvistManager.userPluginManager.installPluginPackageInteractively()
+          } label: {
+            Label("Install Plugin", systemImage: "plus")
+          }
+          Button {
+            checkvistManager.userPluginManager.openPluginsFolder()
+          } label: {
+            Label("Open Folder", systemImage: "folder")
+          }
+        }
+        .buttonStyle(.borderless)
+        .labelStyle(.iconOnly)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .frame(minWidth: 180, idealWidth: 200, maxWidth: 240)
+
+      Divider()
+
+      // Detail
+      Group {
+        if let selectedPluginCard {
+          switch selectedPluginCard.source {
+          case .builtIn:
+            Form { pluginSettingsView(for: selectedPluginCard) }
+              .formStyle(.grouped)
+          case .user(let plugin):
+            userPluginDetailView(for: plugin)
           }
         } else {
-          Text(
-            "Tip: Click \"Connect & Load Lists\" to choose a list by name. You only need List ID as fallback."
+          ContentUnavailableView(
+            "Select a Plugin",
+            systemImage: "puzzlepiece.extension",
+            description: Text("Choose a plugin from the sidebar to view its settings.")
           )
-          .font(.caption)
-          .foregroundColor(.secondary)
         }
       }
-      .padding(.bottom, 10)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+  }
 
-      HStack {
-        Spacer()
+  private func pluginListRow(for card: PluginCardDescriptor) -> some View {
+    Label {
+      Text(card.title).lineLimit(1)
+    } icon: {
+      Image(systemName: card.settingsIconSystemName)
+    }
+  }
 
-        if checkvistManager.isLoading {
-          ProgressView()
-            .scaleEffect(0.8)
-            .padding(.trailing, 8)
+  private func userPluginDetailView(for plugin: UserPluginManager.InstalledUserPlugin) -> some View {
+    let manager = checkvistManager.userPluginManager
+    return Form {
+      Section(header: Text(plugin.manifest.name)) {
+        if let summary = plugin.manifest.summary, !summary.isEmpty {
+          Text(summary)
+            .foregroundStyle(.secondary)
         }
-
-        Button("Save & Connect") {
-          Task {
-            await loadLists(assignFirstIfMissing: true)
-            if !checkvistManager.listId.isEmpty {
-              checkvistManager.markOnboardingCompleted()
-              await checkvistManager.fetchTopTask()
-            }
-          }
+        LabeledContent("Version", value: plugin.manifest.version ?? "—")
+        LabeledContent("ID", value: plugin.manifest.id)
+        Toggle(
+          "Enabled",
+          isOn: Binding(
+            get: { manager.isPluginEnabled(plugin.manifest.id) },
+            set: { manager.setPluginEnabled($0, pluginIdentifier: plugin.manifest.id) }
+          )
+        )
+      }
+      Section {
+        Button("Reveal in Finder") {
+          manager.revealPluginInFinder(plugin)
         }
-        .disabled(
-          checkvistManager.isLoading || isLoadingLists || !checkvistManager.canAttemptLogin)
+        Button("Remove Plugin", role: .destructive) {
+          manager.removePlugin(plugin)
+        }
       }
+    }
+    .formStyle(.grouped)
+    .id(plugin.id)
+  }
 
-      if let errorMessage = checkvistManager.errorMessage {
-        Text(errorMessage)
-          .foregroundColor(.red)
-          .font(.caption)
-          .padding(.top, 10)
-      } else if !checkvistManager.isLoading && checkvistManager.currentTaskText != "Loading..."
-        && checkvistManager.currentTaskText != "Error"
-        && checkvistManager.currentTaskText != "Login failed."
-        && checkvistManager.currentTaskText != "List ID not set."
-        && checkvistManager.currentTaskText != "Authentication required."
-      {
-        Text("Successfully connected! Top Task: \(checkvistManager.currentTaskText)")
-          .foregroundColor(.green)
-          .font(.caption)
-          .padding(.top, 10)
+  private func pluginStatusLabel(for pluginIdentifier: String) -> String {
+    switch pluginIdentifier {
+    case "native.checkvist.sync":
+      return "Active"
+    case "native.obsidian.integration":
+      return checkvistManager.obsidianIntegrationEnabled ? "Enabled" : "Disabled"
+    case "native.google.calendar.integration":
+      return checkvistManager.googleCalendarIntegrationEnabled ? "Enabled" : "Disabled"
+    case "native.mcp.integration":
+      return checkvistManager.mcpIntegrationEnabled ? "Enabled" : "Disabled"
+    default:
+      return "Built-in plugin"
+    }
+  }
+
+  @ViewBuilder
+  private func paneContent<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    if navState.selectedPane == .plugins {
+      content()
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else {
+      Form {
+        content()
       }
+      .formStyle(.grouped)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
   }
 
@@ -323,59 +400,6 @@ struct SettingsView: View {
       if #available(macOS 13.0, *) {
         Toggle("Launch at login", isOn: $checkvistManager.launchAtLogin)
       }
-
-      HStack {
-        Toggle("Global hotkey", isOn: $checkvistManager.globalHotkeyEnabled)
-        Spacer()
-        if checkvistManager.globalHotkeyEnabled {
-          HotkeyRecorderField(
-            keyCode: $checkvistManager.globalHotkeyKeyCode,
-            modifiers: $checkvistManager.globalHotkeyModifiers
-          )
-          .frame(width: 120, height: 22)
-        }
-      }
-
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Quick Add location")
-        Picker("", selection: $checkvistManager.quickAddLocationMode) {
-          Text("Default (List root)").tag(CheckvistManager.QuickAddLocationMode.defaultRoot)
-          Text("Specific task ID").tag(CheckvistManager.QuickAddLocationMode.specificParentTask)
-        }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-
-        if checkvistManager.quickAddLocationMode == .specificParentTask {
-          HStack {
-            TextField("Parent task ID", text: $checkvistManager.quickAddSpecificParentTaskId)
-              .textFieldStyle(.roundedBorder)
-              .frame(maxWidth: 180)
-            Button("Use selected task") {
-              checkvistManager.setQuickAddSpecificLocationToCurrentTask()
-            }
-            .disabled(checkvistManager.currentTask == nil)
-          }
-          Text("Quick Add creates new tasks as children of this task ID.")
-            .font(.caption)
-            .foregroundColor(.secondary)
-        }
-      }
-      .padding(.top, 4)
-
-      HStack {
-        Toggle("Quick Add hotkey", isOn: $checkvistManager.quickAddHotkeyEnabled)
-        Spacer()
-        if checkvistManager.quickAddHotkeyEnabled {
-          HotkeyRecorderField(
-            keyCode: $checkvistManager.quickAddHotkeyKeyCode,
-            modifiers: $checkvistManager.quickAddHotkeyModifiers
-          )
-          .frame(width: 120, height: 22)
-        }
-      }
-      Text("Press this to open a focused Quick Add prompt at the configured location.")
-        .font(.caption)
-        .foregroundColor(.secondary)
 
       VStack(alignment: .leading) {
         Text("Max Menu Bar Width: \(Int(checkvistManager.maxTitleWidth))px")
@@ -398,9 +422,9 @@ struct SettingsView: View {
       VStack(alignment: .leading, spacing: 6) {
         Text("Timer mode")
         Picker("", selection: $checkvistManager.timerMode) {
-          Text("Visible").tag(CheckvistManager.TimerMode.visible)
-          Text("Hidden").tag(CheckvistManager.TimerMode.hidden)
-          Text("Disabled").tag(CheckvistManager.TimerMode.disabled)
+          Text("Visible").tag(BarTaskerManager.TimerMode.visible)
+          Text("Hidden").tag(BarTaskerManager.TimerMode.hidden)
+          Text("Disabled").tag(BarTaskerManager.TimerMode.disabled)
         }
         .labelsHidden()
         .pickerStyle(.segmented)
@@ -409,115 +433,299 @@ struct SettingsView: View {
     }
   }
 
-  private var obsidianPluginPane: some View {
-    Section(header: Text("Obsidian Plugin")) {
-      Toggle("Enable Obsidian integration", isOn: $checkvistManager.obsidianIntegrationEnabled)
+  private var keybindingsPane: some View {
+    Group {
+      Section(header: Text("Configurable Hotkeys")) {
+        hotkeyRow(
+          title: "Global hotkey",
+          description: "Shows/hides the task popover from anywhere.",
+          enabled: $checkvistManager.globalHotkeyEnabled,
+          keyCode: $checkvistManager.globalHotkeyKeyCode,
+          modifiers: $checkvistManager.globalHotkeyModifiers
+        )
+        hotkeyRow(
+          title: "Quick Add hotkey",
+          description: "Opens the quick add prompt at your configured location.",
+          enabled: $checkvistManager.quickAddHotkeyEnabled,
+          keyCode: $checkvistManager.quickAddHotkeyKeyCode,
+          modifiers: $checkvistManager.quickAddHotkeyModifiers
+        )
 
-      if checkvistManager.obsidianIntegrationEnabled {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Obsidian Inbox")
-          if checkvistManager.obsidianInboxPath.isEmpty {
-            Text("No folder selected")
-              .foregroundColor(.secondary)
-              .font(.caption)
-          } else {
-            Text(checkvistManager.obsidianInboxPath)
-              .font(.caption)
-              .textSelection(.enabled)
+        if hotkeyConflictDetected {
+          Text("Global hotkey and Quick Add hotkey currently conflict.")
+            .font(.caption)
+            .foregroundColor(themeColor(.danger))
+        }
+
+        Button("Reset hotkeys to defaults") {
+          checkvistManager.globalHotkeyKeyCode = 49  // Space
+          checkvistManager.globalHotkeyModifiers = 0x0800  // Option
+          checkvistManager.quickAddHotkeyKeyCode = 11  // B
+          checkvistManager.quickAddHotkeyModifiers = 0x0A00  // Shift + Option
+        }
+      }
+
+      Section(header: Text("Quick Add Target")) {
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Quick Add location")
+          Picker("", selection: $checkvistManager.quickAddLocationMode) {
+            Text("Default (List root)").tag(BarTaskerManager.QuickAddLocationMode.defaultRoot)
+            Text("Specific task ID").tag(BarTaskerManager.QuickAddLocationMode.specificParentTask)
           }
+          .labelsHidden()
+          .pickerStyle(.segmented)
 
-          HStack {
-            Button("Choose Folder") {
-              checkvistManager.chooseObsidianInboxFolder()
+          if checkvistManager.quickAddLocationMode == .specificParentTask {
+            HStack {
+              TextField("Parent task ID", text: $checkvistManager.quickAddSpecificParentTaskId)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 180)
+              Button("Use selected task") {
+                checkvistManager.setQuickAddSpecificLocationToCurrentTask()
+              }
+              .disabled(checkvistManager.currentTask == nil)
             }
-            if !checkvistManager.obsidianInboxPath.isEmpty {
-              Button("Clear") {
-                checkvistManager.clearObsidianInboxFolder()
+            Text("Quick Add creates new tasks as children of this task ID.")
+              .font(.caption)
+              .foregroundColor(themeColor(.textSecondary))
+          }
+        }
+      }
+
+      Section(header: Text("In-App Shortcut Bindings")) {
+        Text("Bindings are comma-separated tokens (examples: `cmd+k`, `shift+a`, `down`, `dd`).")
+          .font(.caption)
+          .foregroundColor(themeColor(.textSecondary))
+
+        ForEach(configurableShortcutCategories) { category in
+          VStack(alignment: .leading, spacing: 8) {
+            Text(category.title)
+              .font(.caption)
+              .foregroundColor(themeColor(.textSecondary))
+
+            ForEach(category.actions) { action in
+              HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(action.title)
+                  .frame(width: 250, alignment: .leading)
+                TextField("", text: configurableShortcutBinding(for: action))
+                  .textFieldStyle(.roundedBorder)
+                  .font(.system(size: 12, design: .monospaced))
               }
             }
-            Spacer()
-            if checkvistManager.hasPendingObsidianSync {
-              Text(checkvistManager.pendingSyncMenuBarPrefix)
-                .font(.caption)
-                .foregroundColor(.orange)
+          }
+          .padding(.vertical, 2)
+        }
+
+        Button("Reset all in-app shortcuts to defaults") {
+          checkvistManager.resetConfigurableShortcutBindings()
+        }
+      }
+
+      Section(header: Text("Shortcut Reference")) {
+        ForEach(Self.shortcutReferenceGroups) { group in
+          VStack(alignment: .leading, spacing: 6) {
+            Text(group.title)
+              .font(.caption)
+              .foregroundColor(themeColor(.textSecondary))
+            ForEach(group.items) { item in
+              HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(item.keys)
+                  .font(.system(size: 11, weight: .medium, design: .monospaced))
+                  .frame(width: 180, alignment: .leading)
+                Text(item.action)
+                  .font(.system(size: 12))
+                Spacer(minLength: 0)
+              }
+              if let note = item.note, !note.isEmpty {
+                Text(note)
+                  .font(.caption2)
+                  .foregroundColor(themeColor(.textSecondary))
+                  .padding(.leading, 192)
+              }
             }
+          }
+          .padding(.vertical, 3)
+        }
+      }
+    }
+  }
+
+  private var themePane: some View {
+    Section(header: Text("Theme")) {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Appearance")
+        Picker("", selection: $checkvistManager.appTheme) {
+          Text("System").tag(BarTaskerManager.AppTheme.system)
+          Text("Light").tag(BarTaskerManager.AppTheme.light)
+          Text("Dark").tag(BarTaskerManager.AppTheme.dark)
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+      }
+      .padding(.top, 4)
+
+      Text("Applies immediately to the app and preferences window.")
+        .font(.caption)
+        .foregroundColor(themeColor(.textSecondary))
+
+      Divider()
+        .padding(.vertical, 6)
+
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Accent color")
+        Picker("", selection: $checkvistManager.themeAccentPreset) {
+          ForEach(BarTaskerManager.ThemeAccentPreset.allCases) { preset in
+            Text(preset.title).tag(preset)
           }
         }
-        .padding(.top, 4)
-      } else {
-        Text("Obsidian integration is disabled.")
-          .foregroundColor(.secondary)
-          .font(.caption)
-      }
-    }
-  }
+        .labelsHidden()
+        .pickerStyle(.menu)
 
-  private var googleCalendarPluginPane: some View {
-    Section(header: Text("Google Calendar Plugin")) {
-      Toggle(
-        "Enable Google Calendar integration",
-        isOn: $checkvistManager.googleCalendarIntegrationEnabled
-      )
-
-      if checkvistManager.googleCalendarIntegrationEnabled {
-        Text("Google Calendar action opens a prefilled event in your browser.")
-          .foregroundColor(.secondary)
-          .font(.caption)
-      } else {
-        Text("Google Calendar integration is disabled.")
-          .foregroundColor(.secondary)
-          .font(.caption)
-      }
-    }
-  }
-
-  private var mcpPluginPane: some View {
-    Section(header: Text("MCP Plugin")) {
-      Toggle("Enable MCP integration", isOn: $checkvistManager.mcpIntegrationEnabled)
-
-      if checkvistManager.mcpIntegrationEnabled {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("MCP Server")
-          if checkvistManager.hasResolvedMCPServerCommand {
-            Text(checkvistManager.mcpServerCommandPath)
-              .font(.caption)
-              .textSelection(.enabled)
-          } else {
-            Text("App command path not detected. Set BAR_TASKER_MCP_EXECUTABLE_PATH if needed.")
-              .foregroundColor(.secondary)
-              .font(.caption)
-          }
-
-          HStack {
-            Button("Refresh Path") {
-              checkvistManager.refreshMCPServerCommandPath()
+        HStack(spacing: 8) {
+          ForEach(BarTaskerManager.ThemeAccentPreset.allCases.filter { $0 != .custom }) { preset in
+            Button {
+              checkvistManager.themeAccentPreset = preset
+            } label: {
+              Circle()
+                .fill(BarTaskerThemeColorCodec.color(from: preset.hex) ?? .accentColor)
+                .frame(width: 18, height: 18)
+                .overlay(
+                  Circle().stroke(
+                    checkvistManager.themeAccentPreset == preset
+                      ? themeColor(.textPrimary).opacity(0.55) : Color.clear,
+                    lineWidth: 1.5
+                  )
+                )
             }
-            Button("Copy Client Config") {
-              checkvistManager.copyMCPClientConfigurationToClipboard()
-            }
-            Button("Open Guide") {
-              checkvistManager.openMCPServerGuide()
-            }
-            Spacer()
+            .buttonStyle(.plain)
           }
-
-          ScrollView {
-            Text(checkvistManager.mcpClientConfigurationPreview)
-              .font(.system(.caption, design: .monospaced))
-              .textSelection(.enabled)
-              .frame(maxWidth: .infinity, alignment: .leading)
+          Spacer(minLength: 0)
+          Button("Reset") {
+            checkvistManager.resetThemeCustomization()
           }
-          .frame(minHeight: 120, maxHeight: 180)
+          .disabled(
+            checkvistManager.themeAccentPreset == .blue
+              && checkvistManager.themeCustomAccentHex
+                == BarTaskerManager.ThemeAccentPreset.blue.hex
+          )
+        }
 
-          Text("Preview is redacted. Copied config includes your saved credentials.")
-            .foregroundColor(.secondary)
+        ColorPicker(
+          "Custom Accent",
+          selection: Binding(
+            get: { checkvistManager.themeAccentColor },
+            set: { checkvistManager.setCustomThemeAccentColor($0) }
+          ),
+          supportsOpacity: false
+        )
+
+        if checkvistManager.themeAccentPreset == .custom {
+          TextField("#RRGGBB", text: $checkvistManager.themeCustomAccentHex)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 12, design: .monospaced))
+        } else {
+          Text("Using \(checkvistManager.themeAccentPreset.title) accent")
             .font(.caption)
+            .foregroundColor(themeColor(.textSecondary))
         }
-        .padding(.top, 4)
-      } else {
-        Text("MCP integration is disabled.")
-          .foregroundColor(.secondary)
+      }
+
+      Divider()
+        .padding(.vertical, 6)
+
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Semantic colors")
+        Text("These tokens drive popover, focus, selection, text, and status colors.")
           .font(.caption)
+          .foregroundColor(themeColor(.textSecondary))
+
+        ForEach(checkvistManager.configurableThemeColorTokens) { token in
+          HStack(spacing: 10) {
+            Text(token.title)
+              .frame(maxWidth: .infinity, alignment: .leading)
+            Text(checkvistManager.themeColorHex(for: token))
+              .font(.system(size: 11, weight: .medium, design: .monospaced))
+              .foregroundColor(themeColor(.textSecondary))
+              .frame(width: 88, alignment: .trailing)
+            ColorPicker(
+              "",
+              selection: Binding(
+                get: { checkvistManager.themeColor(for: token) },
+                set: { checkvistManager.setThemeColor(token, color: $0) }
+              ),
+              supportsOpacity: false
+            )
+            .labelsHidden()
+            .frame(width: 72)
+            Button("Reset") {
+              checkvistManager.resetThemeColorOverride(token)
+            }
+            .disabled(checkvistManager.themeColorTokenHexOverrides[token.rawValue] == nil)
+          }
+        }
+
+        HStack {
+          Button("Reset all semantic overrides") {
+            checkvistManager.resetAllThemeColorOverrides()
+          }
+          .disabled(!checkvistManager.hasThemeColorOverrides)
+          Spacer(minLength: 0)
+        }
+      }
+
+      Divider()
+        .padding(.vertical, 6)
+
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Theme JSON")
+        Text(
+          "Import/export full theme state (appearance, accent, and semantic color overrides)."
+        )
+        .font(.caption)
+        .foregroundColor(themeColor(.textSecondary))
+
+        TextEditor(text: $themeJSONDraft)
+          .font(.system(size: 12, design: .monospaced))
+          .frame(minHeight: 140, maxHeight: 180)
+          .overlay(
+            RoundedRectangle(cornerRadius: 6)
+              .stroke(themeColor(.panelDivider), lineWidth: 1)
+          )
+
+        HStack(spacing: 8) {
+          Button("Load current") {
+            themeJSONDraft = checkvistManager.exportThemeJSON(prettyPrinted: true)
+            themeJSONStatusMessage = ""
+            themeJSONStatusIsError = false
+          }
+          Button("Import JSON") {
+            do {
+              try checkvistManager.importThemeJSON(themeJSONDraft)
+              themeJSONDraft = checkvistManager.exportThemeJSON(prettyPrinted: true)
+              themeJSONStatusMessage = "Theme imported."
+              themeJSONStatusIsError = false
+            } catch {
+              themeJSONStatusMessage =
+                error.localizedDescription.isEmpty
+                ? "Theme import failed." : error.localizedDescription
+              themeJSONStatusIsError = true
+            }
+          }
+          Button("Copy current JSON") {
+            let payload = checkvistManager.exportThemeJSON(prettyPrinted: true)
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(payload, forType: .string)
+            themeJSONStatusMessage = "Current theme JSON copied to clipboard."
+            themeJSONStatusIsError = false
+          }
+        }
+
+        if !themeJSONStatusMessage.isEmpty {
+          Text(themeJSONStatusMessage)
+            .font(.caption)
+            .foregroundColor(themeJSONStatusIsError ? themeColor(.danger) : themeColor(.success))
+        }
       }
     }
   }
@@ -527,26 +735,140 @@ struct SettingsView: View {
       Section(header: Text("Debug")) {
         Text("Shortcut: Cmd+Shift+K toggles keychain mode for development.")
           .font(.caption)
-          .foregroundColor(.secondary)
+          .foregroundColor(themeColor(.textSecondary))
         Button("Reset onboarding state") {
           checkvistManager.resetOnboardingForDebug()
         }
-        .foregroundColor(.red)
+        .foregroundColor(themeColor(.danger))
       }
     }
   #endif
 
-  @MainActor
-  private func loadLists(assignFirstIfMissing: Bool) async {
-    isLoadingLists = true
-    defer { isLoadingLists = false }
-    let success = await checkvistManager.login()
-    guard success else { return }
-    await checkvistManager.fetchLists()
-    if assignFirstIfMissing, checkvistManager.listId.isEmpty,
-      let first = checkvistManager.availableLists.first
-    {
-      checkvistManager.selectList(first)
+  @ViewBuilder
+  private func pluginSettingsView(for card: PluginCardDescriptor) -> some View {
+    switch card.source {
+    case .builtIn(let page):
+      page.plugin.makeSettingsView(manager: checkvistManager)
+    case .user:
+      EmptyView()
     }
   }
+
+  private func syncSelectedPluginCardIfNeeded() {
+    let activeIdentifiers = Set(pluginCardIDs)
+    guard !activeIdentifiers.isEmpty else {
+      selectedPluginCardID = nil
+      return
+    }
+    if let selectedPluginCardID, activeIdentifiers.contains(selectedPluginCardID) {
+      return
+    }
+    selectedPluginCardID = pluginCards.first?.id
+  }
+
+  private var hotkeyConflictDetected: Bool {
+    guard checkvistManager.globalHotkeyEnabled, checkvistManager.quickAddHotkeyEnabled else {
+      return false
+    }
+    return
+      checkvistManager.globalHotkeyKeyCode == checkvistManager.quickAddHotkeyKeyCode
+      && checkvistManager.globalHotkeyModifiers == checkvistManager.quickAddHotkeyModifiers
+  }
+
+  private var configurableShortcutCategories: [ShortcutCategoryDescriptor] {
+    let grouped = Dictionary(grouping: checkvistManager.configurableShortcutActions, by: \.category)
+    let order = ["Navigation", "Task Actions", "Entry & Commands", "Integrations & Timer"]
+    return order.compactMap { category in
+      guard let actions = grouped[category] else { return nil }
+      return ShortcutCategoryDescriptor(title: category, actions: actions)
+    }
+  }
+
+  private func configurableShortcutBinding(for action: BarTaskerManager.ConfigurableShortcutAction)
+    -> Binding<String>
+  {
+    Binding(
+      get: { checkvistManager.shortcutBinding(for: action) },
+      set: { checkvistManager.setShortcutBinding($0, for: action) }
+    )
+  }
+
+  private func hotkeyRow(
+    title: String,
+    description: String,
+    enabled: Binding<Bool>,
+    keyCode: Binding<Int>,
+    modifiers: Binding<Int>
+  ) -> some View {
+    HStack(alignment: .top) {
+      VStack(alignment: .leading, spacing: 4) {
+        Toggle(title, isOn: enabled)
+        Text(description)
+          .font(.caption)
+          .foregroundColor(themeColor(.textSecondary))
+      }
+      Spacer()
+      if enabled.wrappedValue {
+        HotkeyRecorderField(keyCode: keyCode, modifiers: modifiers)
+          .frame(width: 150, height: 22)
+      }
+    }
+  }
+
+  private static let shortcutReferenceGroups: [ShortcutReferenceGroup] = [
+    ShortcutReferenceGroup(
+      title: "Navigation",
+      items: [
+        .init(keys: "j / ↓", action: "Next task", note: nil),
+        .init(keys: "k / ↑", action: "Previous task", note: nil),
+        .init(keys: "h / ←", action: "Exit to parent", note: nil),
+        .init(keys: "l / →", action: "Enter subtasks", note: nil),
+        .init(keys: "Shift+L", action: "Open list switch command", note: nil),
+        .init(
+          keys: "Ctrl+← / Ctrl+→", action: "Cycle root tabs", note: "All / Due / Tags / Priority"),
+        .init(keys: "Ctrl+↑ / Ctrl+↓", action: "Cycle Due/Tag filter", note: nil),
+        .init(
+          keys: "q / w / e / r", action: "Jump to root tab", note: "All / Due / Tags / Priority"),
+        .init(keys: "z / x / c / v / b / n / m", action: "Select root filter chip", note: nil),
+      ]
+    ),
+    ShortcutReferenceGroup(
+      title: "Task Actions",
+      items: [
+        .init(keys: "Space", action: "Mark task done", note: nil),
+        .init(keys: "Shift+Space", action: "Invalidate task", note: nil),
+        .init(keys: "Enter", action: "Add sibling", note: nil),
+        .init(keys: "Shift+Enter / Tab", action: "Add child", note: nil),
+        .init(keys: "Shift+Tab", action: "Unindent selected task", note: nil),
+        .init(keys: "Cmd+↑ / Cmd+↓", action: "Move task", note: nil),
+        .init(keys: "Delete", action: "Delete task", note: "Uses delete confirmation setting"),
+        .init(keys: "u", action: "Undo last action", note: nil),
+        .init(keys: "1-9 / = / -", action: "Set priority / send to back / clear", note: nil),
+      ]
+    ),
+    ShortcutReferenceGroup(
+      title: "Edit, Search, Commands",
+      items: [
+        .init(keys: "/", action: "Focus search", note: nil),
+        .init(
+          keys: "F2 / i / a", action: "Edit selected task",
+          note: "F2 and a put cursor at end; i at start"),
+        .init(keys: ": / ; / Cmd+K", action: "Open command palette", note: nil),
+        .init(keys: "dd / dt", action: "Prefill due command", note: "due / due today"),
+        .init(keys: "gt / gu", action: "Prefill tag command", note: "tag / untag"),
+        .init(keys: "Esc", action: "Cancel input or close window", note: nil),
+      ]
+    ),
+    ShortcutReferenceGroup(
+      title: "Integrations & Timer",
+      items: [
+        .init(keys: "o / O", action: "Open in Obsidian / new Obsidian window", note: nil),
+        .init(keys: "gc", action: "Add selected task to Google Calendar", note: nil),
+        .init(keys: "gg", action: "Open task link", note: nil),
+        .init(keys: "t / p", action: "Toggle timer / pause-resume timer", note: nil),
+        .init(keys: "Shift+A", action: "Quick Add at configured target", note: nil),
+      ]
+    ),
+  ]
 }
+// swiftlint:enable type_body_length

@@ -4,7 +4,15 @@ import OSLog
 import SwiftUI
 
 @MainActor
+// swiftlint:disable type_body_length
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+  private struct TitleCacheInputs: Equatable {
+    let taskText: String
+    let timerText: String?
+    let maxWidth: CGFloat
+    let timerLeading: Bool
+  }
+
   private enum RegisteredHotkeyID: UInt32 {
     case togglePopover = 1
     case quickAdd = 2
@@ -19,11 +27,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     Self.shared = self
   }
 
-  private let pluginRegistry = FocusPluginRegistry.nativeFirst()
-  lazy var checkvistManager: CheckvistManager = CheckvistManager(pluginRegistry: pluginRegistry)
+  private let pluginRegistry = BarTaskerPluginRegistry.nativeFirst()
+  lazy var checkvistManager: BarTaskerManager = BarTaskerManager(pluginRegistry: pluginRegistry)
   private var statusItem: NSStatusItem!
   private var window: NSWindow?
   private var preferencesWindow: NSWindow?
+  private var preferencesNavState: SettingsNavState?
   private var keyMonitor: Any?
   private var clickMonitor: Any?
   private var globalHotkeyRef: EventHotKeyRef?
@@ -33,6 +42,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var pendingPopoverResize: DispatchWorkItem?
   private var explicitQuitRequested = false
   private var lastAutoRefreshTime: Date = Date.distantPast
+  private var cachedTitleInputs: TitleCacheInputs?
+  private var cachedTitleResult: String?
+  private var cachedGradientWidth: CGFloat?
+  private var cachedGradientLayer: CAGradientLayer?
   private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "keyboard")
 
   private var currentPopoverContentSize: NSSize {
@@ -42,6 +55,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     )
   }
 
+  #if DEBUG
+    private var isRunningFromXcode: Bool {
+      let env = ProcessInfo.processInfo.environment
+      return env["XCODE_VERSION_ACTUAL"] != nil || env["__XCODE_BUILT_PRODUCTS_DIR_PATHS"] != nil
+    }
+  #endif
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     if BarTaskerMCPServer.isLaunchMode(arguments: ProcessInfo.processInfo.arguments) {
       launchMCPServerMode()
@@ -49,20 +69,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     NSApp.setActivationPolicy(.accessory)
+    applyAppTheme()
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     statusItem.button?.title = "…"
     statusItem.button?.action = #selector(clicked)
     statusItem.button?.target = self
     statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
-    // Title sync
+    // Title sync — debounce rapid state changes to avoid redundant work.
     checkvistManager.objectWillChange
-      .receive(on: RunLoop.main)
+      .debounce(for: .milliseconds(16), scheduler: RunLoop.main)  // ~1 frame at 60Hz
       .sink { [weak self] _ in
-        DispatchQueue.main.async {
-          self?.updateTitle()
-          self?.schedulePopoverResize()
-        }
+        self?.updateTitle()
+        self?.schedulePopoverResize()
       }
       .store(in: &cancellables)
 
@@ -92,57 +111,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // Global key monitor for shortcuts not handled by onKeyPress (j/k, hf, Ctrl+↑↓)
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      guard let self, let w = self.window, w.isVisible else { return event }
-      guard event.window === w else { return event }
+      guard let self, let popoverWindow = self.window, popoverWindow.isVisible else { return event }
+      guard event.window === popoverWindow else { return event }
       return self.handleSupplementalKey(event: event) ? nil : event
     }
 
-    // Register global hotkeys.
+    // Register global hotkeys, debouncing rapid changes into a single re-registration.
     registerGlobalHotkeys()
-    checkvistManager.$globalHotkeyEnabled
-      .dropFirst()
-      .receive(on: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.registerGlobalHotkeys()
-      }
-      .store(in: &cancellables)
-
-    // Re-register when hotkey key/modifiers change.
-    checkvistManager.$globalHotkeyKeyCode
-      .dropFirst().receive(on: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.registerGlobalHotkeys()
-      }
-      .store(in: &cancellables)
-    checkvistManager.$globalHotkeyModifiers
-      .dropFirst().receive(on: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.registerGlobalHotkeys()
-      }
-      .store(in: &cancellables)
-    checkvistManager.$quickAddHotkeyEnabled
-      .dropFirst().receive(on: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.registerGlobalHotkeys()
-      }
-      .store(in: &cancellables)
-    checkvistManager.$quickAddHotkeyKeyCode
-      .dropFirst().receive(on: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.registerGlobalHotkeys()
-      }
-      .store(in: &cancellables)
-    checkvistManager.$quickAddHotkeyModifiers
-      .dropFirst().receive(on: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.registerGlobalHotkeys()
-      }
-      .store(in: &cancellables)
+    Publishers.MergeMany(
+      checkvistManager.$globalHotkeyEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+      checkvistManager.$globalHotkeyKeyCode.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+      checkvistManager.$globalHotkeyModifiers.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+      checkvistManager.$quickAddHotkeyEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+      checkvistManager.$quickAddHotkeyKeyCode.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+      checkvistManager.$quickAddHotkeyModifiers.dropFirst().map { _ in () }.eraseToAnyPublisher()
+    )
+    .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
+    .sink { [weak self] _ in
+      self?.registerGlobalHotkeys()
+    }
+    .store(in: &cancellables)
 
     checkvistManager.$maxTitleWidth
       .dropFirst().receive(on: RunLoop.main)
       .sink { [weak self] _ in
         self?.updateTitle()
+      }
+      .store(in: &cancellables)
+
+    checkvistManager.$appTheme
+      .dropFirst()
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        self?.applyAppTheme()
       }
       .store(in: &cancellables)
 
@@ -163,6 +164,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     Task { [weak self] in
       try? await Task.sleep(nanoseconds: 500_000_000)
       guard let self else { return }
+      #if DEBUG
+        if self.isRunningFromXcode {
+          self.showPopoverWindow()
+        }
+      #endif
       await self.checkvistManager.fetchTopTask()
       self.updateTitle()
     }
@@ -175,6 +181,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       await MainActor.run {
         NSApp.terminate(nil)
       }
+    }
+  }
+
+  private func applyAppTheme() {
+    switch checkvistManager.appTheme {
+    case .system:
+      NSApp.appearance = nil
+    case .light:
+      NSApp.appearance = NSAppearance(named: .aqua)
+    case .dark:
+      NSApp.appearance = NSAppearance(named: .darkAqua)
     }
   }
 
@@ -237,65 +254,82 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   func updateTitle() {
-    DispatchQueue.main.async {
-      let rawTaskText = self.checkvistManager.currentTaskText
-      let baseTaskText = self.menuBarDisplayTaskText(rawTaskText)
-      let taskText =
-        self.checkvistManager.pendingSyncMenuBarPrefix.isEmpty
-        ? baseTaskText
-        : "\(self.checkvistManager.pendingSyncMenuBarPrefix): \(baseTaskText)"
-      if taskText.isEmpty {
-        self.statusItem?.button?.attributedTitle = NSAttributedString(string: "…")
-        self.statusItem?.button?.toolTip = nil
-        self.statusItem?.length = NSStatusItem.variableLength
-        self.statusItem?.button?.layer?.mask = nil
-        return
-      }
+    let rawTaskText = checkvistManager.currentTaskText
+    let baseTaskText = menuBarDisplayTaskText(rawTaskText)
+    let taskText =
+      checkvistManager.pendingSyncMenuBarPrefix.isEmpty
+      ? baseTaskText
+      : "\(checkvistManager.pendingSyncMenuBarPrefix): \(baseTaskText)"
+    if taskText.isEmpty {
+      statusItem?.button?.attributedTitle = NSAttributedString(string: "…")
+      statusItem?.button?.toolTip = nil
+      statusItem?.length = NSStatusItem.variableLength
+      statusItem?.button?.layer?.mask = nil
+      return
+    }
 
-      let pStyle = NSMutableParagraphStyle()
-      pStyle.lineBreakMode = .byClipping
-      let font = NSFont.menuBarFont(ofSize: 0)
-      let horizontalPadding: CGFloat = 16
-      let timerStr = self.checkvistManager.timerBarString
-      let timerVisible = timerStr != nil
+    let pStyle = NSMutableParagraphStyle()
+    pStyle.lineBreakMode = .byClipping
+    let menuBarFontSize = NSFont.menuBarFont(ofSize: 0).pointSize
+    let font = BarTaskerTypography.taskNSFont(ofSize: menuBarFontSize)
+    let horizontalPadding: CGFloat = 16
+    let timerStr = checkvistManager.timerBarString
+    let timerVisible = timerStr != nil
 
-      let requestedMaxWidth: CGFloat = CGFloat(self.checkvistManager.maxTitleWidth)
-      let maxWidth: CGFloat
-      if let timerStr {
-        let timerOnlyWidth = NSAttributedString(
-          string: timerStr, attributes: [.font: font]
-        ).size().width
-        // Never allow settings width to hide an active timer.
-        maxWidth = max(requestedMaxWidth, timerOnlyWidth + horizontalPadding)
-      } else {
-        maxWidth = requestedMaxWidth
-      }
+    let requestedMaxWidth: CGFloat = CGFloat(checkvistManager.maxTitleWidth)
+    let maxWidth: CGFloat
+    if let timerStr {
+      let timerOnlyWidth = NSAttributedString(
+        string: timerStr, attributes: [.font: font]
+      ).size().width
+      // Never allow settings width to hide an active timer.
+      maxWidth = max(requestedMaxWidth, timerOnlyWidth + horizontalPadding)
+    } else {
+      maxWidth = requestedMaxWidth
+    }
 
-      let contentWidth = max(0, maxWidth - horizontalPadding)
-      let text = self.fittedMenuTitle(
+    let contentWidth = max(0, maxWidth - horizontalPadding)
+    let titleInputs = TitleCacheInputs(
+      taskText: taskText,
+      timerText: timerStr,
+      maxWidth: contentWidth,
+      timerLeading: checkvistManager.timerBarLeading
+    )
+    let text: String
+    if let cached = cachedTitleInputs, let cachedResult = cachedTitleResult,
+      cached == titleInputs
+    {
+      text = cachedResult
+    } else {
+      text = fittedMenuTitle(
         taskText: taskText,
         timerStr: timerStr,
         maxContentWidth: contentWidth,
         font: font,
-        timerLeading: self.checkvistManager.timerBarLeading
+        timerLeading: checkvistManager.timerBarLeading
       )
-      let displayText = text.isEmpty ? "…" : text
+      cachedTitleInputs = titleInputs
+      cachedTitleResult = text
+    }
+    let displayText = text.isEmpty ? "…" : text
 
-      let attrString = NSAttributedString(
-        string: displayText, attributes: [.paragraphStyle: pStyle, .font: font])
+    let attrString = NSAttributedString(
+      string: displayText, attributes: [.paragraphStyle: pStyle, .font: font])
 
-      let textWidth = attrString.size().width
-      let finalWidth = min(textWidth + horizontalPadding, maxWidth)
+    let textWidth = attrString.size().width
+    let finalWidth = min(textWidth + horizontalPadding, maxWidth)
 
-      self.statusItem?.length = finalWidth
-      self.statusItem?.button?.attributedTitle = attrString
-      self.statusItem?.button?.toolTip = nil
-      self.statusItem?.button?.wantsLayer = true
+    statusItem?.length = finalWidth
+    statusItem?.button?.attributedTitle = attrString
+    statusItem?.button?.toolTip = nil
+    statusItem?.button?.wantsLayer = true
 
-      if timerVisible {
-        // Timer text must remain legible; clipping is already handled on task text.
-        self.statusItem?.button?.layer?.mask = nil
-      } else if textWidth > finalWidth - 16 {
+    if timerVisible {
+      // Timer text must remain legible; clipping is already handled on task text.
+      statusItem?.button?.layer?.mask = nil
+    } else if textWidth > finalWidth - 16 {
+      // Reuse gradient layer if width hasn't changed.
+      if cachedGradientWidth != finalWidth {
         let maskLayer = CAGradientLayer()
         maskLayer.frame = CGRect(x: 0, y: 0, width: finalWidth, height: 22)
         maskLayer.colors = [NSColor.black.cgColor, NSColor.black.cgColor, NSColor.clear.cgColor]
@@ -303,20 +337,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         maskLayer.endPoint = CGPoint(x: 1.0, y: 0.5)
         let fadeStart = (finalWidth - 24) / finalWidth
         maskLayer.locations = [0.0, NSNumber(value: fadeStart), 1.0]
-        self.statusItem?.button?.layer?.mask = maskLayer
-      } else {
-        self.statusItem?.button?.layer?.mask = nil
+        cachedGradientWidth = finalWidth
+        cachedGradientLayer = maskLayer
       }
+      statusItem?.button?.layer?.mask = cachedGradientLayer
+    } else {
+      statusItem?.button?.layer?.mask = nil
     }
   }
 
-  private func menuBarDisplayTaskText(_ rawText: String) -> String {
-    let pattern = "([@#][a-zA-Z0-9_\\-]+)"
-    guard let regex = try? NSRegularExpression(pattern: pattern) else {
-      return rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+  private static let menuBarTagRegex: NSRegularExpression = {
+    guard let regex = try? NSRegularExpression(pattern: "([@#][a-zA-Z0-9_\\-]+)") else {
+      fatalError("Invalid regex pattern for menu bar tags.")
     }
+    return regex
+  }()
+
+  private func menuBarDisplayTaskText(_ rawText: String) -> String {
     let range = NSRange(rawText.startIndex..., in: rawText)
-    let withoutTags = regex.stringByReplacingMatches(in: rawText, range: range, withTemplate: "")
+    let withoutTags = Self.menuBarTagRegex.stringByReplacingMatches(
+      in: rawText, range: range, withTemplate: "")
     let collapsedWhitespace = withoutTags.replacingOccurrences(
       of: "\\s+", with: " ", options: .regularExpression)
     return collapsedWhitespace.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -445,44 +485,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   // MARK: - Window
 
-  private func makeWindowIfNeeded() -> FocusPanel {
-    if let existing = window as? FocusPanel { return existing }
+  private func makeWindowIfNeeded() -> BarTaskerPanel {
+    if let existing = window as? BarTaskerPanel { return existing }
 
     let contentSize = currentPopoverContentSize
-    let w = FocusPanel(
+    let popoverWindow = BarTaskerPanel(
       contentRect: NSRect(x: 0, y: 0, width: contentSize.width, height: contentSize.height),
       styleMask: [.nonactivatingPanel, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
     // Ensure the window has no title bar and is transparent
-    w.titleVisibility = .hidden
-    w.titlebarAppearsTransparent = true
-    w.isOpaque = false
-    w.backgroundColor = .clear
-    w.hasShadow = true
-    w.level = .floating
-    w.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle]
+    popoverWindow.titleVisibility = .hidden
+    popoverWindow.titlebarAppearsTransparent = true
+    popoverWindow.isOpaque = false
+    popoverWindow.backgroundColor = .clear
+    popoverWindow.hasShadow = true
+    popoverWindow.level = .floating
+    popoverWindow.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle]
 
     let hostingController = NSHostingController(
-      rootView: PopoverView().environmentObject(checkvistManager))
-    w.contentViewController = hostingController
+      rootView: PopoverView()
+        .font(BarTaskerTypography.interfaceFont)
+        .environmentObject(checkvistManager))
+    popoverWindow.contentViewController = hostingController
 
-    w.isMovableByWindowBackground = false
-    window = w
+    popoverWindow.isMovableByWindowBackground = false
+    window = popoverWindow
 
     // Monitor for clicks outside the window to dismiss it
+    // Remove any prior click monitor before installing a new one.
+    if let monitor = clickMonitor { NSEvent.removeMonitor(monitor) }
     clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
       [weak self] event in
-      guard let self, let w = self.window, w.isVisible else { return }
+      guard let self, let popoverWindow = self.window, popoverWindow.isVisible else { return }
       let clickLocation = event.locationInWindow
       // If the click is not inside our window bounds, close it
-      if !w.frame.contains(clickLocation) && event.window == nil {
+      if !popoverWindow.frame.contains(clickLocation) && event.window == nil {
         self.closeWindow()
       }
     }
 
-    return w
+    return popoverWindow
   }
 
   func closeWindow() {
@@ -490,7 +534,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if [.addSibling, .addChild, .quickAddDefault, .quickAddSpecific].contains(
       checkvistManager.quickEntryMode)
     {
-      checkvistManager.filterText = ""
+      checkvistManager.quickEntryText = ""
       checkvistManager.quickEntryMode = .search
     }
     checkvistManager.isQuickEntryFocused = false
@@ -498,62 +542,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   @objc func clicked(_ sender: NSStatusBarButton) {
-    guard let event = NSApp.currentEvent else { return }
-    if event.type == .rightMouseUp {
-      let menu = NSMenu()
-      menu.addItem(withTitle: "Refresh", action: #selector(menuRefresh), keyEquivalent: "")
-      if checkvistManager.obsidianIntegrationEnabled {
-        let obsidianItem = NSMenuItem(
-          title: "Open in Obsidian",
-          action: #selector(menuSyncToObsidian),
-          keyEquivalent: "O")
-        obsidianItem.keyEquivalentModifierMask = [.command, .shift]
-        menu.addItem(obsidianItem)
-      }
-      if checkvistManager.googleCalendarIntegrationEnabled {
-        let googleCalendarItem = NSMenuItem(
-          title: "Add to Google Calendar",
-          action: #selector(menuAddToGoogleCalendar),
-          keyEquivalent: "G"
-        )
-        googleCalendarItem.keyEquivalentModifierMask = [.command, .shift]
-        menu.addItem(googleCalendarItem)
-      }
-      let settingsItem = NSMenuItem(
-        title: "Preferences...", action: #selector(menuSettings), keyEquivalent: ",")
-      settingsItem.keyEquivalentModifierMask = [.command]
-      menu.addItem(settingsItem)
-      menu.addItem(.separator())
-      menu.addItem(withTitle: "Quit", action: #selector(menuQuit), keyEquivalent: "q")
-
-      // Allow menu items to trigger actions on self
-      for item in menu.items { item.target = self }
-
-      statusItem.menu = menu
-      statusItem.button?.performClick(nil)
-      statusItem.menu = nil
-    } else {
-      togglePopover()
+    if isSecondaryStatusItemClickEvent(NSApp.currentEvent) {
+      showStatusItemContextMenu()
+      return
     }
+    togglePopover()
   }
 
-  @objc func menuRefresh() {
-    Task { [weak self] in
-      await self?.checkvistManager.fetchTopTask()
-      self?.updateTitle()
-    }
+  private func showStatusItemContextMenu() {
+    let menu = NSMenu()
+    menu.addItem(
+      withTitle: "Preferences…",
+      action: #selector(menuSettings),
+      keyEquivalent: ""
+    ).target = self
+    menu.addItem(.separator())
+    menu.addItem(
+      withTitle: "Quit Bar Tasker",
+      action: #selector(NSApplication.terminate(_:)),
+      keyEquivalent: ""
+    )
+    statusItem.menu = menu
+    statusItem.button?.performClick(nil)
+    statusItem.menu = nil
   }
 
-  @objc func menuSyncToObsidian() {
-    Task { [weak self] in
-      await self?.checkvistManager.syncCurrentTaskToObsidian()
-      self?.updateTitle()
+  private func isSecondaryStatusItemClickEvent(_ event: NSEvent?) -> Bool {
+    guard let event else { return false }
+    if event.type == .rightMouseUp || event.type == .rightMouseDown {
+      return true
     }
-  }
-
-  @objc func menuAddToGoogleCalendar() {
-    checkvistManager.openCurrentTaskInGoogleCalendar()
-    updateTitle()
+    // Treat Control-click as secondary click on macOS.
+    return event.type == .leftMouseUp && event.modifierFlags.contains(.control)
   }
 
   @objc func menuSettings() {
@@ -568,26 +588,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       return preferencesWindow
     }
 
+    let navState = SettingsNavState()
+    preferencesNavState = navState
+
     let rootView = SettingsView()
+      .font(BarTaskerTypography.interfaceFont)
       .environmentObject(checkvistManager)
-      .frame(minWidth: 560, idealWidth: 620, minHeight: 520, idealHeight: 620)
+      .environmentObject(navState)
+      .frame(minWidth: 720, idealWidth: 820, minHeight: 560, idealHeight: 660)
     let hostingController = NSHostingController(rootView: rootView)
 
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 620, height: 620),
+      contentRect: NSRect(x: 0, y: 0, width: 820, height: 660),
       styleMask: [.titled, .closable],
       backing: .buffered,
       defer: false
     )
     window.title = "Preferences"
+    window.titleVisibility = .hidden
+    window.toolbarStyle = .preference
+    let toolbar = NSToolbar(identifier: "BarTaskerPreferencesToolbar")
+    toolbar.delegate = navState
+    toolbar.displayMode = .iconAndLabel
+    toolbar.allowsUserCustomization = false
+    toolbar.selectedItemIdentifier = NSToolbarItem.Identifier(
+      SettingsNavState.Pane.preferences.rawValue)
+    navState.toolbar = toolbar
+    window.toolbar = toolbar
     window.center()
     // Keep ARC ownership on our side; we explicitly nil `preferencesWindow` on close.
     window.isReleasedWhenClosed = false
     window.isRestorable = false
     window.tabbingMode = .disallowed
+    window.minSize = NSSize(width: 720, height: 560)
+    window.maxSize = NSSize(width: 1200, height: 900)
     window.delegate = self
     window.contentViewController = hostingController
-    window.setFrameAutosaveName("BarTaskerPreferencesWindow")
+    window.setFrameAutosaveName("BarTaskerPreferencesWindowV2")
     preferencesWindow = window
     return window
   }
@@ -596,6 +633,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     guard let closingWindow = notification.object as? NSWindow else { return }
     if closingWindow === preferencesWindow {
       preferencesWindow = nil
+      preferencesNavState = nil
     }
   }
 
@@ -627,10 +665,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   private func showPopoverWindow() {
-    let w = makeWindowIfNeeded()
+    let popoverWindow = makeWindowIfNeeded()
     guard let button = statusItem.button else { return }
-    if w.isVisible {
-      w.makeKeyAndOrderFront(nil)
+    if popoverWindow.isVisible {
+      popoverWindow.makeKeyAndOrderFront(nil)
       NSApp.activate(ignoringOtherApps: true)
       return
     }
@@ -643,9 +681,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let trX = screenRect.maxX + 10
     let trY = screenRect.minY - paddingY
 
-    w.setAnchoredTopRight(
+    popoverWindow.setAnchoredTopRight(
       contentSize: currentPopoverContentSize, topRight: NSPoint(x: trX, y: trY), display: true)
-    w.makeKeyAndOrderFront(nil)
+    popoverWindow.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }
 
@@ -654,8 +692,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     guard now.timeIntervalSince(lastToggleTime) > 0.2 else { return }
     lastToggleTime = now
 
-    let w = makeWindowIfNeeded()
-    if w.isVisible {
+    let popoverWindow = makeWindowIfNeeded()
+    if popoverWindow.isVisible {
       closeWindow()
     } else {
       showPopoverWindow()
@@ -663,9 +701,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   private func updatePopoverSizeIfVisible() {
-    guard let w = window as? FocusPanel, w.isVisible else { return }
-    let anchoredTopRight = NSPoint(x: w.frame.maxX, y: w.frame.maxY)
-    w.setAnchoredTopRight(
+    guard let popoverWindow = window as? BarTaskerPanel, popoverWindow.isVisible else { return }
+    let anchoredTopRight = NSPoint(x: popoverWindow.frame.maxX, y: popoverWindow.frame.maxY)
+    popoverWindow.setAnchoredTopRight(
       contentSize: currentPopoverContentSize,
       topRight: anchoredTopRight,
       display: true
@@ -696,16 +734,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    if let m = keyMonitor { NSEvent.removeMonitor(m) }
-    if let m = clickMonitor { NSEvent.removeMonitor(m) }
+    if let monitor = keyMonitor { NSEvent.removeMonitor(monitor) }
+    if let monitor = clickMonitor { NSEvent.removeMonitor(monitor) }
     pendingPopoverResize?.cancel()
     unregisterGlobalHotkeys()
   }
 }
+// swiftlint:enable type_body_length
 
 class AnchorView: NSView {}
 
-class FocusPanel: NSPanel {
+class BarTaskerPanel: NSPanel {
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { true }
 

@@ -8,14 +8,40 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   private static let userAgent = "BarTasker/1.0 (Macintosh; Mac OS X)"
   private let session: CheckvistSession
   private let taskRepository: CheckvistTaskRepository
+  private let credentialStore: CheckvistCredentialStore
 
-  init(session: CheckvistSession, taskRepository: CheckvistTaskRepository) {
+  init(
+    session: CheckvistSession,
+    taskRepository: CheckvistTaskRepository,
+    credentialStore: CheckvistCredentialStore = CheckvistCredentialStore()
+  ) {
     self.session = session
     self.taskRepository = taskRepository
+    self.credentialStore = credentialStore
   }
 
   convenience init() {
-    self.init(session: CheckvistSession(), taskRepository: CheckvistTaskRepository())
+    self.init(
+      session: CheckvistSession(),
+      taskRepository: CheckvistTaskRepository(),
+      credentialStore: CheckvistCredentialStore()
+    )
+  }
+
+  func startupRemoteKey(useKeychainStorageAtInit: Bool) -> String {
+    credentialStore.startupRemoteKey(useKeychainStorageAtInit: useKeychainStorageAtInit)
+  }
+
+  func persistRemoteKey(_ value: String, useKeychainStorage: Bool) {
+    credentialStore.persistRemoteKey(value, useKeychainStorage: useKeychainStorage)
+  }
+
+  func persistRemoteKeyForDebugStorageMode(_ value: String) {
+    credentialStore.persistRemoteKeyForDebugStorageMode(value)
+  }
+
+  func loadRemoteKeyFromKeychain() -> String? {
+    credentialStore.loadRemoteKeyFromKeychain()
   }
 
   func clearAuthentication() {
@@ -75,6 +101,39 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     return lists.filter { !($0.archived ?? false) }
   }
 
+  func createList(name: String, credentials: CheckvistCredentials) async throws -> CheckvistList? {
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty else { return nil }
+    guard let url = URL(string: "https://checkvist.com/checklists.json") else {
+      return nil
+    }
+
+    let (data, response) = try await performAuthenticatedRequest(credentials: credentials) {
+      validToken in
+      var request = URLRequest(url: url)
+      request.httpMethod = "POST"
+      request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+      request.setValue("application/json", forHTTPHeaderField: "Accept")
+      request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+      request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+      let encodedName = Self.percentEncodeFormValue(trimmedName)
+      request.httpBody = "checklist[name]=\(encodedName)".data(using: .utf8)
+      return request
+    }
+
+    guard (200...299).contains(response.statusCode) else {
+      return nil
+    }
+
+    if let decoded = try? JSONDecoder().decode(CheckvistList.self, from: data) {
+      return decoded
+    }
+    if let wrapped = try? JSONDecoder().decode(CheckvistListCreateResponse.self, from: data) {
+      return wrapped.checklist
+    }
+    return nil
+  }
+
   func performTaskAction(
     listId: String,
     taskId: Int,
@@ -131,18 +190,18 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     position: Int?,
     credentials: CheckvistCredentials
   ) async throws -> CheckvistTask? {
-    guard
-      let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json?parse=true")
-    else {
+    let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedContent.isEmpty else { return nil }
+    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json") else {
       return nil
     }
 
-    var taskPayload: [String: Any] = ["content": content]
+    var bodyParts = ["task[content]=\(Self.percentEncodeFormValue(trimmedContent))"]
     if let parentId {
-      taskPayload["parent_id"] = parentId
+      bodyParts.append("task[parent_id]=\(parentId)")
     }
     if let position {
-      taskPayload["position"] = position
+      bodyParts.append("task[position]=\(position)")
     }
 
     let (data, response) = try await performAuthenticatedRequest(credentials: credentials) {
@@ -150,9 +209,10 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       var request = URLRequest(url: url)
       request.httpMethod = "POST"
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
-      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+      request.setValue("application/json", forHTTPHeaderField: "Accept")
       request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-      request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": taskPayload])
+      request.httpBody = bodyParts.joined(separator: "&").data(using: .utf8)
       return request
     }
 
@@ -160,7 +220,20 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       return nil
     }
 
-    return try? JSONDecoder().decode(CheckvistTask.self, from: data)
+    let decoder = JSONDecoder()
+    if let task = try? decoder.decode(CheckvistTask.self, from: data) {
+      return task
+    }
+    if let wrapped = try? decoder.decode(CheckvistTaskCreateResponse.self, from: data) {
+      return wrapped.task
+    }
+    if let wrappedList = try? decoder.decode(CheckvistTaskListResponse.self, from: data) {
+      return wrappedList.tasks.first
+    }
+    if let taskList = try? decoder.decode([CheckvistTask].self, from: data) {
+      return taskList.first
+    }
+    return nil
   }
 
   func deleteTask(listId: String, taskId: Int, credentials: CheckvistCredentials) async throws
@@ -261,4 +334,24 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       buildRequest
     )
   }
+
+  private static func percentEncodeFormValue(_ raw: String) -> String {
+    let allowed = CharacterSet(
+      charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    // Force-unwrap is safe: addingPercentEncoding only returns nil for invalid UTF-16
+    // surrogates, which Swift's String type cannot represent.
+    return raw.addingPercentEncoding(withAllowedCharacters: allowed)!
+  }
+}
+
+private struct CheckvistListCreateResponse: Decodable {
+  let checklist: CheckvistList
+}
+
+private struct CheckvistTaskCreateResponse: Decodable {
+  let task: CheckvistTask
+}
+
+private struct CheckvistTaskListResponse: Decodable {
+  let tasks: [CheckvistTask]
 }

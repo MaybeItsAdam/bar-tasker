@@ -1,5 +1,6 @@
 import Foundation
 
+// swiftlint:disable file_length
 private enum BarTaskerMCPConstants {
   static let jsonrpcVersion = "2.0"
   static let defaultProtocolVersion = "2024-11-05"
@@ -252,6 +253,19 @@ private final class BarTaskerMCPCheckvistClient {
       )
     }
 
+    // Retry once on transient server errors (502/503/504) after a short delay.
+    if [502, 503, 504].contains(http.statusCode) && retryUnauthorized {
+      try? await Task.sleep(nanoseconds: 500_000_000)
+      return try await request(
+        method: method,
+        path: path,
+        query: query,
+        body: body,
+        requireAuth: requireAuth,
+        retryUnauthorized: false  // prevents infinite retry chain
+      )
+    }
+
     guard (200...299).contains(http.statusCode) else {
       throw BarTaskerMCPCheckvistError(
         message: "Checkvist API request failed with status \(http.statusCode).",
@@ -485,11 +499,13 @@ private final class BarTaskerMCPMessageWriter {
       try output.write(contentsOf: headerData)
       try output.write(contentsOf: body)
     } catch {
-      // Ignore write errors; caller will naturally terminate when pipes close.
+      FileHandle.standardError.write(
+        Data("MCP write error: \(error.localizedDescription)\n".utf8))
     }
   }
 }
 
+// swiftlint:disable type_body_length
 final class BarTaskerMCPServer {
   private let reader = BarTaskerMCPMessageReader()
   private let writer = BarTaskerMCPMessageWriter()
@@ -550,6 +566,7 @@ final class BarTaskerMCPServer {
     }
   }
 
+  // swiftlint:disable:next cyclomatic_complexity function_body_length
   private func handle(message: Any) async throws {
     guard let request = message as? [String: Any] else {
       throw BarTaskerMCPJsonRpcError(
@@ -678,6 +695,7 @@ final class BarTaskerMCPServer {
       message: "Method not found: \(method)")
   }
 
+  // swiftlint:disable:next function_body_length
   private func callTool(name: String, arguments: [String: Any]) async -> [String: Any] {
     do {
       switch name {
@@ -998,11 +1016,17 @@ final class BarTaskerMCPServer {
     throw BarTaskerMCPCheckvistError(message: "Expected integer value.")
   }
 
+  private static let maxStringInputLength = 10_000
+
   private static func requiredString(_ arguments: [String: Any], key: String) throws -> String {
     guard let value = asString(arguments[key])?.trimmingCharacters(in: .whitespacesAndNewlines),
       !value.isEmpty
     else {
       throw BarTaskerMCPCheckvistError(message: "Missing required argument: \(key)")
+    }
+    guard value.count <= maxStringInputLength else {
+      throw BarTaskerMCPCheckvistError(
+        message: "Argument '\(key)' exceeds maximum length of \(maxStringInputLength) characters.")
     }
     return value
   }
@@ -1014,3 +1038,5 @@ final class BarTaskerMCPServer {
     return value
   }
 }
+// swiftlint:enable type_body_length
+// swiftlint:enable file_length

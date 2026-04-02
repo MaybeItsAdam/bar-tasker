@@ -2,7 +2,7 @@ import SwiftUI
 
 @main
 struct BarTaskerApp: App {
-  // AppDelegate owns the single CheckvistManager instance
+  // AppDelegate owns the single BarTaskerManager instance
   @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
   var body: some Scene {

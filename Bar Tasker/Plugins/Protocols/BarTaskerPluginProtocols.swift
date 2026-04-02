@@ -1,11 +1,11 @@
 import Foundation
 
-protocol FocusPlugin {
+protocol BarTaskerPlugin {
   var pluginIdentifier: String { get }
   var displayName: String { get }
 }
 
-struct CheckvistCredentials {
+struct CheckvistCredentials: Sendable {
   let username: String
   let remoteKey: String
 
@@ -18,19 +18,24 @@ struct CheckvistCredentials {
   }
 }
 
-enum CheckvistTaskAction: String {
+enum CheckvistTaskAction: String, Sendable {
   case close
   case reopen
   case invalidate
 }
 
 @MainActor
-protocol CheckvistSyncPlugin: FocusPlugin {
+protocol CheckvistSyncPlugin: BarTaskerPlugin {
+  func startupRemoteKey(useKeychainStorageAtInit: Bool) -> String
+  func persistRemoteKey(_ value: String, useKeychainStorage: Bool)
+  func persistRemoteKeyForDebugStorageMode(_ value: String)
+  func loadRemoteKeyFromKeychain() -> String?
   func clearAuthentication()
   func login(credentials: CheckvistCredentials) async throws -> Bool
   func fetchOpenTasks(listId: String, credentials: CheckvistCredentials) async throws
     -> [CheckvistTask]
   func fetchLists(credentials: CheckvistCredentials) async throws -> [CheckvistList]
+  func createList(name: String, credentials: CheckvistCredentials) async throws -> CheckvistList?
   func performTaskAction(
     listId: String,
     taskId: Int,
@@ -71,7 +76,26 @@ protocol CheckvistSyncPlugin: FocusPlugin {
 }
 
 @MainActor
-protocol ObsidianIntegrationPlugin: FocusPlugin {
+extension CheckvistSyncPlugin {
+  func startupRemoteKey(useKeychainStorageAtInit: Bool) -> String {
+    ""
+  }
+
+  func persistRemoteKey(_ value: String, useKeychainStorage: Bool) {}
+
+  func persistRemoteKeyForDebugStorageMode(_ value: String) {}
+
+  func loadRemoteKeyFromKeychain() -> String? {
+    nil
+  }
+
+  func createList(name: String, credentials: CheckvistCredentials) async throws -> CheckvistList? {
+    nil
+  }
+}
+
+@MainActor
+protocol ObsidianIntegrationPlugin: BarTaskerPlugin {
   var inboxPath: String { get }
   func chooseInboxFolder() throws -> String?
   func clearInboxFolder()
@@ -89,12 +113,50 @@ protocol ObsidianIntegrationPlugin: FocusPlugin {
 }
 
 @MainActor
-protocol GoogleCalendarIntegrationPlugin: FocusPlugin {
+protocol GoogleCalendarIntegrationPlugin: BarTaskerPlugin {
   func makeCreateEventURL(task: CheckvistTask, listId: String, now: Date) -> URL?
+  func createEvent(task: CheckvistTask, listId: String, now: Date) async throws
+    -> GoogleCalendarEventCreationOutcome
+  var requiresAuthentication: Bool { get }
+  var isAuthenticated: Bool { get }
+  var authenticationStatusDescription: String { get }
+  func beginAuthentication() async throws
+  func disconnectAuthentication()
+}
+
+struct GoogleCalendarEventCreationOutcome: Sendable {
+  let urlToOpen: URL?
+  let usedGoogleCalendarAPI: Bool
+
+  init(urlToOpen: URL?, usedGoogleCalendarAPI: Bool) {
+    self.urlToOpen = urlToOpen
+    self.usedGoogleCalendarAPI = usedGoogleCalendarAPI
+  }
 }
 
 @MainActor
-protocol MCPIntegrationPlugin: FocusPlugin {
+extension GoogleCalendarIntegrationPlugin {
+  func createEvent(task: CheckvistTask, listId: String, now: Date) async throws
+    -> GoogleCalendarEventCreationOutcome
+  {
+    GoogleCalendarEventCreationOutcome(
+      urlToOpen: makeCreateEventURL(task: task, listId: listId, now: now),
+      usedGoogleCalendarAPI: false
+    )
+  }
+
+  var requiresAuthentication: Bool { false }
+  var isAuthenticated: Bool { true }
+  var authenticationStatusDescription: String {
+    "Uses your browser session to create prefilled events."
+  }
+
+  func beginAuthentication() async throws {}
+  func disconnectAuthentication() {}
+}
+
+@MainActor
+protocol MCPIntegrationPlugin: BarTaskerPlugin {
   func serverCommandURL() -> URL?
   func guideURL() -> URL?
   func makeClientConfigurationJSON(

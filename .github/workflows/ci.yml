@@ -12,6 +12,7 @@ on:
 jobs:
   swift-tests:
     runs-on: macos-15
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,8 +25,29 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Run swift tests
-        run: swift test
+      - name: Build package
+        run: swift build
+
+      - name: Run swift tests with coverage
+        run: swift test --enable-code-coverage
+
+      - name: Report code coverage
+        run: |
+          BIN_PATH=$(swift build --show-bin-path)
+          XCTEST_PATH=$(find "${BIN_PATH}" -name '*.xctest' -type d | head -1)
+          if [ -n "$XCTEST_PATH" ]; then
+            EXECUTABLE="${XCTEST_PATH}/Contents/MacOS/$(basename "${XCTEST_PATH}" .xctest)"
+            COV_DIR=$(dirname "${BIN_PATH}")/codecov
+            PROFDATA=$(find "${COV_DIR}" -name 'default.profdata' 2>/dev/null | head -1)
+            if [ -n "$PROFDATA" ]; then
+              xcrun llvm-cov report "${EXECUTABLE}" -instr-profile="${PROFDATA}" \
+                -ignore-filename-regex='(Tests|\.build)'
+            else
+              echo "::warning::No profdata found — code coverage report skipped."
+            fi
+          else
+            echo "::warning::No xctest bundle found — code coverage report skipped."
+          fi
 
   macos-build:
     runs-on: macos-15

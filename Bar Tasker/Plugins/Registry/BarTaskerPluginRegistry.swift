@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-final class FocusPluginRegistry {
+final class BarTaskerPluginRegistry {
   private(set) var checkvistSyncPluginsByIdentifier: [String: any CheckvistSyncPlugin] = [:]
   private(set) var obsidianPluginsByIdentifier: [String: any ObsidianIntegrationPlugin] = [:]
   private(set) var googleCalendarPluginsByIdentifier:
@@ -90,8 +90,8 @@ final class FocusPluginRegistry {
     return true
   }
 
-  static func nativeFirst() -> FocusPluginRegistry {
-    let registry = FocusPluginRegistry()
+  static func nativeFirst() -> BarTaskerPluginRegistry {
+    let registry = BarTaskerPluginRegistry()
     registry.register(NativeCheckvistSyncPlugin(), activate: true)
     registry.register(NativeObsidianIntegrationPlugin(), activate: true)
     registry.register(NativeGoogleCalendarIntegrationPlugin(), activate: true)
