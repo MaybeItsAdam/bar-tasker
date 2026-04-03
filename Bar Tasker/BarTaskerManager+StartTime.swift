@@ -19,7 +19,7 @@ extension BarTaskerManager {
   // MARK: - Mutations
 
   @MainActor func setStartDate(for task: CheckvistTask, rawInput: String) {
-    let resolved = BarTaskerCommandEngine.resolveDueDate(rawInput)
+    let resolved = resolveDueDateWithConfig(rawInput)
     taskStartDatesByTaskId[task.id] = resolved
     persistStartDates()
   }

@@ -237,6 +237,23 @@ extension BarTaskerManager {
       let encoded = Dictionary(uniqueKeysWithValues: timers.map { (String($0.key), $0.value) })
       self.preferencesStore.set(encoded, for: .timerByTaskId)
     }.store(in: &cancellables)
+    $namedTimeMorningHour.sink { [weak self] in
+      self?.preferencesStore.set($0, for: .namedTimeMorningHour)
+    }.store(in: &cancellables)
+    $namedTimeAfternoonHour.sink { [weak self] in
+      self?.preferencesStore.set($0, for: .namedTimeAfternoonHour)
+    }.store(in: &cancellables)
+    $namedTimeEveningHour.sink { [weak self] in
+      self?.preferencesStore.set($0, for: .namedTimeEveningHour)
+    }.store(in: &cancellables)
+    $namedTimeEodHour.sink { [weak self] in
+      self?.preferencesStore.set($0, for: .namedTimeEodHour)
+    }.store(in: &cancellables)
+    $recurrenceRulesByTaskId.sink { [weak self] rules in
+      guard let self else { return }
+      let encoded = Dictionary(uniqueKeysWithValues: rules.map { (String($0.key), $0.value) })
+      self.preferencesStore.set(encoded, for: .recurrenceRulesByTaskId)
+    }.store(in: &cancellables)
   }
   // swiftlint:enable function_body_length
 

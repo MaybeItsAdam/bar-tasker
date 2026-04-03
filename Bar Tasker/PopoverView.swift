@@ -1648,11 +1648,13 @@ struct PopoverView: View {
   func taskInlineMetadata(task: CheckvistTask, elapsed: TimeInterval) -> some View {
     let metadataTokens = taskMetadataTokens(task.content)
     let startLabel = manager.startDateLabel(for: task)
+    let recurrenceRule = manager.recurrenceRule(for: task)
     if !metadataTokens.isEmpty
       || manager.priorityRank(for: task) != nil
       || (manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id))
       || task.due != nil
       || startLabel != nil
+      || recurrenceRule != nil
     {
       HStack(spacing: 4) {
         ForEach(metadataTokens, id: \.self) { token in
@@ -1670,6 +1672,9 @@ struct PopoverView: View {
         }
         if let due = task.due {
           dueBadge(due: due, overdue: task.isOverdue, today: task.isDueToday)
+        }
+        if let rule = recurrenceRule {
+          recurrenceBadge(rule: rule)
         }
       }
       .fixedSize(horizontal: true, vertical: false)
@@ -1704,6 +1709,20 @@ struct PopoverView: View {
     .foregroundColor(
       isFuture ? themeColor(.accent) : themeColor(.textSecondary)
     )
+    .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+
+  @ViewBuilder
+  func recurrenceBadge(rule: BarTaskerRecurrenceRule) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: "repeat")
+        .font(.system(size: 8))
+      Text(rule.displayLabel)
+        .font(.caption2)
+    }
+    .padding(.horizontal, 5).padding(.vertical, 2)
+    .background(themeColor(.panelSurfaceElevated))
+    .foregroundColor(themeColor(.textSecondary))
     .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 

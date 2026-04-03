@@ -307,6 +307,7 @@ extension BarTaskerManager {
     }
     withAnimation { completingTaskId = nil }
     await taskAction(task, endpoint: "close")
+    await createNextOccurrence(for: task)
   }
 
   /// POST to a Checkvist task action endpoint (close, reopen, invalidate)

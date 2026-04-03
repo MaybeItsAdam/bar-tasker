@@ -120,7 +120,7 @@ final class BarTaskerCommandExecutor {
         manager.errorMessage = "Missing due date/time. Try: due today 14:30"
         return
       }
-      let resolved = BarTaskerManager.resolveDueDate(raw)
+      let resolved = manager.resolveDueDateWithConfig(raw)
       await manager.updateTask(task: task, due: resolved)
     case .clearDue:
       await manager.updateTask(task: task, due: "")
@@ -132,6 +132,14 @@ final class BarTaskerCommandExecutor {
       manager.setStartDate(for: task, rawInput: raw)
     case .clearStart:
       manager.clearStartDate(for: task)
+    case .setRecurrence(let raw):
+      guard !raw.isEmpty else {
+        manager.errorMessage = "Missing repeat rule. Try: repeat daily, repeat every 3 days"
+        return
+      }
+      manager.setRecurrenceRule(raw, for: task)
+    case .clearRecurrence:
+      manager.clearRecurrenceRule(for: task)
     case .edit:
       manager.quickEntryMode = .editTask
       manager.editCursorAtEnd = true
