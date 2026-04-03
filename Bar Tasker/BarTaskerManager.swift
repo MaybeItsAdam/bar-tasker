@@ -105,6 +105,10 @@ class BarTaskerManager: ObservableObject {
   @Published var quickAddSpecificParentTaskId: String
   @Published var customizableShortcutsByAction: [String: String]
 
+  // MARK: - Kanban
+  @Published var kanbanColumns: [KanbanColumn]
+  @Published var kanbanFocusedColumnIndex: Int = 0
+
   /// Max width of the menu bar text
   @Published var maxTitleWidth: Double
   @Published var onboardingCompleted: Bool
@@ -274,6 +278,16 @@ class BarTaskerManager: ObservableObject {
     let persistedShortcutOverrides = preferencesStore.stringDictionary(
       .customizableShortcutsByAction)
     self.customizableShortcutsByAction = persistedShortcutOverrides
+    let storedKanbanJson = preferencesStore.string(.kanbanColumns)
+    if !storedKanbanJson.isEmpty,
+      let data = storedKanbanJson.data(using: .utf8),
+      let decoded = try? JSONDecoder().decode([KanbanColumn].self, from: data),
+      !decoded.isEmpty
+    {
+      self.kanbanColumns = decoded
+    } else {
+      self.kanbanColumns = KanbanColumn.defaults
+    }
     self.maxTitleWidth = preferencesStore.double(.maxTitleWidth, default: 150.0)
     if let storedOnboarding = storedOnboardingCompletedFlag {
       self.onboardingCompleted = storedOnboarding

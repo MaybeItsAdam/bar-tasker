@@ -27,7 +27,9 @@ extension BarTaskerManager {
       $selectedRootTag.map { _ in () }.eraseToAnyPublisher(),
       $quickEntryMode.map { _ in () }.eraseToAnyPublisher(),
       $priorityTaskIds.map { _ in () }.eraseToAnyPublisher(),
-      $timerByTaskId.map { _ in () }.eraseToAnyPublisher()
+      $timerByTaskId.map { _ in () }.eraseToAnyPublisher(),
+      $kanbanColumns.map { _ in () }.eraseToAnyPublisher(),
+      $kanbanFocusedColumnIndex.map { _ in () }.eraseToAnyPublisher()
     )
     .sink { [weak self] _ in
       self?.invalidateCaches()
@@ -126,6 +128,12 @@ extension BarTaskerManager {
       self?.preferencesStore.set($0.rawValue, for: .rootTaskView)
     }
     .store(in: &cancellables)
+    $kanbanColumns
+      .dropFirst()
+      .sink { [weak self] columns in
+        self?.saveKanbanColumns(columns)
+      }
+      .store(in: &cancellables)
     $selectedRootDueBucketRawValue.sink { [weak self] in
       self?.preferencesStore.set($0, for: .selectedRootDueBucketRawValue)
     }

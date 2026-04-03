@@ -149,6 +149,22 @@ struct KeyboardShortcutRouter {
       }
     }
 
+    // Cmd+←/→ - move task to adjacent kanban column (kanban mode only).
+    if manager.rootTaskView == .kanban && !isFocused {
+      if matches(.kanbanMoveLeft) {
+        if !isRepeat {
+          Task { await manager.moveCurrentTaskToKanbanColumn(direction: -1) }
+        }
+        return true
+      }
+      if matches(.kanbanMoveRight) {
+        if !isRepeat {
+          Task { await manager.moveCurrentTaskToKanbanColumn(direction: 1) }
+        }
+        return true
+      }
+    }
+
     // Cmd+↑/↓ - reorder (ignore key repeat to prevent rapid-fire API calls).
     if matches(.moveTaskDown) {
       if !isRepeat {
@@ -232,6 +248,20 @@ struct KeyboardShortcutRouter {
       }
       if event.keyCode == 36 || event.keyCode == 53 {
         manager.rootScopeFocusLevel = 0
+        return true
+      }
+    }
+
+    // In kanban mode, ←/→ (h/l) navigate between columns without moving the task.
+    if manager.rootTaskView == .kanban && !isFocused && !rootScopeFocused {
+      if matches(.kanbanFocusLeft) {
+        manager.focusKanbanColumn(direction: -1)
+        updateTitle()
+        return true
+      }
+      if matches(.kanbanFocusRight) {
+        manager.focusKanbanColumn(direction: 1)
+        updateTitle()
         return true
       }
     }
@@ -387,6 +417,11 @@ struct KeyboardShortcutRouter {
       }
       if matches(.rootTabPriority) {
         manager.setRootTaskView(.priority)
+        updateTitle()
+        return true
+      }
+      if matches(.rootTabKanban) {
+        manager.setRootTaskView(.kanban)
         updateTitle()
         return true
       }

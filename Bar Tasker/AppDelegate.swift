@@ -50,7 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   private var currentPopoverContentSize: NSSize {
     NSSize(
-      width: PopoverLayout.width,
+      width: PopoverLayout.preferredWidth(for: checkvistManager),
       height: PopoverLayout.preferredHeight(for: checkvistManager)
     )
   }

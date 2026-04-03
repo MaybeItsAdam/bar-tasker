@@ -4,8 +4,16 @@ import SwiftUI
 // swiftlint:disable file_length
 enum PopoverLayout {
   static let width: CGFloat = 360
+  static let kanbanColumnWidth: CGFloat = 240
   static let minHeight: CGFloat = 220
   static let maxHeight: CGFloat = 520
+
+  @MainActor
+  static func preferredWidth(for manager: BarTaskerManager) -> CGFloat {
+    guard manager.rootTaskView == .kanban else { return width }
+    let count = max(1, manager.kanbanColumns.count)
+    return CGFloat(count) * kanbanColumnWidth
+  }
   static let cornerRadius: CGFloat = 10
   static let topStripHeight: CGFloat = 6
   static let rootScopeHorizontalInset: CGFloat = 8
@@ -346,6 +354,7 @@ struct PopoverView: View {
 
   var body: some View {
     let panelHeight = PopoverLayout.preferredHeight(for: manager)
+    let panelWidth = PopoverLayout.preferredWidth(for: manager)
 
     VStack(alignment: .leading, spacing: 0) {
       topBevelArea
@@ -366,9 +375,14 @@ struct PopoverView: View {
         Divider()
       }
 
-      // Task list — keyboard navigable
-      taskList
-        .frame(maxHeight: .infinity, alignment: .top)
+      // Task list / Kanban board — keyboard navigable
+      if manager.rootTaskView == .kanban {
+        KanbanBoardView()
+          .frame(maxHeight: .infinity, alignment: .top)
+      } else {
+        taskList
+          .frame(maxHeight: .infinity, alignment: .top)
+      }
       Divider()
 
       // Delete confirmation banner
@@ -388,7 +402,7 @@ struct PopoverView: View {
       }
 
     }
-    .frame(width: PopoverLayout.width, height: panelHeight, alignment: .top)
+    .frame(width: panelWidth, height: panelHeight, alignment: .top)
     .background(themeColor(.panelBackground))
     .tint(manager.themeAccentColor)
     .clipShape(RoundedRectangle(cornerRadius: PopoverLayout.cornerRadius))

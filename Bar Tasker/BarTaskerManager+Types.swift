@@ -28,6 +28,7 @@ extension BarTaskerManager {
     case due
     case tags
     case priority
+    case kanban
 
     var title: String {
       switch self {
@@ -35,6 +36,7 @@ extension BarTaskerManager {
       case .due: return "Due"
       case .tags: return "Tags"
       case .priority: return "Priority"
+      case .kanban: return "Kanban"
       }
     }
   }
@@ -171,6 +173,11 @@ extension BarTaskerManager {
     case clearPriority
     case pushPriorityBack
     case setPriorityRank
+    case kanbanMoveLeft
+    case kanbanMoveRight
+    case kanbanFocusLeft
+    case kanbanFocusRight
+    case rootTabKanban
 
     var id: String { rawValue }
 
@@ -226,6 +233,11 @@ extension BarTaskerManager {
       case .clearPriority: return "Clear priority"
       case .pushPriorityBack: return "Send priority to back"
       case .setPriorityRank: return "Set priority rank"
+      case .kanbanMoveLeft: return "Kanban: move task to previous column"
+      case .kanbanMoveRight: return "Kanban: move task to next column"
+      case .kanbanFocusLeft: return "Kanban: focus previous column"
+      case .kanbanFocusRight: return "Kanban: focus next column"
+      case .rootTabKanban: return "Jump to root tab: Kanban"
       }
     }
 
@@ -234,11 +246,12 @@ extension BarTaskerManager {
       case .nextTask, .previousTask, .enterChildren, .exitToParent, .rootCycleTabPrevious,
         .rootCycleTabNext, .rootCycleFilterPrevious, .rootCycleFilterNext, .rootTabAll, .rootTabDue,
         .rootTabTags, .rootTabPriority, .rootFilter1, .rootFilter2, .rootFilter3, .rootFilter4,
-        .rootFilter5, .rootFilter6, .rootFilter7:
+        .rootFilter5, .rootFilter6, .rootFilter7, .rootTabKanban,
+        .kanbanFocusLeft, .kanbanFocusRight:
         return "Navigation"
       case .markDone, .invalidateTask, .addSibling, .addChild, .unindentTask, .editTaskAtEnd,
         .editTaskAtStart, .deleteTask, .moveTaskUp, .moveTaskDown, .undo, .clearPriority,
-        .pushPriorityBack, .setPriorityRank:
+        .pushPriorityBack, .setPriorityRank, .kanbanMoveLeft, .kanbanMoveRight:
         return "Task Actions"
       case .openCommandPalette, .closeOrCancel, .focusSearch, .sequenceDue, .sequenceDueToday,
         .sequenceTag, .sequenceUntag, .sequenceToggleContext, .quickListSwitch, .quickAdd:
@@ -301,6 +314,11 @@ extension BarTaskerManager {
       case .clearPriority: return "-"
       case .pushPriorityBack: return "="
       case .setPriorityRank: return "1,2,3,4,5,6,7,8,9"
+      case .kanbanMoveLeft: return "cmd+left"
+      case .kanbanMoveRight: return "cmd+right"
+      case .kanbanFocusLeft: return "left,h"
+      case .kanbanFocusRight: return "right,l"
+      case .rootTabKanban: return "t"
       }
     }
   }

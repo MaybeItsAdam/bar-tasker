@@ -140,7 +140,8 @@ extension BarTaskerManager {
 
   var shouldShowRootScopeSection: Bool { !needsInitialSetup && !isSearchFilterActive }
   var rootScopeShowsFilterControls: Bool {
-    shouldShowRootScopeSection && isRootLevel && (rootTaskView == .due || rootTaskView == .tags)
+    shouldShowRootScopeSection && isRootLevel
+      && (rootTaskView == .due || rootTaskView == .tags)
   }
 
   var selectedRootDueBucket: RootDueBucket? {

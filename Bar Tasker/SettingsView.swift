@@ -218,6 +218,8 @@ struct SettingsView: View {
       themePane
     case .plugins:
       pluginsPane
+    case .kanban:
+      KanbanSettingsView()
     #if DEBUG
       case .debug:
         debugPane
