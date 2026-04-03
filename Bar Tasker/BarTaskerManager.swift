@@ -112,6 +112,7 @@ class BarTaskerManager: ObservableObject {
   @Published var obsidianInboxPath: String
   @Published var mcpServerCommandPath: String
   @Published var pendingObsidianSyncTaskIds: [Int]
+  @Published var googleCalendarEventLinksByTaskKey: [String: String]
   @Published var isNetworkReachable: Bool = true
 
   var dismissedOnboardingDialogs: Set<OnboardingDialog>
@@ -206,19 +207,19 @@ class BarTaskerManager: ObservableObject {
       uniqueKeysWithValues: offlinePayload.archivedTasks.map { ($0.id, $0) })
     self.nextOfflineTaskIdValue = max(offlinePayload.nextTaskId, 1)
     self.pendingObsidianSyncTaskIds = pendingSyncQueueStore.load(for: storedListId)
+    self.googleCalendarEventLinksByTaskKey = preferencesStore.stringDictionary(
+      .googleCalendarEventLinksByTaskKey)
     self.priorityTaskIds = priorityQueueStore.load(for: storedListId)
     self.obsidianInboxPath = storedObsidianInboxPath
-    if let storedObsidianIntegrationEnabled {
-      self.obsidianIntegrationEnabled = storedObsidianIntegrationEnabled
-    } else {
-      self.obsidianIntegrationEnabled = !storedObsidianInboxPath.isEmpty
-    }
+    self.obsidianIntegrationEnabled =
+      storedObsidianIntegrationEnabled
+      ?? preferencesStore.bool(.obsidianIntegrationEnabled, default: false)
     self.googleCalendarIntegrationEnabled =
       storedGoogleCalendarIntegrationEnabled
       ?? preferencesStore.bool(.googleCalendarIntegrationEnabled, default: false)
     self.mcpIntegrationEnabled =
       storedMCPIntegrationEnabled
-      ?? preferencesStore.bool(.mcpIntegrationEnabled, default: true)
+      ?? preferencesStore.bool(.mcpIntegrationEnabled, default: false)
     self.appTheme =
       AppTheme(rawValue: preferencesStore.int(.appThemeRawValue, default: 0))
       ?? .system
@@ -259,10 +260,12 @@ class BarTaskerManager: ObservableObject {
     #endif
     self.globalHotkeyEnabled = preferencesStore.bool(.globalHotkeyEnabled, default: false)
     self.globalHotkeyKeyCode = preferencesStore.int(.globalHotkeyKeyCode, default: CarbonKey.space)
-    self.globalHotkeyModifiers = preferencesStore.int(.globalHotkeyModifiers, default: CarbonModifier.option)
+    self.globalHotkeyModifiers = preferencesStore.int(
+      .globalHotkeyModifiers, default: CarbonModifier.option)
     self.quickAddHotkeyEnabled = preferencesStore.bool(.quickAddHotkeyEnabled, default: false)
     self.quickAddHotkeyKeyCode = preferencesStore.int(.quickAddHotkeyKeyCode, default: CarbonKey.b)
-    self.quickAddHotkeyModifiers = preferencesStore.int(.quickAddHotkeyModifiers, default: CarbonModifier.shiftOption)
+    self.quickAddHotkeyModifiers = preferencesStore.int(
+      .quickAddHotkeyModifiers, default: CarbonModifier.shiftOption)
     self.quickAddLocationMode =
       QuickAddLocationMode(
         rawValue: preferencesStore.int(.quickAddLocationModeRawValue, default: 0))

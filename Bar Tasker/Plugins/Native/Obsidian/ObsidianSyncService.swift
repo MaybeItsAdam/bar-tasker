@@ -11,9 +11,6 @@ final class ObsidianSyncService {
   private static let bookmarkDefaultsKey = "obsidianInboxBookmark"
   private static let linkedFolderBookmarksDefaultsKey = "obsidianLinkedFolderBookmarksByTaskId"
   private static let obsidianBundleIdentifier = "md.obsidian"
-  private static let standardOpenDelay: TimeInterval = 0.1
-  private static let newWindowOpenDelay: TimeInterval = 0.25
-  private static let uriRetryDelay: TimeInterval = 0.35
   private static let remoteTimestampParsers: [ISO8601DateFormatter] = {
     let internet = ISO8601DateFormatter()
     internet.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate]
@@ -151,6 +148,14 @@ final class ObsidianSyncService {
     linkedFolderPath(forTaskId: taskId) != nil
   }
 
+  func hasSyncedNote(task: CheckvistTask, linkedFolderTaskId: Int?) -> Bool {
+    guard let markdownURL = try? noteFileURL(task: task, linkedFolderTaskId: linkedFolderTaskId)
+    else {
+      return false
+    }
+    return FileManager.default.fileExists(atPath: markdownURL.path)
+  }
+
   func syncTask(
     _ task: CheckvistTask,
     listId: String,
@@ -236,17 +241,11 @@ final class ObsidianSyncService {
   private func writeTaskMarkdown(task: CheckvistTask, listId: String, inboxURL: URL, syncDate: Date)
     throws -> URL
   {
-    let accessed = inboxURL.startAccessingSecurityScopedResource()
-    defer {
-      if accessed {
-        inboxURL.stopAccessingSecurityScopedResource()
-      }
-    }
-
-    try FileManager.default.createDirectory(at: inboxURL, withIntermediateDirectories: true)
-
-    let safeName = sanitizeTaskFileName(task.content)
-    let markdownURL = inboxURL.appendingPathComponent("\(safeName).md")
+    let markdownURL = try noteFileURL(
+      task: task,
+      destinationFolderURL: inboxURL,
+      createDirectoryIfNeeded: true
+    )
     let localCreationDate = try? fileCreationDate(at: markdownURL)
     let latestRemoteUpdate = latestRemoteUpdateDate(for: task)
 
@@ -259,28 +258,69 @@ final class ObsidianSyncService {
     return markdownURL
   }
 
+  private func noteFileURL(task: CheckvistTask, linkedFolderTaskId: Int?) throws -> URL {
+    try noteFileURL(
+      task: task,
+      destinationFolderURL: resolvedDestinationFolderURL(linkedFolderTaskId: linkedFolderTaskId),
+      createDirectoryIfNeeded: false
+    )
+  }
+
+  private func noteFileURL(
+    task: CheckvistTask,
+    destinationFolderURL: URL,
+    createDirectoryIfNeeded: Bool
+  ) throws -> URL {
+    let accessed = destinationFolderURL.startAccessingSecurityScopedResource()
+    defer {
+      if accessed {
+        destinationFolderURL.stopAccessingSecurityScopedResource()
+      }
+    }
+
+    if createDirectoryIfNeeded {
+      try FileManager.default.createDirectory(
+        at: destinationFolderURL,
+        withIntermediateDirectories: true
+      )
+    }
+
+    let safeName = sanitizeTaskFileName(task.content)
+    return destinationFolderURL.appendingPathComponent("\(safeName).md")
+  }
+
   private func openInObsidian(_ markdownURL: URL, mode: ObsidianOpenMode) {
     let obsidianURL = makeObsidianOpenURL(for: markdownURL, mode: mode)
 
-    if let obsidianAppURL = NSWorkspace.shared.urlForApplication(
-      withBundleIdentifier: Self.obsidianBundleIdentifier)
+    if mode == .newWindow,
+      let obsidianURL,
+      let obsidianAppURL = NSWorkspace.shared.urlForApplication(
+        withBundleIdentifier: Self.obsidianBundleIdentifier)
     {
-      let fileOpenConfiguration = NSWorkspace.OpenConfiguration()
-      fileOpenConfiguration.activates = mode == .standard
+      let configuration = NSWorkspace.OpenConfiguration()
+      configuration.activates = false
       NSWorkspace.shared.open(
-        [markdownURL], withApplicationAt: obsidianAppURL, configuration: fileOpenConfiguration
-      ) { [weak self] _, _ in
-        guard let self, let obsidianURL else { return }
-        let delay: TimeInterval =
-          mode == .newWindow ? Self.newWindowOpenDelay : Self.standardOpenDelay
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-          self.openObsidianURI(obsidianURL, appURL: obsidianAppURL, mode: mode)
-        }
-      }
+        [obsidianURL],
+        withApplicationAt: obsidianAppURL,
+        configuration: configuration
+      ) { _, _ in }
       return
     }
 
     if let obsidianURL, NSWorkspace.shared.open(obsidianURL) {
+      return
+    }
+
+    if let obsidianAppURL = NSWorkspace.shared.urlForApplication(
+      withBundleIdentifier: Self.obsidianBundleIdentifier)
+    {
+      let configuration = NSWorkspace.OpenConfiguration()
+      configuration.activates = mode == .standard
+      NSWorkspace.shared.open(
+        [markdownURL],
+        withApplicationAt: obsidianAppURL,
+        configuration: configuration
+      ) { _, _ in }
       return
     }
 
@@ -299,31 +339,15 @@ final class ObsidianSyncService {
     return components.url
   }
 
-  private func openObsidianURI(
-    _ obsidianURL: URL,
-    appURL: URL,
-    mode: ObsidianOpenMode,
-    remainingRetries: Int = 1
-  ) {
-    let uriOpenConfiguration = NSWorkspace.OpenConfiguration()
-    uriOpenConfiguration.activates = mode == .standard
-    NSWorkspace.shared.open(
-      [obsidianURL], withApplicationAt: appURL, configuration: uriOpenConfiguration
-    ) { [weak self] _, error in
-      guard let self, remainingRetries > 0, error != nil else { return }
-      DispatchQueue.main.asyncAfter(deadline: .now() + Self.uriRetryDelay) {
-        self.openObsidianURI(
-          obsidianURL, appURL: appURL, mode: mode,
-          remainingRetries: remainingRetries - 1)
-      }
-    }
-  }
-
   private func markdownDocument(for task: CheckvistTask, listId: String, syncDate: Date) -> String {
     let iso = ISO8601DateFormatter()
     var lines: [String] = []
     lines.append(task.content)
-    lines.append("Checkvist Link: https://checkvist.com/checklists/\(listId)#t\(task.id)")
+    if listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      lines.append("Task ID: \(task.id)")
+    } else {
+      lines.append("Checkvist Link: https://checkvist.com/checklists/\(listId)#t\(task.id)")
+    }
     lines.append("")
     lines.append("Sync Date: \(iso.string(from: syncDate))")
     lines.append("")

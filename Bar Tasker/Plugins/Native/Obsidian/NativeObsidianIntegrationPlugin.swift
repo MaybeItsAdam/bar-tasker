@@ -4,6 +4,7 @@ import Foundation
 final class NativeObsidianIntegrationPlugin: ObsidianIntegrationPlugin {
   let pluginIdentifier = "native.obsidian.integration"
   let displayName = "Native Obsidian Integration"
+  let pluginDescription = "Sync tasks into markdown notes and open them directly in Obsidian."
 
   private let service: ObsidianSyncService
 
@@ -37,6 +38,10 @@ final class NativeObsidianIntegrationPlugin: ObsidianIntegrationPlugin {
 
   func hasLinkedFolder(forTaskId taskId: Int) -> Bool {
     service.hasLinkedFolder(forTaskId: taskId)
+  }
+
+  func hasSyncedNote(task: CheckvistTask, linkedFolderTaskId: Int?) -> Bool {
+    service.hasSyncedNote(task: task, linkedFolderTaskId: linkedFolderTaskId)
   }
 
   func syncTask(

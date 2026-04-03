@@ -48,7 +48,6 @@ let pluginTargetExcludes = [
   "README.md",
   "TODO.md",
   "build",
-  "build_dir",
   "DerivedData",
   "corelogic-tests",
   "docs",

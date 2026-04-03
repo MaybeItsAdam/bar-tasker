@@ -159,7 +159,7 @@ final class BarTaskerCommandEngineCommandParsingTests: XCTestCase {
 
   func testFilteredSuggestionsReturnsAllForEmptyQuery() {
     let all = BarTaskerCommandEngine.filteredSuggestions(query: "")
-    XCTAssertEqual(all.count, min(8, BarTaskerCommandEngine.suggestions.count))
+    XCTAssertEqual(all.count, BarTaskerCommandEngine.suggestions.count)
   }
 
   func testFilteredSuggestionsMatchesLabel() {

@@ -1240,6 +1240,8 @@ struct PopoverView: View {
     let showsSelectedStyling = isSelected && !showsInlineComposer && listFocusIsActive
     let showsInactiveSelection = isSelected && !showsInlineComposer && !listFocusIsActive
     let isCompleting = manager.completingTaskId == task.id
+    let hasObsidianNoteLink = manager.hasObsidianSyncedNote(task: task)
+    let hasGoogleCalendarLink = manager.hasGoogleCalendarEventLink(taskId: task.id)
 
     HStack(alignment: .top, spacing: PopoverLayout.rowContentSpacing) {
       Image(
@@ -1295,27 +1297,52 @@ struct PopoverView: View {
           .frame(height: 18)
           .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-          HStack(spacing: 6) {
+          HStack(alignment: .center, spacing: 6) {
             fadedTaskTitle(task: task)
+            taskInlineMetadata(task: task, elapsed: elapsed)
             if task.hasNotes {
               Image(systemName: "text.alignleft")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(themeColor(.textSecondary))
+                .help("Task has notes")
+            }
+            if hasObsidianNoteLink {
+              Button {
+                manager.rootScopeFocusLevel = 0
+                manager.currentSiblingIndex = index
+                Task {
+                  if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                    await manager.openCurrentTaskInNewObsidianWindow(taskId: task.id)
+                  } else {
+                    await manager.syncCurrentTaskToObsidian(taskId: task.id)
+                  }
+                }
+              } label: {
+                Image("ObsidianBadge")
+                  .renderingMode(.template)
+                  .resizable()
+                  .interpolation(.high)
+                  .scaledToFit()
+                  .frame(width: 12, height: 12)
+                  .foregroundColor(themeColor(.textSecondary))
+              }
+              .buttonStyle(.plain)
+              .help("Open linked Obsidian note. Shift-click opens in a new window")
+            }
+            if hasGoogleCalendarLink {
+              Button {
+                manager.rootScopeFocusLevel = 0
+                manager.currentSiblingIndex = index
+                manager.openSavedGoogleCalendarEventLink(taskId: task.id)
+              } label: {
+                Image(systemName: "calendar.badge.checkmark")
+                  .font(.system(size: 10, weight: .semibold))
+                  .foregroundColor(themeColor(.textSecondary))
+              }
+              .buttonStyle(.plain)
+              .help("Open linked Google Calendar event")
             }
           }
-        }
-
-        if let priority = manager.priorityRank(for: task) {
-          priorityBadge(priority)
-        }
-
-        if manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id) {
-          timerBadge(
-            elapsed: elapsed, running: manager.timedTaskId == task.id && manager.timerRunning)
-        }
-
-        if let due = task.due {
-          dueBadge(due: due, overdue: task.isOverdue, today: task.isDueToday)
         }
       }
       .layoutPriority(1)
@@ -1591,7 +1618,57 @@ struct PopoverView: View {
   }
 
   func inlineTaskContent(task: CheckvistTask) -> Text {
-    formatTaskContent(task.content)
+    formatTaskContent(taskDisplayTitle(task.content))
+  }
+
+  func taskDisplayTitle(_ text: String) -> String {
+    let pattern = "([@#][a-zA-Z0-9_\\-]+)"
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+    let range = NSRange(text.startIndex..., in: text)
+    let stripped = regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+    let normalized =
+      stripped
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return normalized.isEmpty ? text : normalized
+  }
+
+  func taskMetadataTokens(_ text: String) -> [String] {
+    let pattern = "([@#][a-zA-Z0-9_\\-]+)"
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    let range = NSRange(text.startIndex..., in: text)
+    let matches = regex.matches(in: text, range: range)
+    return matches.compactMap { match in
+      guard let matchRange = Range(match.range, in: text) else { return nil }
+      return String(text[matchRange])
+    }
+  }
+
+  @ViewBuilder
+  func taskInlineMetadata(task: CheckvistTask, elapsed: TimeInterval) -> some View {
+    let metadataTokens = taskMetadataTokens(task.content)
+    if !metadataTokens.isEmpty
+      || manager.priorityRank(for: task) != nil
+      || (manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id))
+      || task.due != nil
+    {
+      HStack(spacing: 4) {
+        ForEach(metadataTokens, id: \.self) { token in
+          metadataTokenBadge(token)
+        }
+        if let priority = manager.priorityRank(for: task) {
+          priorityBadge(priority)
+        }
+        if manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id) {
+          timerBadge(
+            elapsed: elapsed, running: manager.timedTaskId == task.id && manager.timerRunning)
+        }
+        if let due = task.due {
+          dueBadge(due: due, overdue: task.isOverdue, today: task.isDueToday)
+        }
+      }
+      .fixedSize(horizontal: true, vertical: false)
+    }
   }
 
   @ViewBuilder
@@ -1602,6 +1679,7 @@ struct PopoverView: View {
       .padding(.vertical, 2)
       .background(themeColor(.selectionBackground))
       .foregroundColor(themeColor(.selectionForeground))
+      .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 
   @ViewBuilder
@@ -1618,6 +1696,17 @@ struct PopoverView: View {
           ? themeColor(.danger)
           : today ? themeColor(.warning) : themeColor(.textSecondary)
       )
+      .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+
+  @ViewBuilder
+  func metadataTokenBadge(_ token: String) -> some View {
+    Text(token)
+      .font(.system(size: 10, weight: .medium))
+      .padding(.horizontal, 5)
+      .padding(.vertical, 2)
+      .background(themeColor(.panelSurfaceElevated))
+      .foregroundColor(themeColor(.textSecondary))
       .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 

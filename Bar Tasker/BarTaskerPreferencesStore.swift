@@ -22,6 +22,7 @@ final class BarTaskerPreferencesStore {
     case ignoreKeychainInDebug
     case obsidianIntegrationEnabled
     case googleCalendarIntegrationEnabled
+    case googleCalendarEventLinksByTaskKey
     case mcpIntegrationEnabled
     case quickAddHotkeyEnabled
     case quickAddHotkeyKeyCode

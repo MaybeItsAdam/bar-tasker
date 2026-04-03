@@ -145,6 +145,7 @@ final class ObsidianSyncService {
   var chooseLinkedFolderResult: String?
   var createAndLinkFolderResult: String?
   var syncResultURL = URL(fileURLWithPath: "/tmp/obsidian-task.md")
+  var syncedNoteTaskIDs: Set<Int> = []
   private var linkedFolderByTask: [Int: String] = [:]
 
   private(set) var lastSyncCall:
@@ -184,6 +185,10 @@ final class ObsidianSyncService {
 
   func hasLinkedFolder(forTaskId taskId: Int) -> Bool {
     linkedFolderByTask[taskId] != nil
+  }
+
+  func hasSyncedNote(task: CheckvistTask, linkedFolderTaskId: Int?) -> Bool {
+    syncedNoteTaskIDs.contains(task.id)
   }
 
   func syncTask(

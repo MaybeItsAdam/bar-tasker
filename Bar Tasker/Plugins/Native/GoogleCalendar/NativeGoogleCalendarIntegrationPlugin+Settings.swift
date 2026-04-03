@@ -58,9 +58,13 @@ private struct GoogleCalendarIntegrationPluginSettingsView: View {
             }
             .disabled(plugin.isAuthenticating || !plugin.isAuthenticated)
 
-            Button("Add selected task now") {
+            Button("Create event from selected task") {
               manager.openCurrentTaskInGoogleCalendar()
             }
+            .disabled(
+              plugin.isAuthenticating || !plugin.hasOAuthClientConfiguration
+                || !plugin.isAuthenticated
+            )
 
             Spacer()
             if plugin.isAuthenticating {
@@ -80,7 +84,7 @@ private struct GoogleCalendarIntegrationPluginSettingsView: View {
           }
 
           Text(
-            "Without OAuth, this plugin falls back to opening a prefilled Google Calendar event in your browser."
+            "This integration creates Google Calendar events from tasks. OAuth setup and sign-in are required."
           )
           .font(.caption2)
           .foregroundColor(.secondary)

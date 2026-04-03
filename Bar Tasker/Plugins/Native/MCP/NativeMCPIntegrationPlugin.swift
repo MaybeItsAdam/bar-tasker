@@ -20,6 +20,7 @@ final class NativeMCPIntegrationPlugin: MCPIntegrationPlugin {
 
   let pluginIdentifier = "native.mcp.integration"
   let displayName = "Native MCP Integration"
+  let pluginDescription = "Expose Bar Tasker as a local MCP server for AI assistants and tools."
 
   private let guideRelativePath = "docs/mcp-server.md"
   private let scriptRelativePath = "scripts/bar_tasker_mcp_server.py"

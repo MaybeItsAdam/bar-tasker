@@ -19,6 +19,10 @@ extension BarTaskerManager {
 
   var isUsingOfflineStore: Bool { !hasListSelection }
 
+  var offlineOpenTaskCount: Int {
+    localTaskStore.load().openTasks.count
+  }
+
   var quickAddSpecificParentTaskIdValue: Int? {
     let raw = quickAddSpecificParentTaskId.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !raw.isEmpty, let value = Int(raw), value > 0 else { return nil }

@@ -10,6 +10,7 @@ final class NativeGoogleCalendarIntegrationPlugin: ObservableObject, GoogleCalen
 {
   let pluginIdentifier = "native.google.calendar.integration"
   let displayName = "Native Google Calendar Integration"
+  let pluginDescription = "Create Google Calendar events from tasks using your Google account."
 
   @Published var oauthClientID: String {
     didSet {
@@ -38,7 +39,7 @@ final class NativeGoogleCalendarIntegrationPlugin: ObservableObject, GoogleCalen
   @Published private(set) var isAuthenticating = false
   @Published private(set) var isAuthenticated = false
   @Published private(set) var authenticationStatusDescription =
-    "Uses your browser session to create prefilled events."
+    "Set a Google OAuth client ID to enable Calendar event creation."
 
   var requiresAuthentication: Bool { !normalizedOAuthClientID.isEmpty }
   var hasOAuthClientConfiguration: Bool { !normalizedOAuthClientID.isEmpty }
@@ -123,12 +124,8 @@ final class NativeGoogleCalendarIntegrationPlugin: ObservableObject, GoogleCalen
   func createEvent(task: CheckvistTask, listId: String, now: Date) async throws
     -> GoogleCalendarEventCreationOutcome
   {
-    // Backward-compatible mode: no OAuth client configured means browser handoff only.
     if normalizedOAuthClientID.isEmpty {
-      return GoogleCalendarEventCreationOutcome(
-        urlToOpen: makeCreateEventURL(task: task, listId: listId, now: now),
-        usedGoogleCalendarAPI: false
-      )
+      throw GoogleCalendarPluginError.missingOAuthClientID
     }
 
     let validAccessToken = try await ensureValidAccessToken()
@@ -383,7 +380,7 @@ final class NativeGoogleCalendarIntegrationPlugin: ObservableObject, GoogleCalen
   private func updateAuthenticationStatusDescription() {
     if normalizedOAuthClientID.isEmpty {
       authenticationStatusDescription =
-        "OAuth not configured. Uses browser handoff with your existing Google login."
+        "OAuth not configured. Calendar event creation is unavailable."
       isAuthenticated = false
       return
     }

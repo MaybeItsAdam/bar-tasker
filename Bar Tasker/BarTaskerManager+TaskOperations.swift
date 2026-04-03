@@ -444,15 +444,41 @@ extension BarTaskerManager {
     return reopenedAny
   }
 
-  @MainActor func fetchLists() async {
+  @MainActor func fetchLists() async -> Bool {
     do {
       let lists = try await checkvistSyncPlugin.fetchLists(credentials: activeCredentials)
       self.availableLists = lists
+      return true
     } catch CheckvistSessionError.authenticationUnavailable {
       setAuthenticationRequiredErrorIfNeeded()
+      return false
     } catch {
       self.errorMessage = "Failed to fetch lists: \(error.localizedDescription)"
+      return false
     }
+  }
+
+  @MainActor func loadCheckvistLists(assignFirstIfMissing: Bool = false) async -> Bool {
+    let success = await login()
+    guard success else { return false }
+    let didFetchLists = await fetchLists()
+    guard didFetchLists else { return false }
+
+    if assignFirstIfMissing, listId.isEmpty, let first = availableLists.first {
+      listId = String(first.id)
+    }
+    return true
+  }
+
+  @MainActor func switchCheckvistList(to rawListId: String) async {
+    let trimmedListId = rawListId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmedListId != listId else { return }
+
+    listId = trimmedListId
+    currentParentId = 0
+    currentSiblingIndex = 0
+    errorMessage = nil
+    await fetchTopTask()
   }
 
   @MainActor func createCheckvistListAndSwitch(name: String) async -> Bool {
@@ -476,8 +502,7 @@ extension BarTaskerManager {
         return false
       }
 
-      let lists = try await checkvistSyncPlugin.fetchLists(credentials: activeCredentials)
-      availableLists = lists
+      _ = await fetchLists()
       selectList(createdList)
       errorMessage = "Created and switched to list: \(createdList.name)"
       await fetchTopTask()
@@ -531,47 +556,16 @@ extension BarTaskerManager {
         return (lhs.position ?? Int.max) < (rhs.position ?? Int.max)
       }
 
-      var migratedBySourceTaskID: [Int: Int] = [:]
-      var mergedCount = 0
-      var skippedCount = 0
-
-      for sourceTask in orderedTasks {
-        let resolvedParentID =
-          sourceTask.parentId.flatMap { migratedBySourceTaskID[$0] }
-        guard
-          let created = try await checkvistSyncPlugin.createTask(
-            listId: destination,
-            content: sourceTask.content,
-            parentId: resolvedParentID,
-            position: nil,
-            credentials: activeCredentials
-          )
-        else {
-          skippedCount += 1
-          continue
-        }
-
-        migratedBySourceTaskID[sourceTask.id] = created.id
-        if let due = sourceTask.due, !due.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          _ = try await checkvistSyncPlugin.updateTask(
-            listId: destination,
-            taskId: created.id,
-            content: nil,
-            due: due,
-            credentials: activeCredentials
-          )
-        }
-        mergedCount += 1
-      }
+      let migrationResult = try await copyTasks(orderedTasks, to: destination)
 
       if destination == listId {
         await fetchTopTask()
       }
 
       errorMessage =
-        skippedCount > 0
-        ? "Merged \(mergedCount) tasks (\(skippedCount) skipped)."
-        : "Merged \(mergedCount) tasks."
+        migrationResult.skippedCount > 0
+        ? "Merged \(migrationResult.mergedCount) tasks (\(migrationResult.skippedCount) skipped)."
+        : "Merged \(migrationResult.mergedCount) tasks."
       return true
     } catch CheckvistSessionError.authenticationUnavailable {
       setAuthenticationRequiredErrorIfNeeded()
@@ -584,6 +578,84 @@ extension BarTaskerManager {
 
   @MainActor func selectList(_ list: CheckvistList) {
     listId = String(list.id)
+  }
+
+  @MainActor func uploadOfflineTasksToCheckvist(destinationListId: String) async -> Bool {
+    let destination = destinationListId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !destination.isEmpty else {
+      errorMessage = "Choose a Checkvist destination list."
+      return false
+    }
+
+    let offlineTasks = normalizeOfflineTasks(localTaskStore.load().openTasks)
+    guard !offlineTasks.isEmpty else {
+      errorMessage = "No offline tasks are available to upload."
+      return false
+    }
+
+    let loginSucceeded = await login()
+    guard loginSucceeded else { return false }
+
+    beginLoading()
+    defer { endLoading() }
+
+    do {
+      let migrationResult = try await copyTasks(offlineTasks, to: destination)
+
+      if destination == listId {
+        await fetchTopTask()
+      }
+
+      errorMessage =
+        migrationResult.skippedCount > 0
+        ? "Uploaded \(migrationResult.mergedCount) offline tasks (\(migrationResult.skippedCount) skipped)."
+        : "Uploaded \(migrationResult.mergedCount) offline tasks."
+      return true
+    } catch CheckvistSessionError.authenticationUnavailable {
+      setAuthenticationRequiredErrorIfNeeded()
+      return false
+    } catch {
+      errorMessage = "Failed to upload offline tasks: \(error.localizedDescription)"
+      return false
+    }
+  }
+
+  private func copyTasks(_ sourceTasks: [CheckvistTask], to destinationListId: String) async throws
+    -> (mergedCount: Int, skippedCount: Int)
+  {
+    var migratedBySourceTaskID: [Int: Int] = [:]
+    var mergedCount = 0
+    var skippedCount = 0
+
+    for sourceTask in sourceTasks {
+      let resolvedParentID = sourceTask.parentId.flatMap { migratedBySourceTaskID[$0] }
+      guard
+        let created = try await checkvistSyncPlugin.createTask(
+          listId: destinationListId,
+          content: sourceTask.content,
+          parentId: resolvedParentID,
+          position: nil,
+          credentials: activeCredentials
+        )
+      else {
+        skippedCount += 1
+        continue
+      }
+
+      migratedBySourceTaskID[sourceTask.id] = created.id
+      if let due = sourceTask.due, !due.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        _ = try await checkvistSyncPlugin.updateTask(
+          listId: destinationListId,
+          taskId: created.id,
+          content: nil,
+          due: due,
+          credentials: activeCredentials
+        )
+      }
+      mergedCount += 1
+    }
+
+    return (mergedCount, skippedCount)
   }
 
   @MainActor func updateTask(

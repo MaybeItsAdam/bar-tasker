@@ -50,16 +50,21 @@ final class NativeGoogleCalendarIntegrationPluginTests: XCTestCase {
     XCTAssertEqual(query["dates"], "20260402T083000Z/20260402T090000Z")
   }
 
-  func testCreateEventFallsBackToBrowserURLWhenOAuthNotConfigured() async throws {
+  func testCreateEventRequiresOAuthWhenOAuthNotConfigured() async {
     let defaults = makeIsolatedDefaults()
     let plugin = NativeGoogleCalendarIntegrationPlugin(defaults: defaults)
     let now = makeDate(2026, 4, 3, 10, 0)
     let task = CheckvistTask(id: 303, content: "Review notes", status: 0, due: nil)
 
-    let outcome = try await plugin.createEvent(task: task, listId: "88", now: now)
-
-    XCTAssertFalse(outcome.usedGoogleCalendarAPI)
-    XCTAssertNotNil(outcome.urlToOpen)
+    do {
+      _ = try await plugin.createEvent(task: task, listId: "88", now: now)
+      XCTFail("Expected createEvent to require OAuth configuration")
+    } catch {
+      XCTAssertEqual(
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription,
+        "Set a Google OAuth client ID first."
+      )
+    }
   }
 
   private func makeIsolatedDefaults() -> UserDefaults {

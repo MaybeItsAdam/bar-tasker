@@ -17,6 +17,8 @@ enum BarTaskerCommand: Equatable, Sendable {
   case edit
   case search
   case openPreferences
+  case reloadCheckvistLists
+  case uploadOfflineTasks
   case addSibling
   case addChild
   case openLink
@@ -37,10 +39,15 @@ enum BarTaskerCommand: Equatable, Sendable {
   case clearPriority
   case syncObsidian
   case syncObsidianNewWindow
+  case chooseObsidianInbox
+  case clearObsidianInbox
   case linkObsidianFolder
   case createObsidianFolder
   case clearObsidianFolderLink
   case syncGoogleCalendar
+  case refreshMCPPath
+  case copyMCPClientConfig
+  case openMCPGuide
   case unknown(String)
 }
 
@@ -90,12 +97,28 @@ enum BarTaskerCommandEngine {
       preview: "Remove selected task from priority list", keybind: "-",
       submitImmediately: true),
     .init(
+      label: "Reload Checkvist lists", command: "reload checkvist lists",
+      preview: "Refresh available Checkvist workspaces", keybind: nil,
+      submitImmediately: true),
+    .init(
+      label: "Upload offline tasks", command: "upload offline tasks",
+      preview: "Copy the offline workspace into the active or first loaded Checkvist list",
+      keybind: nil, submitImmediately: true),
+    .init(
       label: "Open in Obsidian", command: "sync obsidian",
       preview: "Write selected task and notes, then open it in Obsidian", keybind: "o",
       submitImmediately: true),
     .init(
       label: "Open in Obsidian (New Window)", command: "open obsidian new window",
       preview: "Write selected task and open it in a new Obsidian window", keybind: "O",
+      submitImmediately: true),
+    .init(
+      label: "Choose Obsidian inbox folder", command: "choose obsidian inbox",
+      preview: "Pick the default Obsidian inbox used for task sync", keybind: nil,
+      submitImmediately: true),
+    .init(
+      label: "Clear Obsidian inbox folder", command: "clear obsidian inbox",
+      preview: "Remove the default Obsidian inbox folder", keybind: nil,
       submitImmediately: true),
     .init(
       label: "Link Obsidian folder", command: "link obsidian folder",
@@ -110,8 +133,20 @@ enum BarTaskerCommandEngine {
       preview: "Remove the linked folder for this task subtree", keybind: nil,
       submitImmediately: true),
     .init(
-      label: "Add to Google Calendar", command: "sync google calendar",
-      preview: "Open Google Calendar with a prefilled event for selected task", keybind: "gc",
+      label: "Create Google Calendar event", command: "sync google calendar",
+      preview: "Create a Google Calendar event from the selected task", keybind: "gc",
+      submitImmediately: true),
+    .init(
+      label: "Refresh MCP path", command: "refresh mcp path",
+      preview: "Re-detect the built-in MCP server command path", keybind: nil,
+      submitImmediately: true),
+    .init(
+      label: "Copy MCP client config", command: "copy mcp config",
+      preview: "Copy the MCP client configuration to the clipboard", keybind: nil,
+      submitImmediately: true),
+    .init(
+      label: "Open MCP guide", command: "open mcp guide",
+      preview: "Open the local MCP setup guide", keybind: nil,
       submitImmediately: true),
     .init(
       label: "Switch list", command: "list ", preview: "Find and switch list", keybind: "Shift+L",
@@ -165,7 +200,8 @@ enum BarTaskerCommandEngine {
       keybind: "h / ←", submitImmediately: true),
   ]
 
-  static func filteredSuggestions(query: String, limit: Int = 8) -> [BarTaskerCommandSuggestion] {
+  static func filteredSuggestions(query: String, limit: Int? = nil) -> [BarTaskerCommandSuggestion]
+  {
     let queryText = query.lowercased().trimmingCharacters(in: .whitespaces)
     let candidates = suggestions.filter { suggestion in
       queryText.isEmpty
@@ -174,6 +210,7 @@ enum BarTaskerCommandEngine {
         || suggestion.preview.lowercased().contains(queryText)
         || (suggestion.keybind?.lowercased().contains(queryText) ?? false)
     }
+    guard let limit else { return candidates }
     return Array(candidates.prefix(limit))
   }
 
@@ -192,6 +229,12 @@ enum BarTaskerCommandEngine {
     if cmd == "search" { return .search }
     if cmd == "preferences" || cmd == "prefs" || cmd == "settings" {
       return .openPreferences
+    }
+    if cmd == "reload checkvist lists" || cmd == "reload lists" || cmd == "refresh lists" {
+      return .reloadCheckvistLists
+    }
+    if cmd == "upload offline tasks" || cmd == "upload offline" {
+      return .uploadOfflineTasks
     }
     if cmd == "add sibling" { return .addSibling }
     if cmd == "add child" { return .addChild }
@@ -237,6 +280,14 @@ enum BarTaskerCommandEngine {
     {
       return .syncObsidianNewWindow
     }
+    if cmd == "choose obsidian inbox" || cmd == "choose inbox folder"
+      || cmd == "obsidian inbox"
+    {
+      return .chooseObsidianInbox
+    }
+    if cmd == "clear obsidian inbox" || cmd == "clear inbox folder" {
+      return .clearObsidianInbox
+    }
     if cmd == "link obsidian folder" || cmd == "link folder" || cmd == "obsidian folder" {
       return .linkObsidianFolder
     }
@@ -254,6 +305,15 @@ enum BarTaskerCommandEngine {
       || cmd == "open google calendar" || cmd == "calendar"
     {
       return .syncGoogleCalendar
+    }
+    if cmd == "refresh mcp path" || cmd == "mcp refresh path" {
+      return .refreshMCPPath
+    }
+    if cmd == "copy mcp config" || cmd == "mcp config" || cmd == "mcp copy config" {
+      return .copyMCPClientConfig
+    }
+    if cmd == "open mcp guide" || cmd == "mcp guide" {
+      return .openMCPGuide
     }
     return .unknown(input)
   }

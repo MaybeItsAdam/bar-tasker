@@ -32,11 +32,14 @@ extension BarTaskerManager {
   func filteredCommandSuggestions(query: String) -> [CommandSuggestion] {
     let filtered = BarTaskerCommandEngine.filteredSuggestions(query: query).filter { suggestion in
       switch suggestion.command {
-      case "sync obsidian", "open obsidian new window", "link obsidian folder",
-        "create obsidian folder", "clear obsidian folder":
+      case "sync obsidian", "open obsidian new window", "choose obsidian inbox",
+        "clear obsidian inbox", "link obsidian folder", "create obsidian folder",
+        "clear obsidian folder":
         return obsidianIntegrationEnabled
       case "sync google calendar":
         return googleCalendarIntegrationEnabled
+      case "refresh mcp path", "copy mcp config", "open mcp guide":
+        return mcpIntegrationEnabled
       default:
         return true
       }

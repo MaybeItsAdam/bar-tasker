@@ -13,9 +13,7 @@ private struct CheckvistSyncPluginSettingsView: View {
   @ObservedObject var manager: BarTaskerManager
   @State private var isLoadingLists = false
   @State private var didAutoloadLists = false
-  @State private var newListName = ""
-  @State private var mergeSourceListId = ""
-  @State private var mergeDestinationListId = ""
+  @State private var uploadDestinationListId = ""
 
   var body: some View {
     Group {
@@ -31,24 +29,16 @@ private struct CheckvistSyncPluginSettingsView: View {
           SecureField("", text: $manager.remoteKey)
             .textFieldStyle(.roundedBorder)
 
-          Text("List ID")
-          TextField("", text: $manager.listId)
-            .textFieldStyle(.roundedBorder)
-            .labelsHidden()
-            .autocorrectionDisabled()
-
           HStack(spacing: 8) {
             Button("Connect & Load Lists") {
-              Task { await loadLists(assignFirstIfMissing: true) }
+              Task { await loadLists(assignFirstIfMissing: false) }
             }
             .disabled(manager.isLoading || isLoadingLists || !manager.canAttemptLogin)
 
-            if !manager.availableLists.isEmpty {
-              Button("Reload Lists") {
-                Task { await loadLists(assignFirstIfMissing: false) }
-              }
-              .disabled(manager.isLoading || isLoadingLists)
+            Button("Reload Lists") {
+              Task { await loadLists(assignFirstIfMissing: false) }
             }
+            .disabled(manager.isLoading || isLoadingLists || !manager.canAttemptLogin)
 
             Spacer()
             if manager.isLoading || isLoadingLists {
@@ -57,26 +47,30 @@ private struct CheckvistSyncPluginSettingsView: View {
             }
           }
 
-          if !manager.availableLists.isEmpty {
-            Picker("Active List", selection: $manager.listId) {
-              ForEach(manager.availableLists) { list in
-                Text("\(list.name) (\(list.id))").tag(String(list.id))
-              }
-            }
-            .pickerStyle(.menu)
-          } else {
+          if manager.isUsingOfflineStore {
             Text(
-              "Tip: Click \"Connect & Load Lists\" to choose a list by name. You only need List ID as fallback."
+              "Workspace selection stays in Preferences. Connecting here makes your Checkvist lists available there."
             )
             .font(.caption)
             .foregroundColor(.secondary)
+          } else if let activeList = manager.availableLists.first(where: {
+            String($0.id) == manager.listId
+          }) {
+            Text("Current workspace in Preferences: \(activeList.name) (\(activeList.id))")
+              .font(.caption)
+              .foregroundColor(.secondary)
+          } else if !manager.listId.isEmpty {
+            Text("Current workspace in Preferences: list ID \(manager.listId)")
+              .font(.caption)
+              .foregroundColor(.secondary)
           }
 
           if let errorMessage = manager.errorMessage {
             Text(errorMessage)
               .foregroundColor(.red)
               .font(.caption)
-          } else if !manager.isLoading && manager.currentTaskText != "Loading..."
+          } else if !manager.isLoading && !manager.isUsingOfflineStore
+            && manager.currentTaskText != "Loading..."
             && manager.currentTaskText != "Error"
             && manager.currentTaskText != "Login failed."
             && manager.currentTaskText != "List ID not set."
@@ -86,55 +80,27 @@ private struct CheckvistSyncPluginSettingsView: View {
               .foregroundColor(.green)
               .font(.caption)
           }
-
-          Divider()
-
-          Text("Dedicated List")
-            .font(.subheadline)
-            .fontWeight(.semibold)
+        }
+        .padding(.top, 4)
+      }
+      Section(header: Text("Upload Offline Tasks")) {
+        VStack(alignment: .leading, spacing: 10) {
           Text(
-            "Create a dedicated list for Bar Tasker to avoid conflicts with your existing Checkvist setup."
+            "Copy the tasks from your local offline workspace into a Checkvist list."
           )
           .font(.caption)
           .foregroundColor(.secondary)
 
-          HStack {
-            TextField("Bar Tasker", text: $newListName)
-              .textFieldStyle(.roundedBorder)
+          Text(
+            manager.offlineOpenTaskCount == 1
+              ? "1 offline task is ready to upload."
+              : "\(manager.offlineOpenTaskCount) offline tasks are ready to upload."
+          )
+          .font(.caption)
+          .foregroundColor(.secondary)
 
-            Button("Use Suggested") {
-              newListName = suggestedListName
-            }
-            .disabled(manager.isLoading || isLoadingLists)
-
-            Button("Create & Switch") {
-              Task { await createAndSwitchList() }
-            }
-            .disabled(
-              manager.isLoading || isLoadingLists
-                || newListName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !manager.canAttemptLogin
-            )
-          }
-        }
-        .padding(.top, 4)
-      }
-
-      Section(header: Text("Merge Lists")) {
-        VStack(alignment: .leading, spacing: 10) {
-          Text("Merge open tasks from one list into another.")
-            .font(.caption)
-            .foregroundColor(.secondary)
-
-          if manager.availableLists.count >= 2 {
-            Picker("From", selection: $mergeSourceListId) {
-              ForEach(manager.availableLists) { list in
-                Text("\(list.name) (\(list.id))").tag(String(list.id))
-              }
-            }
-            .pickerStyle(.menu)
-
-            Picker("Into", selection: $mergeDestinationListId) {
+          if !manager.availableLists.isEmpty {
+            Picker("Destination List", selection: $uploadDestinationListId) {
               ForEach(manager.availableLists) { list in
                 Text("\(list.name) (\(list.id))").tag(String(list.id))
               }
@@ -142,28 +108,29 @@ private struct CheckvistSyncPluginSettingsView: View {
             .pickerStyle(.menu)
 
             HStack {
-              Button("Use Current List as Destination") {
-                mergeDestinationListId = manager.listId
+              Button("Use Active List") {
+                uploadDestinationListId = manager.listId
               }
               .disabled(manager.listId.isEmpty)
 
-              Button("Merge Open Tasks") {
+              Button("Upload Offline Tasks") {
                 Task {
-                  _ = await manager.mergeOpenTasksBetweenLists(
-                    sourceListId: mergeSourceListId,
-                    destinationListId: mergeDestinationListId
+                  _ = await manager.uploadOfflineTasksToCheckvist(
+                    destinationListId: uploadDestinationListId
                   )
                 }
               }
               .disabled(
-                manager.isLoading || isLoadingLists || mergeSourceListId.isEmpty
-                  || mergeDestinationListId.isEmpty
-                  || mergeSourceListId == mergeDestinationListId
-                  || !manager.canAttemptLogin
+                manager.isLoading || isLoadingLists || uploadDestinationListId.isEmpty
+                  || manager.offlineOpenTaskCount == 0 || !manager.canAttemptLogin
               )
             }
+          } else if manager.canAttemptLogin {
+            Text("Load your Checkvist lists to choose an upload destination.")
+              .font(.caption)
+              .foregroundColor(.secondary)
           } else {
-            Text("Load at least two lists to enable merging.")
+            Text("Add your Checkvist credentials in Preferences, then load lists here.")
               .font(.caption)
               .foregroundColor(.secondary)
           }
@@ -177,17 +144,14 @@ private struct CheckvistSyncPluginSettingsView: View {
       if manager.canAttemptLogin && manager.availableLists.isEmpty {
         await loadLists(assignFirstIfMissing: false)
       }
-      seedMergeSelectionsIfNeeded()
-      if newListName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        newListName = suggestedListName
-      }
+      seedUploadDestinationIfNeeded()
     }
     .onChange(of: manager.availableLists.map(\.id)) { _, _ in
-      seedMergeSelectionsIfNeeded()
+      seedUploadDestinationIfNeeded()
     }
     .onChange(of: manager.listId) { _, _ in
       if !manager.listId.isEmpty {
-        mergeDestinationListId = manager.listId
+        uploadDestinationListId = manager.listId
       }
     }
   }
@@ -196,61 +160,26 @@ private struct CheckvistSyncPluginSettingsView: View {
   private func loadLists(assignFirstIfMissing: Bool) async {
     isLoadingLists = true
     defer { isLoadingLists = false }
-    let success = await manager.login()
-    guard success else { return }
-    await manager.fetchLists()
-    if assignFirstIfMissing, manager.listId.isEmpty,
-      let first = manager.availableLists.first
-    {
-      manager.selectList(first)
-    }
-    seedMergeSelectionsIfNeeded()
+    _ = await manager.loadCheckvistLists(assignFirstIfMissing: assignFirstIfMissing)
+    seedUploadDestinationIfNeeded()
   }
-
-  private var suggestedListName: String {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "yyyy-MM-dd"
-    return "Bar Tasker \(formatter.string(from: Date()))"
-  }
-
-  @MainActor
-  private func createAndSwitchList() async {
-    let success = await manager.createCheckvistListAndSwitch(name: newListName)
-    guard success else { return }
-    await loadLists(assignFirstIfMissing: false)
-    mergeDestinationListId = manager.listId
-  }
-
-  private func seedMergeSelectionsIfNeeded() {
+  private func seedUploadDestinationIfNeeded() {
     guard !manager.availableLists.isEmpty else {
-      mergeSourceListId = ""
-      mergeDestinationListId = ""
+      uploadDestinationListId = ""
       return
     }
 
     let listIDs = Set(manager.availableLists.map { String($0.id) })
 
-    if !mergeDestinationListId.isEmpty, !listIDs.contains(mergeDestinationListId) {
-      mergeDestinationListId = ""
-    }
-    if !mergeSourceListId.isEmpty, !listIDs.contains(mergeSourceListId) {
-      mergeSourceListId = ""
+    if !uploadDestinationListId.isEmpty, !listIDs.contains(uploadDestinationListId) {
+      uploadDestinationListId = ""
     }
 
-    if mergeDestinationListId.isEmpty {
+    if uploadDestinationListId.isEmpty {
       if listIDs.contains(manager.listId) {
-        mergeDestinationListId = manager.listId
+        uploadDestinationListId = manager.listId
       } else if let first = manager.availableLists.first {
-        mergeDestinationListId = String(first.id)
-      }
-    }
-
-    if mergeSourceListId.isEmpty || mergeSourceListId == mergeDestinationListId {
-      if let source = manager.availableLists.first(where: {
-        String($0.id) != mergeDestinationListId
-      }) {
-        mergeSourceListId = String(source.id)
+        uploadDestinationListId = String(first.id)
       }
     }
   }

@@ -2,6 +2,42 @@ import AppKit
 import Foundation
 
 extension BarTaskerManager {
+  private func integrationTaskStorageKey(taskId: Int, listId: String) -> String {
+    let normalizedListId = listId.trimmingCharacters(in: .whitespacesAndNewlines)
+    let scope = normalizedListId.isEmpty ? "offline" : normalizedListId
+    return "\(scope):\(taskId)"
+  }
+
+  @MainActor func hasGoogleCalendarEventLink(taskId: Int, listId explicitListId: String? = nil)
+    -> Bool
+  {
+    let targetListId = explicitListId ?? listId
+    let key = integrationTaskStorageKey(taskId: taskId, listId: targetListId)
+    return googleCalendarEventLinksByTaskKey[key] != nil
+  }
+
+  @MainActor func googleCalendarEventLinkURL(
+    taskId: Int,
+    listId explicitListId: String? = nil
+  ) -> URL? {
+    let targetListId = explicitListId ?? listId
+    let key = integrationTaskStorageKey(taskId: taskId, listId: targetListId)
+    guard let rawValue = googleCalendarEventLinksByTaskKey[key], rawValue != "created" else {
+      return nil
+    }
+    return URL(string: rawValue)
+  }
+
+  @MainActor private func recordGoogleCalendarEventLink(
+    taskId: Int,
+    listId: String,
+    eventURL: URL?
+  ) {
+    let key = integrationTaskStorageKey(taskId: taskId, listId: listId)
+    googleCalendarEventLinksByTaskKey[key] = eventURL?.absoluteString ?? "created"
+    preferencesStore.set(googleCalendarEventLinksByTaskKey, for: .googleCalendarEventLinksByTaskKey)
+  }
+
   // MARK: - Open Link
 
   @MainActor func openTaskLink() {
@@ -51,6 +87,11 @@ extension BarTaskerManager {
           listId: listId,
           now: Date()
         )
+        recordGoogleCalendarEventLink(
+          taskId: selectedTask.id,
+          listId: listId,
+          eventURL: outcome.urlToOpen
+        )
         if let url = outcome.urlToOpen {
           NSWorkspace.shared.open(url)
         }
@@ -71,6 +112,21 @@ extension BarTaskerManager {
         }
       }
     }
+  }
+
+  @MainActor func openSavedGoogleCalendarEventLink(taskId explicitTaskId: Int? = nil) {
+    guard ensureGoogleCalendarIntegrationEnabled() else { return }
+    let targetTaskId = explicitTaskId ?? currentTask?.id
+    guard let targetTaskId else {
+      errorMessage = "No task selected."
+      return
+    }
+    guard let url = googleCalendarEventLinkURL(taskId: targetTaskId) else {
+      errorMessage = "No saved browser link for this Google Calendar event."
+      return
+    }
+    NSWorkspace.shared.open(url)
+    errorMessage = nil
   }
 
   // MARK: - MCP
@@ -209,6 +265,11 @@ extension BarTaskerManager {
     obsidianPlugin.hasLinkedFolder(forTaskId: taskId)
   }
 
+  @MainActor func hasObsidianSyncedNote(task: CheckvistTask) -> Bool {
+    let linkedFolderTaskId = obsidianLinkedFolderAncestorTaskId(for: task, taskList: tasks)
+    return obsidianPlugin.hasSyncedNote(task: task, linkedFolderTaskId: linkedFolderTaskId)
+  }
+
   private func obsidianLinkedFolderAncestorTaskId(
     for task: CheckvistTask, taskList: [CheckvistTask]
   ) -> Int? {
@@ -244,91 +305,44 @@ extension BarTaskerManager {
       errorMessage = "No task selected."
       return
     }
-    guard !listId.isEmpty else {
-      errorMessage = "List ID not set."
-      return
-    }
-
-    if isNetworkReachable {
-      let previousErrorMessage = errorMessage
-      await fetchTopTask()
-      if let task = tasks.first(where: { $0.id == targetTaskId }) {
-        let linkedFolderTaskId = obsidianLinkedFolderAncestorTaskId(for: task, taskList: tasks)
-        if linkedFolderTaskId == nil && obsidianInboxPath.isEmpty && !chooseObsidianInboxFolder() {
-          return
-        }
-        do {
-          _ = try obsidianPlugin.syncTask(
-            task,
-            listId: listId,
-            linkedFolderTaskId: linkedFolderTaskId,
-            openMode: openMode,
-            syncDate: Date()
-          )
-          dequeuePendingObsidianSync(taskId: targetTaskId)
-          errorMessage = nil
-        } catch {
-          enqueuePendingObsidianSync(taskId: targetTaskId)
-          errorMessage =
-            error.localizedDescription.isEmpty
-            ? "Sync failed. Added to pending queue."
-            : error.localizedDescription
-        }
-        return
-      }
-
-      if errorMessage == nil || errorMessage == previousErrorMessage {
-        errorMessage = "Task not found after refresh."
-        return
-      }
-    }
-
-    guard let cachedPayload = checkvistSyncPlugin.loadTaskCache(for: listId) else {
-      enqueuePendingObsidianSync(taskId: targetTaskId)
-      errorMessage = "Offline and no cache available. Added to pending queue."
-      return
-    }
-    guard let cachedTask = cachedPayload.tasks.first(where: { $0.id == targetTaskId }) else {
-      enqueuePendingObsidianSync(taskId: targetTaskId)
-      errorMessage = "Offline cache missing this task. Added to pending queue."
+    guard let task = tasks.first(where: { $0.id == targetTaskId }) ?? currentTask else {
+      errorMessage = "Task not found."
       return
     }
 
     let linkedFolderTaskId = obsidianLinkedFolderAncestorTaskId(
-      for: cachedTask, taskList: cachedPayload.tasks)
+      for: task, taskList: tasks)
     if linkedFolderTaskId == nil && obsidianInboxPath.isEmpty && !chooseObsidianInboxFolder() {
       return
     }
 
     do {
       _ = try obsidianPlugin.syncTask(
-        cachedTask,
+        task,
         listId: listId,
         linkedFolderTaskId: linkedFolderTaskId,
         openMode: openMode,
         syncDate: Date()
       )
-      if checkvistSyncPlugin.isTaskCacheOutdated(cachedPayload) {
-        enqueuePendingObsidianSync(taskId: targetTaskId)
-      }
+      dequeuePendingObsidianSync(taskId: targetTaskId)
       errorMessage = nil
     } catch {
       enqueuePendingObsidianSync(taskId: targetTaskId)
-      errorMessage = "Offline sync failed. Added to pending queue."
+      errorMessage =
+        error.localizedDescription.isEmpty
+        ? "Obsidian sync failed. Added to pending queue."
+        : error.localizedDescription
     }
   }
 
   @MainActor func processPendingObsidianSyncQueue() async {
     guard obsidianIntegrationEnabled else { return }
-    guard isNetworkReachable else { return }
     guard !pendingObsidianSyncTaskIds.isEmpty else { return }
     guard !hasPendingSyncProcessingTask else { return }
     hasPendingSyncProcessingTask = true
     defer { hasPendingSyncProcessingTask = false }
 
     let pendingTaskIds = pendingObsidianSyncTaskIds
-    await fetchTopTask()
-    guard isNetworkReachable else { return }
 
     for taskId in pendingTaskIds {
       guard let task = tasks.first(where: { $0.id == taskId }) else {

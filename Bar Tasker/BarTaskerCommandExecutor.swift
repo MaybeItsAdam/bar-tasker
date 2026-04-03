@@ -15,10 +15,33 @@ final class BarTaskerCommandExecutor {
     case .openPreferences:
       AppDelegate.shared.menuSettings()
       return
+    case .reloadCheckvistLists:
+      _ = await manager.loadCheckvistLists(assignFirstIfMissing: false)
+      return
+    case .uploadOfflineTasks:
+      if manager.availableLists.isEmpty {
+        _ = await manager.loadCheckvistLists(assignFirstIfMissing: false)
+      }
+      let destinationListId =
+        manager.listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? manager.availableLists.first.map { String($0.id) } ?? ""
+        : manager.listId
+      guard !destinationListId.isEmpty else {
+        manager.errorMessage = "No Checkvist list available for upload."
+        return
+      }
+      _ = await manager.uploadOfflineTasksToCheckvist(destinationListId: destinationListId)
+      return
     case .addSibling:
       manager.quickEntryMode = .addSibling
       manager.quickEntryText = ""
       manager.isQuickEntryFocused = true
+      return
+    case .chooseObsidianInbox:
+      _ = manager.chooseObsidianInboxFolder()
+      return
+    case .clearObsidianInbox:
+      manager.clearObsidianInboxFolder()
       return
     case .search:
       manager.quickEntryMode = .search
@@ -31,7 +54,7 @@ final class BarTaskerCommandExecutor {
         return
       }
       if manager.availableLists.isEmpty {
-        await manager.fetchLists()
+        _ = await manager.fetchLists()
       }
       guard
         let found = manager.availableLists.first(where: { $0.name.lowercased().contains(query) })
@@ -61,6 +84,15 @@ final class BarTaskerCommandExecutor {
       return
     case .pauseTimer:
       if manager.timerRunning { manager.pauseTimer() } else { manager.resumeTimer() }
+      return
+    case .refreshMCPPath:
+      manager.refreshMCPServerCommandPath()
+      return
+    case .copyMCPClientConfig:
+      manager.copyMCPClientConfigurationToClipboard()
+      return
+    case .openMCPGuide:
+      manager.openMCPServerGuide()
       return
     case .exitParent:
       manager.exitToParent()

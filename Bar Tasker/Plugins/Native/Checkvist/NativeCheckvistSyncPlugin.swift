@@ -4,6 +4,7 @@ import Foundation
 final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   let pluginIdentifier = "native.checkvist.sync"
   let displayName = "Native Checkvist Sync"
+  let pluginDescription = "Connect to Checkvist, load remote workspaces, and upload offline tasks."
 
   private static let userAgent = "BarTasker/1.0 (Macintosh; Mac OS X)"
   private let session: CheckvistSession

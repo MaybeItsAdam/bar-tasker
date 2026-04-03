@@ -559,9 +559,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     menu.addItem(.separator())
     menu.addItem(
       withTitle: "Quit Bar Tasker",
-      action: #selector(NSApplication.terminate(_:)),
+      action: #selector(menuQuit),
       keyEquivalent: ""
-    )
+    ).target = self
     statusItem.menu = menu
     statusItem.button?.performClick(nil)
     statusItem.menu = nil

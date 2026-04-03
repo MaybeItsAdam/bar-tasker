@@ -3,6 +3,11 @@ import Foundation
 protocol BarTaskerPlugin {
   var pluginIdentifier: String { get }
   var displayName: String { get }
+  var pluginDescription: String { get }
+}
+
+extension BarTaskerPlugin {
+  var pluginDescription: String { "" }
 }
 
 struct CheckvistCredentials: Sendable {
@@ -103,6 +108,7 @@ protocol ObsidianIntegrationPlugin: BarTaskerPlugin {
   func createAndLinkFolder(forTaskId taskId: Int, taskContent: String) throws -> String?
   func clearLinkedFolder(forTaskId taskId: Int)
   func hasLinkedFolder(forTaskId taskId: Int) -> Bool
+  func hasSyncedNote(task: CheckvistTask, linkedFolderTaskId: Int?) -> Bool
   func syncTask(
     _ task: CheckvistTask,
     listId: String,
