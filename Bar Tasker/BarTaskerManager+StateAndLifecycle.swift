@@ -27,7 +27,8 @@ extension BarTaskerManager {
       $selectedRootTag.map { _ in () }.eraseToAnyPublisher(),
       $quickEntryMode.map { _ in () }.eraseToAnyPublisher(),
       $priorityTaskIds.map { _ in () }.eraseToAnyPublisher(),
-      $timerByTaskId.map { _ in () }.eraseToAnyPublisher()
+      $timerByTaskId.map { _ in () }.eraseToAnyPublisher(),
+      $taskStartDatesByTaskId.map { _ in () }.eraseToAnyPublisher()
     )
     .sink { [weak self] _ in
       self?.invalidateCaches()

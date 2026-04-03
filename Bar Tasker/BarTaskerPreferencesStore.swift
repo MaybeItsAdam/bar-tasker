@@ -35,6 +35,7 @@ final class BarTaskerPreferencesStore {
     case themeColorTokenHexOverrides
     case customizableShortcutsByAction
     case dismissedOnboardingDialogs
+    case taskStartDatesByTaskId
   }
 
   private let defaults: UserDefaults

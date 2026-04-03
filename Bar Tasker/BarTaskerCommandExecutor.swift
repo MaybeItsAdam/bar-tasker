@@ -124,6 +124,14 @@ final class BarTaskerCommandExecutor {
       await manager.updateTask(task: task, due: resolved)
     case .clearDue:
       await manager.updateTask(task: task, due: "")
+    case .setStart(let raw):
+      guard !raw.isEmpty else {
+        manager.errorMessage = "Missing start date/time. Try: start tomorrow 9am"
+        return
+      }
+      manager.setStartDate(for: task, rawInput: raw)
+    case .clearStart:
+      manager.clearStartDate(for: task)
     case .edit:
       manager.quickEntryMode = .editTask
       manager.editCursorAtEnd = true

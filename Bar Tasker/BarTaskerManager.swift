@@ -72,6 +72,10 @@ class BarTaskerManager: ObservableObject {
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
   private static let pendingObsidianSyncDefaultsKey = "pendingObsidianSyncTaskIdsByListId"
 
+  // MARK: - Start Dates (locally stored; Checkvist API has no start date field)
+  /// Maps task ID → start date string (same format as `due`).
+  @Published var taskStartDatesByTaskId: [Int: String] = [:]
+
   // MARK: - Timer
   @Published var timedTaskId: Int? = nil
   @Published var timerByTaskId: [Int: TimeInterval] = [:]
@@ -297,6 +301,13 @@ class BarTaskerManager: ObservableObject {
     self.timerBarLeading = preferencesStore.bool(.timerBarLeading, default: false)
     self.timerMode = TimerMode(rawValue: preferencesStore.int(.timerMode, default: 0)) ?? .visible
     self.timerByTaskId = Self.timerDictionaryFromDefaults(preferencesStore: preferencesStore)
+    let storedStartDates = preferencesStore.stringDictionary(.taskStartDatesByTaskId)
+    self.taskStartDatesByTaskId = Dictionary(
+      uniqueKeysWithValues: storedStartDates.compactMap { key, value in
+        guard let id = Int(key) else { return nil }
+        return (id, value)
+      }
+    )
     self.activeOnboardingDialog = nil
     let persistedDismissedDialogs = preferencesStore.stringArray(.dismissedOnboardingDialogs)
     self.dismissedOnboardingDialogs = Set(

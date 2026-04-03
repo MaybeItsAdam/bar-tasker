@@ -156,6 +156,7 @@ extension BarTaskerManager {
     case rootFilter7
     case sequenceDue
     case sequenceDueToday
+    case sequenceStart
     case sequenceOpenLink
     case sequenceGoogleCalendar
     case sequenceTag
@@ -211,6 +212,7 @@ extension BarTaskerManager {
       case .rootFilter7: return "Root filter slot 7"
       case .sequenceDue: return "Sequence: due"
       case .sequenceDueToday: return "Sequence: due today"
+      case .sequenceStart: return "Sequence: start date"
       case .sequenceOpenLink: return "Sequence: open link"
       case .sequenceGoogleCalendar: return "Sequence: Google Calendar"
       case .sequenceTag: return "Sequence: tag"
@@ -241,7 +243,8 @@ extension BarTaskerManager {
         .pushPriorityBack, .setPriorityRank:
         return "Task Actions"
       case .openCommandPalette, .closeOrCancel, .focusSearch, .sequenceDue, .sequenceDueToday,
-        .sequenceTag, .sequenceUntag, .sequenceToggleContext, .quickListSwitch, .quickAdd:
+        .sequenceStart, .sequenceTag, .sequenceUntag, .sequenceToggleContext, .quickListSwitch,
+        .quickAdd:
         return "Entry & Commands"
       case .openInObsidian, .openInObsidianNewWindow, .sequenceOpenLink, .sequenceGoogleCalendar,
         .toggleTimer, .toggleTimerPause, .toggleHideFuture:
@@ -286,6 +289,7 @@ extension BarTaskerManager {
       case .rootFilter7: return "m"
       case .sequenceDue: return "dd"
       case .sequenceDueToday: return "dt"
+      case .sequenceStart: return "ds"
       case .sequenceOpenLink: return "gg"
       case .sequenceGoogleCalendar: return "gc"
       case .sequenceTag: return "gt"

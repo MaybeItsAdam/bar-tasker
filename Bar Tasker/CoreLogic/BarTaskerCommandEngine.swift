@@ -14,6 +14,8 @@ enum BarTaskerCommand: Equatable, Sendable {
   case invalidate
   case due(String)
   case clearDue
+  case setStart(String)
+  case clearStart
   case edit
   case search
   case openPreferences
@@ -79,6 +81,22 @@ enum BarTaskerCommandEngine {
     .init(
       label: "Clear due date", command: "clear due", preview: "Remove due date", keybind: "dd",
       submitImmediately: true),
+    .init(
+      label: "Start today", command: "start today", preview: "Set start date to today",
+      keybind: "ds", submitImmediately: true),
+    .init(
+      label: "Start tomorrow", command: "start tomorrow", preview: "Set start date to tomorrow",
+      keybind: "ds", submitImmediately: true),
+    .init(
+      label: "Start next week", command: "start next week",
+      preview: "Set start date to next week", keybind: "ds", submitImmediately: true),
+    .init(
+      label: "Start at time", command: "start today ",
+      preview: "Set start date with time (e.g. 9am, 14:30, next mon 9am)",
+      keybind: "ds", submitImmediately: false),
+    .init(
+      label: "Clear start date", command: "clear start", preview: "Remove start date",
+      keybind: "ds", submitImmediately: true),
     .init(
       label: "Add tag", command: "tag ", preview: "Append #tag to task", keybind: "gt",
       submitImmediately: false),
@@ -225,6 +243,11 @@ enum BarTaskerCommandEngine {
       return .due(raw)
     }
     if cmd == "clear due" { return .clearDue }
+    if cmd.hasPrefix("start ") {
+      let raw = String(cmd.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+      return .setStart(raw)
+    }
+    if cmd == "clear start" || cmd == "remove start" || cmd == "unstart" { return .clearStart }
     if cmd == "edit" { return .edit }
     if cmd == "search" { return .search }
     if cmd == "preferences" || cmd == "prefs" || cmd == "settings" {
@@ -344,6 +367,11 @@ enum BarTaskerCommandEngine {
 
     let normalized = rawInput.lowercased()
 
+    // Try "time keyword" order first (e.g. "4pm fri", "9am tomorrow").
+    if let swapped = resolveTimeFirstExpression(normalized, now: now, calendar: cal) {
+      return dateTimeFormatter.string(from: swapped)
+    }
+
     if let relative = resolveRelativeDateExpression(normalized, now: now, calendar: cal) {
       if let timeText = relative.timeText {
         guard
@@ -384,6 +412,17 @@ enum BarTaskerCommandEngine {
     return rawInput
   }
 
+  /// Full and abbreviated weekday name → Calendar weekday component (Sun=1 … Sat=7)
+  private static let weekdayNumbers: [String: Int] = [
+    "sunday": 1, "sun": 1,
+    "monday": 2, "mon": 2,
+    "tuesday": 3, "tue": 3, "tues": 3,
+    "wednesday": 4, "wed": 4,
+    "thursday": 5, "thu": 5, "thur": 5, "thurs": 5,
+    "friday": 6, "fri": 6,
+    "saturday": 7, "sat": 7,
+  ]
+
   private static func resolveRelativeDateExpression(
     _ normalized: String,
     now: Date,
@@ -408,12 +447,30 @@ enum BarTaskerCommandEngine {
       return (date, timeText.isEmpty ? nil : timeText)
     }
 
-    let weekdays = [
-      "sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4,
-      "thursday": 5, "friday": 6, "saturday": 7,
-    ]
-    for (weekdayName, weekdayValue) in weekdays {
-      guard let timeText = timeSuffix(for: normalized, keyword: weekdayName) else { continue }
+    // "next <weekday>" — always picks the coming occurrence even if today matches
+    for (name, weekdayValue) in weekdayNumbers {
+      guard let timeText = timeSuffix(for: normalized, keyword: "next \(name)") else { continue }
+      let currentWeekday = calendar.component(.weekday, from: now)
+      var diff = weekdayValue - currentWeekday
+      if diff <= 0 { diff += 7 }
+      guard let date = calendar.date(byAdding: .day, value: diff, to: now) else { continue }
+      return (date, timeText.isEmpty ? nil : timeText)
+    }
+
+    // "this <weekday>" — nearest occurrence within the current calendar week
+    for (name, weekdayValue) in weekdayNumbers {
+      guard let timeText = timeSuffix(for: normalized, keyword: "this \(name)") else { continue }
+      let currentWeekday = calendar.component(.weekday, from: now)
+      var diff = weekdayValue - currentWeekday
+      // "this" means within the current week — if the day has passed, keep 0 offset (today)
+      if diff < 0 { diff = 0 }
+      guard let date = calendar.date(byAdding: .day, value: diff, to: now) else { continue }
+      return (date, timeText.isEmpty ? nil : timeText)
+    }
+
+    // Plain weekday name — next occurrence (allows today if diff would be 0, skip to next week)
+    for (name, weekdayValue) in weekdayNumbers {
+      guard let timeText = timeSuffix(for: normalized, keyword: name) else { continue }
       let currentWeekday = calendar.component(.weekday, from: now)
       var diff = weekdayValue - currentWeekday
       if diff <= 0 { diff += 7 }
@@ -424,12 +481,43 @@ enum BarTaskerCommandEngine {
     return nil
   }
 
+  /// Handles "time keyword" order: "4pm fri", "9am tomorrow", "morning next monday"
+  private static func resolveTimeFirstExpression(
+    _ normalized: String,
+    now: Date,
+    calendar: Calendar
+  ) -> Date? {
+    let range = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
+    guard let match = timeFirstRegex.firstMatch(in: normalized, options: [], range: range),
+      let timePart = Range(match.range(at: 1), in: normalized),
+      let datePart = Range(match.range(at: 2), in: normalized)
+    else { return nil }
+
+    let timeText = String(normalized[timePart])
+    let dateKeyword = String(normalized[datePart])
+
+    // Resolve the date keyword using existing relative expression resolver
+    guard let relative = resolveRelativeDateExpression(dateKeyword, now: now, calendar: calendar)
+    else { return nil }
+
+    // If the relative expression already has a time, ignore (ambiguous)
+    guard relative.timeText == nil else { return nil }
+
+    guard let timeComponents = parseTimeComponents(from: timeText) else { return nil }
+    return combine(date: relative.baseDate, with: timeComponents, calendar: calendar)
+  }
+
   private static let relativeOffsetRegex = makeRegex(
-    #"^in\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$"#)
+    #"^in\s+(a|an|\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks)$"#
+  )
   private static let twelveHourRegex = makeRegex(
     #"^(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap]m)$"#)
   private static let twentyFourHourRegex = makeRegex(
     #"^([01]?\d|2[0-3])(?::([0-5]\d))?$"#)
+  // Matches "4pm fri", "3:30pm next monday", "9am tomorrow" — time BEFORE the date keyword
+  private static let timeFirstRegex = makeRegex(
+    #"^((?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s*[ap]m|(?:[01]?\d|2[0-3]):[0-5]\d|noon|midnight|morning|afternoon|evening|eod)\s+(.+)$"#
+  )
 
   private static func makeRegex(_ pattern: String) -> NSRegularExpression {
     guard let regex = try? NSRegularExpression(pattern: pattern) else {
@@ -450,10 +538,16 @@ enum BarTaskerCommandEngine {
     }
     guard
       let amountRange = Range(match.range(at: 1), in: normalized),
-      let unitRange = Range(match.range(at: 2), in: normalized),
-      let amount = Int(normalized[amountRange]),
-      amount > 0
-    else {
+      let unitRange = Range(match.range(at: 2), in: normalized)
+    else { return nil }
+
+    let amountStr = String(normalized[amountRange])
+    let amount: Int
+    if amountStr == "a" || amountStr == "an" {
+      amount = 1
+    } else if let n = Int(amountStr), n > 0 {
+      amount = n
+    } else {
       return nil
     }
 
@@ -466,6 +560,8 @@ enum BarTaskerCommandEngine {
       component = .hour
     case "d", "day", "days":
       component = .day
+    case "w", "wk", "wks", "week", "weeks":
+      component = .weekOfYear
     default:
       return nil
     }
@@ -525,6 +621,18 @@ enum BarTaskerCommandEngine {
     }
     if normalized == "midnight" {
       return DateComponents(hour: 0, minute: 0, second: 0)
+    }
+    if normalized == "morning" {
+      return DateComponents(hour: 9, minute: 0, second: 0)
+    }
+    if normalized == "afternoon" {
+      return DateComponents(hour: 14, minute: 0, second: 0)
+    }
+    if normalized == "evening" {
+      return DateComponents(hour: 18, minute: 0, second: 0)
+    }
+    if normalized == "eod" || normalized == "end of day" || normalized == "cob" {
+      return DateComponents(hour: 17, minute: 0, second: 0)
     }
 
     if let captures = captureGroups(regex: twelveHourRegex, in: normalized), captures.count >= 3 {

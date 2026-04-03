@@ -407,8 +407,8 @@ struct KeyboardShortcutRouter {
 
     // Two-key sequences.
     let sequenceActions: [BarTaskerManager.ConfigurableShortcutAction] = [
-      .sequenceDue, .sequenceDueToday, .sequenceOpenLink, .sequenceGoogleCalendar, .sequenceTag,
-      .sequenceUntag, .sequenceToggleContext,
+      .sequenceDue, .sequenceDueToday, .sequenceStart, .sequenceOpenLink, .sequenceGoogleCalendar,
+      .sequenceTag, .sequenceUntag, .sequenceToggleContext,
     ]
     let sequenceTokens = sequenceActions.flatMap {
       manager.shortcutBinding(for: $0).split(separator: ",").map {
@@ -436,6 +436,13 @@ struct KeyboardShortcutRouter {
           manager.quickEntryMode = .command
           manager.commandSuggestionIndex = 0
           manager.quickEntryText = "due today "
+          manager.isQuickEntryFocused = true
+          return true
+        }
+        if manager.shortcutMatchesSequence(action: .sequenceStart, sequence: sequence) {
+          manager.quickEntryMode = .command
+          manager.commandSuggestionIndex = 0
+          manager.quickEntryText = "start "
           manager.isQuickEntryFocused = true
           return true
         }
