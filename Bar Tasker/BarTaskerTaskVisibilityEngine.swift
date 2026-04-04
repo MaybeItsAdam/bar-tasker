@@ -39,7 +39,7 @@ struct BarTaskerTaskVisibilityEngine {
         switch context.rootTaskView {
         case .all:
           baseTasks = context.currentLevelTasks
-        case .due, .tags, .priority:
+        case .due, .tags, .priority, .kanban:
           baseTasks = context.tasks
         }
       } else {
@@ -82,6 +82,8 @@ struct BarTaskerTaskVisibilityEngine {
         case .priority:
           result = result.filter { context.taskMatchesActiveRootScope($0) }
           result.sort(by: context.compareByPriorityThenPosition)
+        case .kanban:
+          break
         }
       } else {
         if let parentTask = context.taskById[context.currentParentId],

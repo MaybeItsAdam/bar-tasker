@@ -30,6 +30,8 @@ extension BarTaskerManager {
       $timerByTaskId.map { _ in () }.eraseToAnyPublisher(),
       $kanbanColumns.map { _ in () }.eraseToAnyPublisher(),
       $kanbanFocusedColumnIndex.map { _ in () }.eraseToAnyPublisher(),
+      $kanbanFilterTag.map { _ in () }.eraseToAnyPublisher(),
+      $kanbanFilterSubtasks.map { _ in () }.eraseToAnyPublisher(),
       $taskStartDatesByTaskId.map { _ in () }.eraseToAnyPublisher()
     )
     .sink { [weak self] _ in

@@ -691,21 +691,43 @@ extension BarTaskerManager {
       lastUndo = .update(taskId: task.id, oldContent: task.content, oldDue: task.due)
     }
 
-    await runBooleanMutation(
-      failureMessage: "Failed to update task.",
-      action: {
-        try await checkvistSyncPlugin.updateTask(
-          listId: listId,
-          taskId: task.id,
-          content: content,
-          due: due,
-          credentials: activeCredentials
-        )
-      },
-      onSuccess: { [weak self] in
-        await self?.fetchTopTask()
-      }
+    // Optimistic local update so UI reflects the change immediately.
+    guard let index = tasks.firstIndex(where: { $0.id == task.id }) else {
+      errorMessage = "Task not found."
+      return
+    }
+    let originalTask = tasks[index]
+    tasks[index] = rebuiltTask(
+      originalTask,
+      content: content ?? originalTask.content,
+      status: originalTask.status,
+      due: due ?? originalTask.due,
+      position: originalTask.position,
+      parentId: originalTask.parentId,
+      level: originalTask.level
     )
+
+    do {
+      let success = try await checkvistSyncPlugin.updateTask(
+        listId: listId,
+        taskId: task.id,
+        content: content,
+        due: due,
+        credentials: activeCredentials
+      )
+      if success {
+        await fetchTopTask()
+      } else {
+        tasks[index] = originalTask
+        errorMessage = "Failed to update task."
+      }
+    } catch CheckvistSessionError.authenticationUnavailable {
+      tasks[index] = originalTask
+      setAuthenticationRequiredErrorIfNeeded()
+    } catch {
+      tasks[index] = originalTask
+      errorMessage = "Error: \(error.localizedDescription)"
+    }
   }
 
   @MainActor

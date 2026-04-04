@@ -673,12 +673,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       return
     }
 
-    // Position the window directly below the status item, aligned to the right edge.
+    // Position the window directly below the status item, expanding leftward.
     let btnRect = button.convert(button.bounds, to: nil)
     guard let buttonWindow = button.window else { return }
     let screenRect = buttonWindow.convertToScreen(btnRect)
     let paddingY: CGFloat = 4
-    let trX = screenRect.maxX + 10
+    let trX = screenRect.maxX
     let trY = screenRect.minY - paddingY
 
     popoverWindow.setAnchoredTopRight(
@@ -702,10 +702,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   private func updatePopoverSizeIfVisible() {
     guard let popoverWindow = window as? BarTaskerPanel, popoverWindow.isVisible else { return }
-    let anchoredTopRight = NSPoint(x: popoverWindow.frame.maxX, y: popoverWindow.frame.maxY)
+    guard let button = statusItem.button, let buttonWindow = button.window else { return }
+    let btnRect = button.convert(button.bounds, to: nil)
+    let screenRect = buttonWindow.convertToScreen(btnRect)
+    let trY = popoverWindow.frame.maxY
     popoverWindow.setAnchoredTopRight(
       contentSize: currentPopoverContentSize,
-      topRight: anchoredTopRight,
+      topRight: NSPoint(x: screenRect.maxX, y: trY),
       display: true
     )
   }

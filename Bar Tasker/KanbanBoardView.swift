@@ -9,26 +9,83 @@ struct KanbanBoardView: View {
     manager.themeColor(for: token)
   }
 
+  private var isFilterActive: Bool {
+    !manager.kanbanFilterTag.isEmpty || manager.kanbanFilterSubtasks
+  }
+
   var body: some View {
     let columns = manager.kanbanColumns
     let childCounts = manager.childCountByTaskId()
-    HStack(alignment: .top, spacing: 0) {
-      ForEach(Array(columns.enumerated()), id: \.element.id) { colIndex, column in
-        let tasks = manager.tasksForKanbanColumn(column, allColumns: columns)
-        let isFocused = colIndex == manager.kanbanFocusedColumnIndex
-        KanbanColumnView(
-          column: column,
-          tasks: tasks,
-          columnIndex: colIndex,
-          isFocused: isFocused,
-          childCounts: childCounts
-        )
-        if colIndex < columns.count - 1 {
-          Divider()
+    VStack(spacing: 0) {
+      if isFilterActive {
+        kanbanFilterBar
+        Divider()
+      }
+      HStack(alignment: .top, spacing: 0) {
+        ForEach(Array(columns.enumerated().reversed()), id: \.element.id) { colIndex, column in
+          let tasks = manager.tasksForKanbanColumn(column, allColumns: columns)
+          let isFocused = colIndex == manager.kanbanFocusedColumnIndex
+          KanbanColumnView(
+            column: column,
+            tasks: tasks,
+            columnIndex: colIndex,
+            isFocused: isFocused,
+            childCounts: childCounts
+          )
+          if colIndex > 0 {
+            Divider()
+          }
         }
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var kanbanFilterBar: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "line.3.horizontal.decrease.circle.fill")
+        .font(.system(size: 11))
+        .foregroundColor(themeColor(.link))
+
+      if manager.kanbanFilterSubtasks {
+        filterChip("Subtasks of current") {
+          manager.kanbanFilterSubtasks = false
+        }
+      }
+      if !manager.kanbanFilterTag.isEmpty {
+        filterChip("#\(manager.kanbanFilterTag)") {
+          manager.kanbanFilterTag = ""
+        }
+      }
+      Spacer()
+      Button("Clear") {
+        manager.kanbanFilterTag = ""
+        manager.kanbanFilterSubtasks = false
+      }
+      .font(.system(size: 10))
+      .buttonStyle(.plain)
+      .foregroundColor(themeColor(.textSecondary))
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 5)
+    .background(themeColor(.panelSurface))
+  }
+
+  private func filterChip(_ label: String, onRemove: @escaping () -> Void) -> some View {
+    HStack(spacing: 3) {
+      Text(label)
+        .font(.system(size: 10))
+      Button { onRemove() } label: {
+        Image(systemName: "xmark")
+          .font(.system(size: 8, weight: .bold))
+      }
+      .buttonStyle(.plain)
+    }
+    .padding(.horizontal, 6)
+    .padding(.vertical, 2)
+    .background(themeColor(.selectionBackground).opacity(0.3))
+    .foregroundColor(themeColor(.link))
+    .clipShape(Capsule())
   }
 }
 
@@ -52,7 +109,8 @@ private struct KanbanColumnView: View {
       Divider()
       taskListArea
     }
-    .frame(width: PopoverLayout.kanbanColumnWidth, maxHeight: .infinity, alignment: .topLeading)
+    .frame(width: PopoverLayout.kanbanColumnWidth)
+    .frame(maxHeight: .infinity, alignment: .topLeading)
     .overlay {
       if isFocused {
         Rectangle()
@@ -96,6 +154,11 @@ private struct KanbanColumnView: View {
           Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .dropDestination(for: String.self) { ids, _ in
+          guard let idStr = ids.first, let taskId = Int(idStr) else { return false }
+          Task { await manager.moveTask(id: taskId, toColumn: column) }
+          return true
+        }
       } else {
         ScrollViewReader { proxy in
           ScrollView {
@@ -109,6 +172,7 @@ private struct KanbanColumnView: View {
                   childCount: childCounts[task.id, default: 0]
                 )
                 .id(task.id)
+                .draggable(String(task.id))
                 .onTapGesture {
                   manager.kanbanFocusedColumnIndex = columnIndex
                   manager.rootScopeFocusLevel = 0
@@ -118,10 +182,15 @@ private struct KanbanColumnView: View {
             }
           }
           .onChange(of: manager.currentSiblingIndex) { _, _ in
-            guard isFocused, let task = manager.currentTask else { return }
+            guard isFocused, let task = manager.currentKanbanTask else { return }
             if tasks.contains(where: { $0.id == task.id }) {
               proxy.scrollTo(task.id, anchor: .center)
             }
+          }
+          .dropDestination(for: String.self) { ids, _ in
+            guard let idStr = ids.first, let taskId = Int(idStr) else { return false }
+            Task { await manager.moveTask(id: taskId, toColumn: column) }
+            return true
           }
         }
       }
@@ -218,7 +287,7 @@ private struct KanbanTaskCard: View {
         ForEach(tags.prefix(3), id: \.self) { tag in
           Text(tag)
             .font(.system(size: 10))
-            .foregroundColor(themeColor(.accent))
+            .foregroundColor(themeColor(.link))
         }
 
         if hasChildren {

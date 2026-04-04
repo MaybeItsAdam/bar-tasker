@@ -84,6 +84,10 @@ enum PopoverLayout {
       fixedHeight += 20
     }
 
+    if manager.rootTaskView == .kanban {
+      return maxHeight
+    }
+
     let taskAreaHeight: CGFloat
     if manager.isLoading && manager.tasks.isEmpty {
       taskAreaHeight = 90
@@ -436,6 +440,8 @@ struct PopoverView: View {
           ? "No tagged tasks" : "No #\(manager.selectedRootTag) tasks"
       case .priority:
         return "No priority tasks"
+      case .kanban:
+        return "No tasks"
       case .all:
         break
       }
@@ -464,6 +470,8 @@ struct PopoverView: View {
       return "No tasks match this tag filter."
     case .priority:
       return "You have tasks, but none are currently prioritised."
+    case .kanban:
+      return nil
     case .all:
       return nil
     }
@@ -574,25 +582,51 @@ struct PopoverView: View {
   }
 
   private var pluginSelectionOnboardingBar: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 10) {
       Text("Choose integrations")
         .font(.system(size: 12, weight: .semibold))
 
-      Text("Enable or disable native plugins now. You can change this anytime in Preferences.")
+      Text("Enable integrations below. You can change these anytime in Preferences.")
         .font(.caption2)
         .foregroundColor(themeColor(.textSecondary))
         .fixedSize(horizontal: false, vertical: true)
 
-      HStack(spacing: 10) {
-        Toggle("Obsidian", isOn: $manager.obsidianIntegrationEnabled)
-        Toggle("Google Calendar", isOn: $manager.googleCalendarIntegrationEnabled)
-        Toggle("MCP", isOn: $manager.mcpIntegrationEnabled)
+      VStack(alignment: .leading, spacing: 6) {
+        pluginToggleRow(
+          label: "Checkvist",
+          isOn: Binding(
+            get: { !manager.username.isEmpty },
+            set: { on in
+              if on { AppDelegate.shared.menuSettings() }
+            }
+          ),
+          prompt: manager.username.isEmpty ? "Connect to sync tasks" : nil,
+          onPromptTap: { AppDelegate.shared.menuSettings() }
+        )
+        pluginToggleRow(
+          label: "Obsidian",
+          isOn: $manager.obsidianIntegrationEnabled,
+          prompt: manager.obsidianIntegrationEnabled && manager.obsidianInboxPath.isEmpty
+            ? "Choose inbox folder" : nil,
+          onPromptTap: { _ = manager.chooseObsidianInboxFolder() }
+        )
+        pluginToggleRow(
+          label: "Google Calendar",
+          isOn: $manager.googleCalendarIntegrationEnabled,
+          prompt: nil,
+          onPromptTap: {}
+        )
+        pluginToggleRow(
+          label: "MCP",
+          isOn: $manager.mcpIntegrationEnabled,
+          prompt: nil,
+          onPromptTap: {}
+        )
       }
       .font(.caption)
-      .toggleStyle(.switch)
 
       HStack(spacing: 8) {
-        Button("Continue") {
+        Button("Done") {
           manager.completePluginSelectionOnboarding()
         }
         .buttonStyle(.borderedProminent)
@@ -610,6 +644,26 @@ struct PopoverView: View {
     .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
     .padding(.vertical, 10)
     .background(themeColor(.panelSurface))
+  }
+
+  private func pluginToggleRow(
+    label: String,
+    isOn: Binding<Bool>,
+    prompt: String?,
+    onPromptTap: @escaping () -> Void
+  ) -> some View {
+    HStack(spacing: 8) {
+      Toggle(label, isOn: isOn)
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+      if let prompt {
+        Button(prompt) { onPromptTap() }
+          .font(.caption2)
+          .buttonStyle(.plain)
+          .foregroundColor(themeColor(.link))
+      }
+      Spacer(minLength: 0)
+    }
   }
 
   // swiftlint:disable:next large_tuple
@@ -789,6 +843,60 @@ struct PopoverView: View {
           }
           .onChange(of: manager.selectedRootDueBucketRawValue) { _, _ in
             scrollRootDueFilterIntoView(proxy: proxy)
+          }
+        }
+        .background(themeColor(.panelSurface))
+        .overlay {
+          Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
+        }
+        .overlay {
+          Rectangle()
+            .stroke(
+              manager.rootScopeFocusLevel == 2 ? themeColor(.focusRing) : Color.clear,
+              lineWidth: 1
+            )
+        }
+        .padding(.horizontal, PopoverLayout.rootScopeHorizontalInset)
+      } else if manager.rootTaskView == .kanban {
+        let tags = manager.rootLevelTagNames(limit: 30)
+        let hasParent = manager.currentParentId != 0
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 0) {
+            rootScopeChip(
+              title: "All tasks",
+              isSelected: manager.kanbanFilterTag.isEmpty && !manager.kanbanFilterSubtasks
+            ) {
+              manager.kanbanFilterTag = ""
+              manager.kanbanFilterSubtasks = false
+            }
+
+            if hasParent {
+              rootScopeSeparator()
+              rootScopeChip(
+                title: "Subtasks",
+                isSelected: manager.kanbanFilterSubtasks
+              ) {
+                manager.kanbanFilterSubtasks.toggle()
+                if manager.kanbanFilterSubtasks { manager.kanbanFilterTag = "" }
+              }
+            }
+
+            if !tags.isEmpty {
+              rootScopeSeparator()
+            }
+
+            ForEach(Array(tags.enumerated()), id: \.element) { index, tag in
+              if index > 0 {
+                rootScopeSeparator()
+              }
+              rootScopeChip(
+                title: tag,
+                isSelected: manager.kanbanFilterTag == tag
+              ) {
+                manager.kanbanFilterTag = manager.kanbanFilterTag == tag ? "" : tag
+                if !manager.kanbanFilterTag.isEmpty { manager.kanbanFilterSubtasks = false }
+              }
+            }
           }
         }
         .background(themeColor(.panelSurface))
@@ -1717,11 +1825,11 @@ struct PopoverView: View {
     .padding(.horizontal, 5).padding(.vertical, 2)
     .background(
       isFuture
-        ? themeColor(.accent).opacity(0.12)
+        ? themeColor(.link).opacity(0.12)
         : themeColor(.panelSurfaceElevated)
     )
     .foregroundColor(
-      isFuture ? themeColor(.accent) : themeColor(.textSecondary)
+      isFuture ? themeColor(.link) : themeColor(.textSecondary)
     )
     .clipShape(RoundedRectangle(cornerRadius: 4))
   }

@@ -41,6 +41,7 @@ enum KanbanSortOrder: String, Codable, CaseIterable, Identifiable {
   case dueAscending
   case dueDescending
   case priorityAscending
+  case priorityThenDueAscending
   case alphabetical
 
   var id: String { rawValue }
@@ -51,6 +52,7 @@ enum KanbanSortOrder: String, Codable, CaseIterable, Identifiable {
     case .dueAscending: return "Due date (earliest first)"
     case .dueDescending: return "Due date (latest first)"
     case .priorityAscending: return "Priority (highest first)"
+    case .priorityThenDueAscending: return "Priority, then due date"
     case .alphabetical: return "Alphabetical"
     }
   }
@@ -78,28 +80,36 @@ struct KanbanColumn: Identifiable, Codable {
     self.sortOrder = sortOrder
   }
 
+  // Stored in evaluation order (specific first, catch-all last).
+  // The board displays them reversed so Today is on the right.
   static var defaults: [KanbanColumn] {
     [
       KanbanColumn(
-        name: "Inbox",
-        conditions: [.catchAll],
-        sortOrder: .position
-      ),
-      KanbanColumn(
         name: "Today",
         conditions: [
+          .dueBucket(BarTaskerManager.RootDueBucket.asap.rawValue),
           .dueBucket(BarTaskerManager.RootDueBucket.overdue.rawValue),
           .dueBucket(BarTaskerManager.RootDueBucket.today.rawValue),
         ],
-        sortOrder: .dueAscending
+        sortOrder: .priorityThenDueAscending
       ),
       KanbanColumn(
-        name: "Upcoming",
+        name: "Next 7 Days",
         conditions: [
           .dueBucket(BarTaskerManager.RootDueBucket.tomorrow.rawValue),
           .dueBucket(BarTaskerManager.RootDueBucket.nextSevenDays.rawValue),
         ],
-        sortOrder: .dueAscending
+        sortOrder: .priorityThenDueAscending
+      ),
+      KanbanColumn(
+        name: "Waiting On",
+        conditions: [.tag("waiting")],
+        sortOrder: .priorityThenDueAscending
+      ),
+      KanbanColumn(
+        name: "Backlog",
+        conditions: [.catchAll],
+        sortOrder: .priorityThenDueAscending
       ),
     ]
   }

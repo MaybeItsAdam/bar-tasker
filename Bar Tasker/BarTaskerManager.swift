@@ -122,6 +122,10 @@ class BarTaskerManager: ObservableObject {
   // MARK: - Kanban
   @Published var kanbanColumns: [KanbanColumn]
   @Published var kanbanFocusedColumnIndex: Int = 0
+  /// Active tag filter in kanban view (empty = no filter)
+  @Published var kanbanFilterTag: String = ""
+  /// When true, kanban shows only subtasks of `currentParentId`
+  @Published var kanbanFilterSubtasks: Bool = false
 
   /// Max width of the menu bar text
   @Published var maxTitleWidth: Double

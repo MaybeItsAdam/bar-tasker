@@ -141,7 +141,7 @@ extension BarTaskerManager {
   var shouldShowRootScopeSection: Bool { !needsInitialSetup && !isSearchFilterActive }
   var rootScopeShowsFilterControls: Bool {
     shouldShowRootScopeSection && isRootLevel
-      && (rootTaskView == .due || rootTaskView == .tags)
+      && (rootTaskView == .due || rootTaskView == .tags || rootTaskView == .kanban)
   }
 
   var selectedRootDueBucket: RootDueBucket? {
@@ -257,6 +257,8 @@ extension BarTaskerManager {
       return hasTag(task, tag: selectedRootTag)
     case .priority:
       return priorityRank(for: task) != nil
+    case .kanban:
+      return true
     }
   }
 
@@ -352,7 +354,11 @@ extension BarTaskerManager {
     if view != .tags {
       selectedRootTag = ""
     }
-    if !(view == .due || view == .tags), rootScopeFocusLevel > 1 {
+    if view != .kanban {
+      kanbanFilterTag = ""
+      kanbanFilterSubtasks = false
+    }
+    if !(view == .due || view == .tags || view == .kanban), rootScopeFocusLevel > 1 {
       rootScopeFocusLevel = 1
     }
   }
@@ -370,6 +376,17 @@ extension BarTaskerManager {
     switch rootTaskView {
     case .all, .priority:
       return
+    case .kanban:
+      let tags = rootLevelTagNames(limit: 30)
+      // options: "all", each tag (tag filter cycling; subtasks toggled separately)
+      let options = [""] + tags
+      guard let currentIndex = options.firstIndex(of: kanbanFilterTag) else {
+        kanbanFilterTag = ""
+        return
+      }
+      let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
+      kanbanFilterTag = options[nextIndex]
+      if !kanbanFilterTag.isEmpty { kanbanFilterSubtasks = false }
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
       guard let currentIndex = options.firstIndex(where: { $0 == selectedRootDueBucket }) else {
@@ -400,6 +417,13 @@ extension BarTaskerManager {
     switch rootTaskView {
     case .all, .priority:
       return
+    case .kanban:
+      let tags = rootLevelTagNames(limit: 30)
+      let options = [""] + tags
+      guard options.indices.contains(index) else { return }
+      kanbanFilterTag = options[index]
+      if !kanbanFilterTag.isEmpty { kanbanFilterSubtasks = false }
+      rootScopeFocusLevel = 2
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
       guard options.indices.contains(index) else { return }
