@@ -1661,10 +1661,14 @@ struct PopoverView: View {
   @ViewBuilder
   func taskInlineMetadata(task: CheckvistTask, elapsed: TimeInterval) -> some View {
     let metadataTokens = taskMetadataTokens(task.content)
+    let startLabel = manager.startDateLabel(for: task)
+    let recurrenceRule = manager.recurrenceRule(for: task)
     if !metadataTokens.isEmpty
       || manager.priorityRank(for: task) != nil
       || (manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id))
       || task.due != nil
+      || startLabel != nil
+      || recurrenceRule != nil
     {
       HStack(spacing: 4) {
         ForEach(metadataTokens, id: \.self) { token in
@@ -1677,8 +1681,14 @@ struct PopoverView: View {
           timerBadge(
             elapsed: elapsed, running: manager.timedTaskId == task.id && manager.timerRunning)
         }
+        if let label = startLabel {
+          startBadge(label: label, isFuture: manager.startDateIsInFuture(for: task))
+        }
         if let due = task.due {
           dueBadge(due: due, overdue: task.isOverdue, today: task.isDueToday)
+        }
+        if let rule = recurrenceRule {
+          recurrenceBadge(rule: rule)
         }
       }
       .fixedSize(horizontal: true, vertical: false)
@@ -1694,6 +1704,40 @@ struct PopoverView: View {
       .background(themeColor(.selectionBackground))
       .foregroundColor(themeColor(.selectionForeground))
       .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+
+  @ViewBuilder
+  func startBadge(label: String, isFuture: Bool) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: "play.fill")
+        .font(.system(size: 8))
+      Text(label)
+        .font(.caption2)
+    }
+    .padding(.horizontal, 5).padding(.vertical, 2)
+    .background(
+      isFuture
+        ? themeColor(.accent).opacity(0.12)
+        : themeColor(.panelSurfaceElevated)
+    )
+    .foregroundColor(
+      isFuture ? themeColor(.accent) : themeColor(.textSecondary)
+    )
+    .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+
+  @ViewBuilder
+  func recurrenceBadge(rule: BarTaskerRecurrenceRule) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: "repeat")
+        .font(.system(size: 8))
+      Text(rule.displayLabel)
+        .font(.caption2)
+    }
+    .padding(.horizontal, 5).padding(.vertical, 2)
+    .background(themeColor(.panelSurfaceElevated))
+    .foregroundColor(themeColor(.textSecondary))
+    .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 
   @ViewBuilder

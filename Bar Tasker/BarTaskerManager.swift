@@ -72,6 +72,20 @@ class BarTaskerManager: ObservableObject {
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
   private static let pendingObsidianSyncDefaultsKey = "pendingObsidianSyncTaskIdsByListId"
 
+  // MARK: - Start Dates (locally stored; Checkvist API has no start date field)
+  /// Maps task ID → start date string (same format as `due`).
+  @Published var taskStartDatesByTaskId: [Int: String] = [:]
+
+  // MARK: - Named Time Preferences
+  @Published var namedTimeMorningHour: Int
+  @Published var namedTimeAfternoonHour: Int
+  @Published var namedTimeEveningHour: Int
+  @Published var namedTimeEodHour: Int
+
+  // MARK: - Recurrence (locally stored; Checkvist API has no recurrence field)
+  /// Maps task ID → raw recurrence rule string (e.g. "daily", "every 3 days").
+  @Published var recurrenceRulesByTaskId: [Int: String] = [:]
+
   // MARK: - Timer
   @Published var timedTaskId: Int? = nil
   @Published var timerByTaskId: [Int: TimeInterval] = [:]
@@ -311,6 +325,24 @@ class BarTaskerManager: ObservableObject {
     self.timerBarLeading = preferencesStore.bool(.timerBarLeading, default: false)
     self.timerMode = TimerMode(rawValue: preferencesStore.int(.timerMode, default: 0)) ?? .visible
     self.timerByTaskId = Self.timerDictionaryFromDefaults(preferencesStore: preferencesStore)
+    self.namedTimeMorningHour = preferencesStore.int(.namedTimeMorningHour, default: 9)
+    self.namedTimeAfternoonHour = preferencesStore.int(.namedTimeAfternoonHour, default: 14)
+    self.namedTimeEveningHour = preferencesStore.int(.namedTimeEveningHour, default: 18)
+    self.namedTimeEodHour = preferencesStore.int(.namedTimeEodHour, default: 17)
+    let storedStartDates = preferencesStore.stringDictionary(.taskStartDatesByTaskId)
+    self.taskStartDatesByTaskId = Dictionary(
+      uniqueKeysWithValues: storedStartDates.compactMap { key, value in
+        guard let id = Int(key) else { return nil }
+        return (id, value)
+      }
+    )
+    let storedRecurrenceRules = preferencesStore.stringDictionary(.recurrenceRulesByTaskId)
+    self.recurrenceRulesByTaskId = Dictionary(
+      uniqueKeysWithValues: storedRecurrenceRules.compactMap { key, value in
+        guard let id = Int(key) else { return nil }
+        return (id, value)
+      }
+    )
     self.activeOnboardingDialog = nil
     let persistedDismissedDialogs = preferencesStore.stringArray(.dismissedOnboardingDialogs)
     self.dismissedOnboardingDialogs = Set(

@@ -1,5 +1,15 @@
 import Foundation
 
+// MARK: - Date Parsing Config
+
+/// User-customisable named-time shortcuts used by the natural language date parser.
+struct BarTaskerDateParsingConfig: Equatable {
+  var morningHour: Int = 9
+  var afternoonHour: Int = 14
+  var eveningHour: Int = 18
+  var eodHour: Int = 17
+}
+
 struct BarTaskerCommandSuggestion: Equatable, Sendable {
   let label: String
   let command: String
@@ -14,6 +24,10 @@ enum BarTaskerCommand: Equatable, Sendable {
   case invalidate
   case due(String)
   case clearDue
+  case setStart(String)
+  case clearStart
+  case setRecurrence(String)
+  case clearRecurrence
   case edit
   case search
   case openPreferences
@@ -80,6 +94,22 @@ enum BarTaskerCommandEngine {
       label: "Clear due date", command: "clear due", preview: "Remove due date", keybind: "dd",
       submitImmediately: true),
     .init(
+      label: "Start today", command: "start today", preview: "Set start date to today",
+      keybind: "ds", submitImmediately: true),
+    .init(
+      label: "Start tomorrow", command: "start tomorrow", preview: "Set start date to tomorrow",
+      keybind: "ds", submitImmediately: true),
+    .init(
+      label: "Start next week", command: "start next week",
+      preview: "Set start date to next week", keybind: "ds", submitImmediately: true),
+    .init(
+      label: "Start at time", command: "start today ",
+      preview: "Set start date with time (e.g. 9am, 14:30, next mon 9am)",
+      keybind: "ds", submitImmediately: false),
+    .init(
+      label: "Clear start date", command: "clear start", preview: "Remove start date",
+      keybind: "ds", submitImmediately: true),
+    .init(
       label: "Add tag", command: "tag ", preview: "Append #tag to task", keybind: "gt",
       submitImmediately: false),
     .init(
@@ -95,6 +125,30 @@ enum BarTaskerCommandEngine {
     .init(
       label: "Clear priority", command: "clear priority",
       preview: "Remove selected task from priority list", keybind: "-",
+      submitImmediately: true),
+    .init(
+      label: "Repeat daily", command: "repeat daily",
+      preview: "Schedule this task to recur every day", keybind: "dr",
+      submitImmediately: true),
+    .init(
+      label: "Repeat weekdays", command: "repeat weekdays",
+      preview: "Schedule this task to recur every weekday (Mon–Fri)", keybind: "dr",
+      submitImmediately: true),
+    .init(
+      label: "Repeat weekly", command: "repeat weekly",
+      preview: "Schedule this task to recur every week on the same day", keybind: "dr",
+      submitImmediately: true),
+    .init(
+      label: "Repeat every N days/weeks", command: "repeat every ",
+      preview: "e.g. repeat every 3 days, repeat every 2 weeks", keybind: "dr",
+      submitImmediately: false),
+    .init(
+      label: "Repeat every weekday", command: "repeat every monday",
+      preview: "Recur on a specific weekday (e.g. every monday)", keybind: "dr",
+      submitImmediately: false),
+    .init(
+      label: "Clear repeat", command: "clear repeat",
+      preview: "Remove recurring rule from task", keybind: "dr",
       submitImmediately: true),
     .init(
       label: "Reload Checkvist lists", command: "reload checkvist lists",
@@ -225,6 +279,18 @@ enum BarTaskerCommandEngine {
       return .due(raw)
     }
     if cmd == "clear due" { return .clearDue }
+    if cmd.hasPrefix("start ") {
+      let raw = String(cmd.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+      return .setStart(raw)
+    }
+    if cmd == "clear start" || cmd == "remove start" || cmd == "unstart" { return .clearStart }
+    if cmd.hasPrefix("repeat ") {
+      let raw = String(cmd.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+      return .setRecurrence(raw)
+    }
+    if cmd == "clear repeat" || cmd == "remove repeat" || cmd == "no repeat" || cmd == "unrepeat" {
+      return .clearRecurrence
+    }
     if cmd == "edit" { return .edit }
     if cmd == "search" { return .search }
     if cmd == "preferences" || cmd == "prefs" || cmd == "settings" {
@@ -318,9 +384,12 @@ enum BarTaskerCommandEngine {
     return .unknown(input)
   }
 
-  static func resolveDueDate(_ input: String, now: Date = Date(), calendar: Calendar = .current)
-    -> String
-  {
+  static func resolveDueDate(
+    _ input: String,
+    now: Date = Date(),
+    calendar: Calendar = .current,
+    config: BarTaskerDateParsingConfig = .init()
+  ) -> String {
     let rawInput = input.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !rawInput.isEmpty else { return input }
 
@@ -344,10 +413,15 @@ enum BarTaskerCommandEngine {
 
     let normalized = rawInput.lowercased()
 
+    // Try "time keyword" order first (e.g. "4pm fri", "9am tomorrow").
+    if let swapped = resolveTimeFirstExpression(normalized, now: now, calendar: cal, config: config) {
+      return dateTimeFormatter.string(from: swapped)
+    }
+
     if let relative = resolveRelativeDateExpression(normalized, now: now, calendar: cal) {
       if let timeText = relative.timeText {
         guard
-          let timeComponents = parseTimeComponents(from: timeText),
+          let timeComponents = parseTimeComponents(from: timeText, config: config),
           let dateTime = combine(date: relative.baseDate, with: timeComponents, calendar: cal)
         else {
           return rawInput
@@ -365,7 +439,7 @@ enum BarTaskerCommandEngine {
     if let absolute = resolveAbsoluteDateExpression(normalized, calendar: cal) {
       if let timeText = absolute.timeText {
         guard
-          let timeComponents = parseTimeComponents(from: timeText),
+          let timeComponents = parseTimeComponents(from: timeText, config: config),
           let dateTime = combine(date: absolute.baseDate, with: timeComponents, calendar: cal)
         else {
           return rawInput
@@ -375,7 +449,7 @@ enum BarTaskerCommandEngine {
       return dateOnlyFormatter.string(from: absolute.baseDate)
     }
 
-    if let timeComponents = parseTimeComponents(from: normalized),
+    if let timeComponents = parseTimeComponents(from: normalized, config: config),
       let dateTime = combine(date: now, with: timeComponents, calendar: cal)
     {
       return dateTimeFormatter.string(from: dateTime)
@@ -383,6 +457,17 @@ enum BarTaskerCommandEngine {
 
     return rawInput
   }
+
+  /// Full and abbreviated weekday name → Calendar weekday component (Sun=1 … Sat=7)
+  private static let weekdayNumbers: [String: Int] = [
+    "sunday": 1, "sun": 1,
+    "monday": 2, "mon": 2,
+    "tuesday": 3, "tue": 3, "tues": 3,
+    "wednesday": 4, "wed": 4,
+    "thursday": 5, "thu": 5, "thur": 5, "thurs": 5,
+    "friday": 6, "fri": 6,
+    "saturday": 7, "sat": 7,
+  ]
 
   private static func resolveRelativeDateExpression(
     _ normalized: String,
@@ -408,12 +493,30 @@ enum BarTaskerCommandEngine {
       return (date, timeText.isEmpty ? nil : timeText)
     }
 
-    let weekdays = [
-      "sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4,
-      "thursday": 5, "friday": 6, "saturday": 7,
-    ]
-    for (weekdayName, weekdayValue) in weekdays {
-      guard let timeText = timeSuffix(for: normalized, keyword: weekdayName) else { continue }
+    // "next <weekday>" — always picks the coming occurrence even if today matches
+    for (name, weekdayValue) in weekdayNumbers {
+      guard let timeText = timeSuffix(for: normalized, keyword: "next \(name)") else { continue }
+      let currentWeekday = calendar.component(.weekday, from: now)
+      var diff = weekdayValue - currentWeekday
+      if diff <= 0 { diff += 7 }
+      guard let date = calendar.date(byAdding: .day, value: diff, to: now) else { continue }
+      return (date, timeText.isEmpty ? nil : timeText)
+    }
+
+    // "this <weekday>" — nearest occurrence within the current calendar week
+    for (name, weekdayValue) in weekdayNumbers {
+      guard let timeText = timeSuffix(for: normalized, keyword: "this \(name)") else { continue }
+      let currentWeekday = calendar.component(.weekday, from: now)
+      var diff = weekdayValue - currentWeekday
+      // "this" means within the current week — if the day has passed, keep 0 offset (today)
+      if diff < 0 { diff = 0 }
+      guard let date = calendar.date(byAdding: .day, value: diff, to: now) else { continue }
+      return (date, timeText.isEmpty ? nil : timeText)
+    }
+
+    // Plain weekday name — next occurrence (allows today if diff would be 0, skip to next week)
+    for (name, weekdayValue) in weekdayNumbers {
+      guard let timeText = timeSuffix(for: normalized, keyword: name) else { continue }
       let currentWeekday = calendar.component(.weekday, from: now)
       var diff = weekdayValue - currentWeekday
       if diff <= 0 { diff += 7 }
@@ -424,12 +527,42 @@ enum BarTaskerCommandEngine {
     return nil
   }
 
+  /// Handles "time keyword" order: "4pm fri", "9am tomorrow", "morning next monday"
+  private static func resolveTimeFirstExpression(
+    _ normalized: String,
+    now: Date,
+    calendar: Calendar,
+    config: BarTaskerDateParsingConfig
+  ) -> Date? {
+    let range = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
+    guard let match = timeFirstRegex.firstMatch(in: normalized, options: [], range: range),
+      let timePart = Range(match.range(at: 1), in: normalized),
+      let datePart = Range(match.range(at: 2), in: normalized)
+    else { return nil }
+
+    let timeText = String(normalized[timePart])
+    let dateKeyword = String(normalized[datePart])
+
+    guard let relative = resolveRelativeDateExpression(dateKeyword, now: now, calendar: calendar)
+    else { return nil }
+
+    guard relative.timeText == nil else { return nil }
+
+    guard let timeComponents = parseTimeComponents(from: timeText, config: config) else { return nil }
+    return combine(date: relative.baseDate, with: timeComponents, calendar: calendar)
+  }
+
   private static let relativeOffsetRegex = makeRegex(
-    #"^in\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$"#)
+    #"^in\s+(a|an|\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks)$"#
+  )
   private static let twelveHourRegex = makeRegex(
     #"^(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap]m)$"#)
   private static let twentyFourHourRegex = makeRegex(
     #"^([01]?\d|2[0-3])(?::([0-5]\d))?$"#)
+  // Matches "4pm fri", "3:30pm next monday", "9am tomorrow" — time BEFORE the date keyword
+  private static let timeFirstRegex = makeRegex(
+    #"^((?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s*[ap]m|(?:[01]?\d|2[0-3]):[0-5]\d|noon|midnight|morning|afternoon|evening|eod)\s+(.+)$"#
+  )
 
   private static func makeRegex(_ pattern: String) -> NSRegularExpression {
     guard let regex = try? NSRegularExpression(pattern: pattern) else {
@@ -450,10 +583,16 @@ enum BarTaskerCommandEngine {
     }
     guard
       let amountRange = Range(match.range(at: 1), in: normalized),
-      let unitRange = Range(match.range(at: 2), in: normalized),
-      let amount = Int(normalized[amountRange]),
-      amount > 0
-    else {
+      let unitRange = Range(match.range(at: 2), in: normalized)
+    else { return nil }
+
+    let amountStr = String(normalized[amountRange])
+    let amount: Int
+    if amountStr == "a" || amountStr == "an" {
+      amount = 1
+    } else if let n = Int(amountStr), n > 0 {
+      amount = n
+    } else {
       return nil
     }
 
@@ -466,6 +605,8 @@ enum BarTaskerCommandEngine {
       component = .hour
     case "d", "day", "days":
       component = .day
+    case "w", "wk", "wks", "week", "weeks":
+      component = .weekOfYear
     default:
       return nil
     }
@@ -513,7 +654,10 @@ enum BarTaskerCommandEngine {
     return String(normalized.dropFirst(keyword.count)).trimmingCharacters(in: .whitespaces)
   }
 
-  private static func parseTimeComponents(from rawTime: String) -> DateComponents? {
+  private static func parseTimeComponents(
+    from rawTime: String,
+    config: BarTaskerDateParsingConfig = .init()
+  ) -> DateComponents? {
     var normalized = rawTime.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     if normalized.hasPrefix("at ") {
       normalized = String(normalized.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -525,6 +669,18 @@ enum BarTaskerCommandEngine {
     }
     if normalized == "midnight" {
       return DateComponents(hour: 0, minute: 0, second: 0)
+    }
+    if normalized == "morning" {
+      return DateComponents(hour: config.morningHour, minute: 0, second: 0)
+    }
+    if normalized == "afternoon" {
+      return DateComponents(hour: config.afternoonHour, minute: 0, second: 0)
+    }
+    if normalized == "evening" {
+      return DateComponents(hour: config.eveningHour, minute: 0, second: 0)
+    }
+    if normalized == "eod" || normalized == "end of day" || normalized == "cob" {
+      return DateComponents(hour: config.eodHour, minute: 0, second: 0)
     }
 
     if let captures = captureGroups(regex: twelveHourRegex, in: normalized), captures.count >= 3 {

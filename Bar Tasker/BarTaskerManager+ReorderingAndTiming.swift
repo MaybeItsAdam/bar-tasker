@@ -202,6 +202,16 @@ extension BarTaskerManager {
     BarTaskerCommandEngine.resolveDueDate(input)
   }
 
+  func resolveDueDateWithConfig(_ input: String) -> String {
+    let config = BarTaskerDateParsingConfig(
+      morningHour: namedTimeMorningHour,
+      afternoonHour: namedTimeAfternoonHour,
+      eveningHour: namedTimeEveningHour,
+      eodHour: namedTimeEodHour
+    )
+    return BarTaskerCommandEngine.resolveDueDate(input, config: config)
+  }
+
   func totalElapsed(forTaskId taskId: Int) -> TimeInterval {
     rolledUpElapsedByTaskId()[taskId] ?? 0
   }

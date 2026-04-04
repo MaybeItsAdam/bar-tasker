@@ -36,6 +36,12 @@ final class BarTaskerPreferencesStore {
     case customizableShortcutsByAction
     case dismissedOnboardingDialogs
     case kanbanColumns
+    case taskStartDatesByTaskId
+    case namedTimeMorningHour
+    case namedTimeAfternoonHour
+    case namedTimeEveningHour
+    case namedTimeEodHour
+    case recurrenceRulesByTaskId
   }
 
   private let defaults: UserDefaults

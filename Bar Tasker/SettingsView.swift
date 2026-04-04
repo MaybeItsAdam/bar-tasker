@@ -570,6 +570,32 @@ struct SettingsView: View {
         }
         .padding(.top, 4)
       }
+
+      Section(header: Text("Named Times")) {
+        VStack(alignment: .leading, spacing: 10) {
+          Text("Customize what hour named times resolve to when scheduling tasks.")
+            .font(.caption)
+            .foregroundColor(themeColor(.textSecondary))
+
+          NamedTimePickerRow(
+            label: "Morning",
+            hour: $checkvistManager.namedTimeMorningHour
+          )
+          NamedTimePickerRow(
+            label: "Afternoon",
+            hour: $checkvistManager.namedTimeAfternoonHour
+          )
+          NamedTimePickerRow(
+            label: "Evening",
+            hour: $checkvistManager.namedTimeEveningHour
+          )
+          NamedTimePickerRow(
+            label: "EOD / COB",
+            hour: $checkvistManager.namedTimeEodHour
+          )
+        }
+        .padding(.top, 4)
+      }
     }
   }
 
@@ -1333,3 +1359,33 @@ struct SettingsView: View {
   ]
 }
 // swiftlint:enable type_body_length
+
+private struct NamedTimePickerRow: View {
+  let label: String
+  @Binding var hour: Int
+
+  private let hours = Array(0...23)
+
+  private func hourLabel(_ h: Int) -> String {
+    let components = DateComponents(hour: h, minute: 0)
+    let date = Calendar.current.date(from: components) ?? Date()
+    let formatter = DateFormatter()
+    formatter.dateFormat = "h a"
+    return formatter.string(from: date)
+  }
+
+  var body: some View {
+    HStack {
+      Text(label)
+        .frame(width: 80, alignment: .leading)
+      Picker("", selection: $hour) {
+        ForEach(hours, id: \.self) { h in
+          Text(hourLabel(h)).tag(h)
+        }
+      }
+      .labelsHidden()
+      .pickerStyle(.menu)
+      .frame(width: 100)
+    }
+  }
+}

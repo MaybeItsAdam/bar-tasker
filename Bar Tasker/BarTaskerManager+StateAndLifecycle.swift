@@ -29,7 +29,8 @@ extension BarTaskerManager {
       $priorityTaskIds.map { _ in () }.eraseToAnyPublisher(),
       $timerByTaskId.map { _ in () }.eraseToAnyPublisher(),
       $kanbanColumns.map { _ in () }.eraseToAnyPublisher(),
-      $kanbanFocusedColumnIndex.map { _ in () }.eraseToAnyPublisher()
+      $kanbanFocusedColumnIndex.map { _ in () }.eraseToAnyPublisher(),
+      $taskStartDatesByTaskId.map { _ in () }.eraseToAnyPublisher()
     )
     .sink { [weak self] _ in
       self?.invalidateCaches()
@@ -243,6 +244,23 @@ extension BarTaskerManager {
     $timerByTaskId.sink { timers in
       let encoded = Dictionary(uniqueKeysWithValues: timers.map { (String($0.key), $0.value) })
       self.preferencesStore.set(encoded, for: .timerByTaskId)
+    }.store(in: &cancellables)
+    $namedTimeMorningHour.sink { [weak self] in
+      self?.preferencesStore.set($0, for: .namedTimeMorningHour)
+    }.store(in: &cancellables)
+    $namedTimeAfternoonHour.sink { [weak self] in
+      self?.preferencesStore.set($0, for: .namedTimeAfternoonHour)
+    }.store(in: &cancellables)
+    $namedTimeEveningHour.sink { [weak self] in
+      self?.preferencesStore.set($0, for: .namedTimeEveningHour)
+    }.store(in: &cancellables)
+    $namedTimeEodHour.sink { [weak self] in
+      self?.preferencesStore.set($0, for: .namedTimeEodHour)
+    }.store(in: &cancellables)
+    $recurrenceRulesByTaskId.sink { [weak self] rules in
+      guard let self else { return }
+      let encoded = Dictionary(uniqueKeysWithValues: rules.map { (String($0.key), $0.value) })
+      self.preferencesStore.set(encoded, for: .recurrenceRulesByTaskId)
     }.store(in: &cancellables)
   }
   // swiftlint:enable function_body_length
