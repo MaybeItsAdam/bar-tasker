@@ -92,7 +92,7 @@ extension BarTaskerManager {
           listId: listId,
           eventURL: outcome.urlToOpen
         )
-        if let url = outcome.urlToOpen {
+        if let url = outcome.urlToOpen, url.scheme?.lowercased() == "https" {
           NSWorkspace.shared.open(url)
         }
         if !outcome.usedGoogleCalendarAPI && outcome.urlToOpen == nil {
@@ -121,7 +121,9 @@ extension BarTaskerManager {
       errorMessage = "No task selected."
       return
     }
-    guard let url = googleCalendarEventLinkURL(taskId: targetTaskId) else {
+    guard let url = googleCalendarEventLinkURL(taskId: targetTaskId),
+      url.scheme?.lowercased() == "https"
+    else {
       errorMessage = "No saved browser link for this Google Calendar event."
       return
     }

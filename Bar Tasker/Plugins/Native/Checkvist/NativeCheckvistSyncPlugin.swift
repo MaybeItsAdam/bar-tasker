@@ -80,9 +80,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   }
 
   func fetchLists(credentials: CheckvistCredentials) async throws -> [CheckvistList] {
-    guard let url = URL(string: "https://checkvist.com/checklists.json") else {
-      return []
-    }
+    let url = CheckvistEndpoints.lists
 
     let (data, response) = try await performAuthenticatedRequest(credentials: credentials) {
       validToken in
@@ -105,9 +103,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   func createList(name: String, credentials: CheckvistCredentials) async throws -> CheckvistList? {
     let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedName.isEmpty else { return nil }
-    guard let url = URL(string: "https://checkvist.com/checklists.json") else {
-      return nil
-    }
+    let url = CheckvistEndpoints.lists
 
     let (data, response) = try await performAuthenticatedRequest(credentials: credentials) {
       validToken in
@@ -141,11 +137,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     action: CheckvistTaskAction,
     credentials: CheckvistCredentials
   ) async throws -> Bool {
-    guard
-      let url = URL(
-        string: "https://checkvist.com/checklists/\(listId)/tasks/\(taskId)/\(action.rawValue).json"
-      )
-    else {
+    guard let url = CheckvistEndpoints.taskAction(listId: listId, taskId: taskId, action: action.rawValue) else {
       return false
     }
 
@@ -193,7 +185,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   ) async throws -> CheckvistTask? {
     let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedContent.isEmpty else { return nil }
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json") else {
+    guard let url = CheckvistEndpoints.tasks(listId: listId) else {
       return nil
     }
 
@@ -240,8 +232,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   func deleteTask(listId: String, taskId: Int, credentials: CheckvistCredentials) async throws
     -> Bool
   {
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(taskId).json")
-    else {
+    guard let url = CheckvistEndpoints.task(listId: listId, taskId: taskId) else {
       return false
     }
 
@@ -306,8 +297,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     bodyTaskPayload: [String: Any],
     credentials: CheckvistCredentials
   ) async throws -> Bool {
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(taskId).json")
-    else {
+    guard let url = CheckvistEndpoints.task(listId: listId, taskId: taskId) else {
       return false
     }
 

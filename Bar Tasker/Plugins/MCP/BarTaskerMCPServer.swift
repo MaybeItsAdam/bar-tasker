@@ -48,7 +48,7 @@ private struct BarTaskerMCPConfig {
   static func fromEnvironment() -> BarTaskerMCPConfig {
     let env = ProcessInfo.processInfo.environment
     let rawBaseURL = env["CHECKVIST_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let baseURL = URL(string: rawBaseURL ?? "") ?? URL(string: "https://checkvist.com")!
+    let baseURL = URL(string: rawBaseURL ?? "") ?? URL(string: CheckvistEndpoints.baseURL)!
 
     return BarTaskerMCPConfig(
       username: env["CHECKVIST_USERNAME"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",

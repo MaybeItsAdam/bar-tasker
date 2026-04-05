@@ -163,6 +163,20 @@ struct KeyboardShortcutRouter {
         }
         return true
       }
+      if matches(.kanbanShowInAll) {
+        if !isRepeat, let task = manager.currentKanbanTask {
+          let childCounts = manager.childCountByTaskId()
+          manager.rootTaskView = .all
+          manager.rootScopeFocusLevel = 0
+          if childCounts[task.id, default: 0] > 0 {
+            manager.currentParentId = task.id
+            manager.currentSiblingIndex = 0
+          } else {
+            manager.navigateTo(task: task)
+          }
+        }
+        return true
+      }
     }
 
     // Cmd+↑/↓ - reorder (ignore key repeat to prevent rapid-fire API calls).
@@ -221,7 +235,7 @@ struct KeyboardShortcutRouter {
         return true
       }
       if canFocusRootScopeFromListTop {
-        manager.rootScopeFocusLevel = 1
+        manager.rootScopeFocusLevel = manager.rootScopeShowsFilterControls ? 2 : 1
         return true
       }
       manager.previousTask()

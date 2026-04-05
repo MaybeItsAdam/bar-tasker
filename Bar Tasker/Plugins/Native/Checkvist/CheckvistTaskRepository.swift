@@ -20,10 +20,13 @@ struct CheckvistTaskRepository {
         (String) throws -> URLRequest
       ) async throws -> (Data, HTTPURLResponse)
   ) async throws -> [CheckvistTask] {
-    var components = URLComponents(string: "https://checkvist.com/checklists/\(listId)/tasks.json")
-    components?.queryItems = [URLQueryItem(name: "with_notes", value: "true")]
-
-    guard let url = components?.url else {
+    guard let baseURL = CheckvistEndpoints.tasks(listId: listId),
+      var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+    else {
+      throw CheckvistTaskRepositoryError.invalidListURL
+    }
+    components.queryItems = [URLQueryItem(name: "with_notes", value: "true")]
+    guard let url = components.url else {
       throw CheckvistTaskRepositoryError.invalidListURL
     }
 

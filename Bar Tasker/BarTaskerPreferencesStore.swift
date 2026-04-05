@@ -42,6 +42,7 @@ final class BarTaskerPreferencesStore {
     case namedTimeEveningHour
     case namedTimeEodHour
     case recurrenceRulesByTaskId
+    case rootTaskViewOrder
   }
 
   private let defaults: UserDefaults

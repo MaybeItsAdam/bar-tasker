@@ -39,7 +39,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var quickAddHotkeyRef: EventHotKeyRef?
   private var cancellables = Set<AnyCancellable>()
   private var lastToggleTime: Date = Date.distantPast
-  private var pendingPopoverResize: DispatchWorkItem?
   private var explicitQuitRequested = false
   private var lastAutoRefreshTime: Date = Date.distantPast
   private var cachedTitleInputs: TitleCacheInputs?
@@ -76,12 +75,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     statusItem.button?.target = self
     statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
-    // Title sync — debounce rapid state changes to avoid redundant work.
+    // Title sync only — window size is fixed while open.
     checkvistManager.objectWillChange
-      .debounce(for: .milliseconds(16), scheduler: RunLoop.main)  // ~1 frame at 60Hz
+      .debounce(for: .milliseconds(16), scheduler: RunLoop.main)
       .sink { [weak self] _ in
         self?.updateTitle()
-        self?.schedulePopoverResize()
       }
       .store(in: &cancellables)
 
@@ -661,7 +659,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private func triggerQuickAddFromHotkey() {
     showPopoverWindow()
     _ = checkvistManager.beginQuickAddEntry()
-    schedulePopoverResize()
   }
 
   private func showPopoverWindow() {
@@ -700,27 +697,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
   }
 
-  private func updatePopoverSizeIfVisible() {
-    guard let popoverWindow = window as? BarTaskerPanel, popoverWindow.isVisible else { return }
-    guard let button = statusItem.button, let buttonWindow = button.window else { return }
-    let btnRect = button.convert(button.bounds, to: nil)
-    let screenRect = buttonWindow.convertToScreen(btnRect)
-    let trY = popoverWindow.frame.maxY
-    popoverWindow.setAnchoredTopRight(
-      contentSize: currentPopoverContentSize,
-      topRight: NSPoint(x: screenRect.maxX, y: trY),
-      display: true
-    )
-  }
-
-  private func schedulePopoverResize() {
-    pendingPopoverResize?.cancel()
-    let workItem = DispatchWorkItem { [weak self] in
-      self?.updatePopoverSizeIfVisible()
-    }
-    pendingPopoverResize = workItem
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.04, execute: workItem)
-  }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
@@ -739,7 +715,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   func applicationWillTerminate(_ notification: Notification) {
     if let monitor = keyMonitor { NSEvent.removeMonitor(monitor) }
     if let monitor = clickMonitor { NSEvent.removeMonitor(monitor) }
-    pendingPopoverResize?.cancel()
     unregisterGlobalHotkeys()
   }
 }

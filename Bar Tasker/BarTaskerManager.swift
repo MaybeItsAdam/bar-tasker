@@ -41,6 +41,26 @@ class BarTaskerManager: ObservableObject {
   /// 0 = task list, 1 = root tabs (All/Due/Tags), 2 = root filter row (due buckets/tags)
   @Published var rootScopeFocusLevel: Int = 0
   @Published var keyBuffer: String = ""
+  
+  var orderedRootTaskViews: [RootTaskView] {
+    if let data = UserDefaults.standard.data(forKey: "rootTaskViewOrder"),
+       let rawValues = try? JSONDecoder().decode([Int].self, from: data) {
+      let views = rawValues.compactMap { RootTaskView(rawValue: $0) }
+      // Ensure all cases are present
+      let allCases = RootTaskView.allCases
+      if Set(views) == Set(allCases) && views.count == allCases.count {
+        return views
+      }
+    }
+    return RootTaskView.allCases
+  }
+  
+  func saveRootTaskViewOrder(_ views: [RootTaskView]) {
+    let rawValues = views.map { $0.rawValue }
+    if let data = try? JSONEncoder().encode(rawValues) {
+      UserDefaults.standard.set(data, forKey: "rootTaskViewOrder")
+    }
+  }
   @Published var quickEntryMode: QuickEntryMode = .search
   @Published var isQuickEntryFocused: Bool = false
   @Published var editCursorAtEnd: Bool = true  // true = append (a), false = insert (i)

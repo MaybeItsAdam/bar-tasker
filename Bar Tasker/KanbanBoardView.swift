@@ -111,13 +111,6 @@ private struct KanbanColumnView: View {
     }
     .frame(width: PopoverLayout.kanbanColumnWidth)
     .frame(maxHeight: .infinity, alignment: .topLeading)
-    .overlay {
-      if isFocused {
-        Rectangle()
-          .stroke(themeColor(.focusRing), lineWidth: 1)
-          .allowsHitTesting(false)
-      }
-    }
   }
 
   private var columnHeader: some View {
@@ -126,13 +119,6 @@ private struct KanbanColumnView: View {
         .font(.system(size: 12, weight: .semibold))
         .foregroundColor(isFocused ? themeColor(.selectionForeground) : themeColor(.textPrimary))
       Spacer()
-      Text("\(tasks.count)")
-        .font(.system(size: 11, weight: .medium))
-        .foregroundColor(themeColor(.textSecondary))
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(themeColor(.panelSurface))
-        .clipShape(Capsule())
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
@@ -207,34 +193,28 @@ private struct KanbanTaskCard: View {
   let isSelected: Bool
   let childCount: Int
 
+  @State private var isHovered = false
+
   private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
     manager.themeColor(for: token)
   }
 
   private var isCompleting: Bool { manager.completingTaskId == task.id }
 
+  private func showInAllView() {
+    manager.rootTaskView = .all
+    manager.rootScopeFocusLevel = 0
+    if childCount > 0 {
+      manager.currentParentId = task.id
+      manager.currentSiblingIndex = 0
+    } else {
+      manager.navigateTo(task: task)
+    }
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(alignment: .top, spacing: 8) {
-        Image(
-          systemName: isCompleting
-            ? "checkmark.circle.fill"
-            : isSelected ? "largecircle.fill.circle" : "circle"
-        )
-        .foregroundColor(
-          isCompleting
-            ? themeColor(.success)
-            : isSelected ? themeColor(.selectionForeground) : themeColor(.textSecondary)
-        )
-        .font(.system(size: 13))
-        .padding(.top, 1)
-        .scaleEffect(isCompleting ? 1.3 : 1.0)
-        .animation(.spring(response: 0.28, dampingFraction: 0.45), value: isCompleting)
-        .symbolEffect(.bounce, value: isCompleting)
-        .onTapGesture {
-          Task { await manager.markCurrentTaskDone() }
-        }
-
         VStack(alignment: .leading, spacing: 3) {
           Text(task.content.strippingTags)
             .font(.system(size: 12))
@@ -244,10 +224,21 @@ private struct KanbanTaskCard: View {
 
           metadataRow
         }
+        Spacer(minLength: 0)
+        if isHovered {
+          Button(action: showInAllView) {
+            Image(systemName: "arrow.forward.circle")
+              .font(.system(size: 11))
+              .foregroundColor(themeColor(.link))
+          }
+          .buttonStyle(.plain)
+          .help("Show in All view")
+        }
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 8)
     }
+    .onHover { isHovered = $0 }
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
       isSelected
@@ -268,9 +259,20 @@ private struct KanbanTaskCard: View {
     let hasDue = !(task.due ?? "").isEmpty
     let tags = extractTags(from: task.content)
     let hasChildren = childCount > 0
+    let priorityRank = manager.priorityRank(for: task)
 
-    if hasDue || !tags.isEmpty || hasChildren {
+    if hasDue || !tags.isEmpty || hasChildren || priorityRank != nil {
       HStack(spacing: 5) {
+        if let rank = priorityRank {
+          Text("P\(rank)")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(themeColor(.selectionBackground))
+            .foregroundColor(themeColor(.selectionForeground))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+        }
+
         if hasDue, let due = task.due {
           let bucket = manager.rootDueBucket(for: task)
           let isOverdue = bucket == .overdue
@@ -319,18 +321,38 @@ private struct KanbanTaskCard: View {
     // Try date-only format first
     formatter.dateFormat = "yyyy-MM-dd"
     if let date = formatter.date(from: due) {
-      let out = DateFormatter()
-      out.dateFormat = "MMM d"
-      return out.string(from: date)
+      return naturalDateString(from: date)
     }
     // Try datetime format
     formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
     if let date = formatter.date(from: due) {
-      let out = DateFormatter()
-      out.dateFormat = "MMM d"
-      return out.string(from: date)
+      return naturalDateString(from: date)
     }
     return due
+  }
+  
+  private func naturalDateString(from date: Date) -> String {
+    let calendar = Calendar.current
+    let now = Date()
+    let today = calendar.startOfDay(for: now)
+    let targetDay = calendar.startOfDay(for: date)
+    let dayDiff = calendar.dateComponents([.day], from: today, to: targetDay).day ?? 0
+    
+    switch dayDiff {
+    case 0: return "Today"
+    case 1: return "Tomorrow"
+    case -1: return "Yesterday"
+    case 2...6:
+      let formatter = DateFormatter()
+      formatter.dateFormat = "EEEE"  // Day name
+      return formatter.string(from: date)
+    case 7...13: return "Next week"
+    case -7...(-2): return "Last week"
+    default:
+      let formatter = DateFormatter()
+      formatter.dateFormat = "MMM d"
+      return formatter.string(from: date)
+    }
   }
 }
 

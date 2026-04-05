@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // swiftlint:disable file_length
@@ -567,6 +568,17 @@ struct SettingsView: View {
           }
           .labelsHidden()
           .pickerStyle(.segmented)
+        }
+        .padding(.top, 4)
+      }
+      
+      Section(header: Text("View Modes Order")) {
+        VStack(alignment: .leading, spacing: 10) {
+          Text("Drag to reorder the view mode tabs")
+            .font(.caption)
+            .foregroundColor(themeColor(.textSecondary))
+          
+          ModeOrderList(manager: checkvistManager)
         }
         .padding(.top, 4)
       }
@@ -1359,6 +1371,44 @@ struct SettingsView: View {
   ]
 }
 // swiftlint:enable type_body_length
+
+private struct ModeOrderList: View {
+  @ObservedObject var manager: BarTaskerManager
+  @State private var orderedModes: [BarTaskerManager.RootTaskView] = []
+
+  var body: some View {
+    List {
+      ForEach(orderedModes, id: \.rawValue) { mode in
+        HStack(spacing: 8) {
+          Image(systemName: "line.3.horizontal")
+            .foregroundColor(.secondary)
+          Text(mode.title)
+          Spacer(minLength: 0)
+          if manager.rootTaskView == mode {
+            Text("Current")
+              .font(.caption2)
+              .foregroundColor(.secondary)
+          }
+        }
+        .padding(.vertical, 2)
+      }
+      .onMove(perform: moveModes)
+    }
+    .listStyle(.inset)
+    .frame(minHeight: 150, maxHeight: 210)
+    .onAppear(perform: syncModeOrder)
+  }
+
+  private func syncModeOrder() {
+    orderedModes = manager.orderedRootTaskViews
+  }
+
+  private func moveModes(from source: IndexSet, to destination: Int) {
+    orderedModes.move(fromOffsets: source, toOffset: destination)
+    manager.saveRootTaskViewOrder(orderedModes)
+    manager.objectWillChange.send()
+  }
+}
 
 private struct NamedTimePickerRow: View {
   let label: String

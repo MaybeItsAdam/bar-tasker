@@ -86,10 +86,7 @@ final class CheckvistSession {
       return false
     }
 
-    guard let url = URL(string: "https://checkvist.com/auth/login.json") else {
-      return false
-    }
-
+    let url = CheckvistEndpoints.login
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")

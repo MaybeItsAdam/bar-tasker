@@ -364,7 +364,7 @@ extension BarTaskerManager {
   }
 
   @MainActor func cycleRootTaskView(direction: Int) {
-    let allViews = RootTaskView.allCases
+    let allViews = orderedRootTaskViews
     guard let currentIndex = allViews.firstIndex(of: rootTaskView) else { return }
     let nextIndex = max(0, min(allViews.count - 1, currentIndex + direction))
     guard nextIndex != currentIndex else { return }

@@ -180,6 +180,7 @@ extension BarTaskerManager {
     case kanbanFocusLeft
     case kanbanFocusRight
     case rootTabKanban
+    case kanbanShowInAll
 
     var id: String { rawValue }
 
@@ -242,6 +243,7 @@ extension BarTaskerManager {
       case .kanbanFocusLeft: return "Kanban: focus previous column"
       case .kanbanFocusRight: return "Kanban: focus next column"
       case .rootTabKanban: return "Jump to root tab: Kanban"
+      case .kanbanShowInAll: return "Kanban: show task in All view"
       }
     }
 
@@ -251,7 +253,7 @@ extension BarTaskerManager {
         .rootCycleTabNext, .rootCycleFilterPrevious, .rootCycleFilterNext, .rootTabAll, .rootTabDue,
         .rootTabTags, .rootTabPriority, .rootFilter1, .rootFilter2, .rootFilter3, .rootFilter4,
         .rootFilter5, .rootFilter6, .rootFilter7, .rootTabKanban,
-        .kanbanFocusLeft, .kanbanFocusRight:
+        .kanbanFocusLeft, .kanbanFocusRight, .kanbanShowInAll:
         return "Navigation"
       case .markDone, .invalidateTask, .addSibling, .addChild, .unindentTask, .editTaskAtEnd,
         .editTaskAtStart, .deleteTask, .moveTaskUp, .moveTaskDown, .undo, .clearPriority,
@@ -326,6 +328,7 @@ extension BarTaskerManager {
       case .kanbanFocusLeft: return "left,h"
       case .kanbanFocusRight: return "right,l"
       case .rootTabKanban: return "t"
+      case .kanbanShowInAll: return "f"
       }
     }
   }

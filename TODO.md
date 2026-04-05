@@ -7,8 +7,8 @@ Findings from a full audit of the Bar Tasker codebase (2026-04-02). Items marked
 ## Security
 
 - [x] **Validate URL schemes before opening** — `BarTaskerManager+Integrations.swift` now filters to `http`/`https` only.
-- [ ] **Audit all `NSWorkspace.shared.open()` call sites** — The integrations file is fixed, but `AppDelegate.swift` and plugin files also open URLs (e.g. Google OAuth authorization URL, MCP guide URL). Verify each call site only opens expected schemes.
-- [ ] **Centralise API base URLs** — `CheckvistSession.swift:87` and `NativeGoogleCalendarIntegrationPlugin.swift:50-51` hardcode API URLs inline. Move to a configuration enum so they're auditable in one place.
+- [x] **Audit all `NSWorkspace.shared.open()` call sites** — All call sites reviewed. Obsidian (`obsidian://`), MCP guide (`file://`), plugins folder (`file://`), and Google OAuth (`https://accounts.google.com` by construction) are safe. Added `https` scheme guard to the two Google Calendar event URL opens (`outcome.urlToOpen` and `openSavedGoogleCalendarEventLink`) which read from API responses / UserDefaults.
+- [x] **Centralise API base URLs** — Created `CheckvistEndpoints.swift` with a single `baseURL` constant and typed endpoint helpers. Updated `CheckvistSession`, `NativeCheckvistSyncPlugin`, `CheckvistTaskRepository`, `BarTaskerMCPServer`, and `ObsidianSyncService` to use it. Google Calendar endpoints were already static constants in the plugin.
 
 ## Error Handling
 
@@ -38,7 +38,7 @@ Findings from a full audit of the Bar Tasker codebase (2026-04-02). Items marked
 ## Concurrency
 
 - [x] **Make `NetworkReachabilityMonitor` Sendable** — Marked `@unchecked Sendable` with `@Sendable` callback.
-- [ ] **Audit `DispatchQueue.main.async` in SwiftUI views** — `PopoverView.swift` has multiple `DispatchQueue.main.async` calls (lines ~276, 299, 303, 861, 872, 936) that set state without clear justification. These should either use `Task { @MainActor in }` for consistency or be removed if they're already on the main actor.
+- [x] **Audit `DispatchQueue.main.async` in SwiftUI views** — All four `DispatchQueue.main.async` / `asyncAfter` calls in `PopoverView.swift` converted to `Task { @MainActor in }`. The 0.1s `asyncAfter` (scroll-to-composer) converted to `Task.sleep(for: .milliseconds(100))`.
 - [ ] **Verify timer cancellation safety** — `BarTaskerManager+ReorderingAndTiming.swift:177-184`: the timer loop checks `Task.isCancelled` then sleeps then mutates. If the task is cancelled during the sleep, the mutation is skipped (correct), but consider whether the 1-second granularity causes UI jank on rapid task switches.
 
 ## Architecture

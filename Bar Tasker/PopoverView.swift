@@ -3,8 +3,8 @@ import SwiftUI
 
 // swiftlint:disable file_length
 enum PopoverLayout {
-  static let width: CGFloat = 360
-  static let kanbanColumnWidth: CGFloat = 240
+  static let width: CGFloat = 400
+  static let kanbanColumnWidth: CGFloat = 100
   static let minHeight: CGFloat = 220
   static let maxHeight: CGFloat = 520
 
@@ -286,7 +286,7 @@ struct QuickEntryField: NSViewRepresentable {
           }
         }
       } else {
-        DispatchQueue.main.async {
+        Task { @MainActor in
           tf.window?.makeFirstResponder(tf)
           if self.cursorAtEnd {
             tf.currentEditor()?.moveToEndOfDocument(nil)
@@ -309,11 +309,11 @@ struct QuickEntryField: NSViewRepresentable {
     init(_ quickEntryField: QuickEntryField) { parent = quickEntryField }
 
     func controlTextDidBeginEditing(_ obj: Notification) {
-      DispatchQueue.main.async { self.parent.isFocused = true }
+      Task { @MainActor in self.parent.isFocused = true }
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-      DispatchQueue.main.async { self.parent.isFocused = false }
+      Task { @MainActor in self.parent.isFocused = false }
     }
 
     func controlTextDidChange(_ obj: Notification) {
@@ -778,10 +778,10 @@ struct PopoverView: View {
   }
 
   var rootScopeSection: some View {
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 0) {
         ForEach(
-          Array(BarTaskerManager.RootTaskView.allCases.enumerated()),
+          Array(manager.orderedRootTaskViews.enumerated()),
           id: \.element.rawValue
         ) { index, scope in
           if index > 0 {
@@ -790,18 +790,18 @@ struct PopoverView: View {
           rootScopeTabButton(scope)
         }
       }
+      .frame(maxWidth: .infinity)
       .background(themeColor(.panelSurface))
       .overlay {
         Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
       }
-      .overlay {
-        Rectangle()
-          .stroke(
-            manager.rootScopeFocusLevel == 1 ? themeColor(.focusRing) : Color.clear,
-            lineWidth: 1
-          )
+      .overlay(alignment: .bottom) {
+        if manager.rootScopeFocusLevel == 1 {
+          Rectangle()
+            .fill(themeColor(.focusRing))
+            .frame(height: 2)
+        }
       }
-      .padding(.horizontal, PopoverLayout.rootScopeHorizontalInset)
 
       if manager.rootTaskView == .due {
         let dueBuckets = BarTaskerManager.RootDueBucket.allCases.filter { $0 != .noDueDate }
@@ -849,52 +849,53 @@ struct PopoverView: View {
         .overlay {
           Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
         }
-        .overlay {
-          Rectangle()
-            .stroke(
-              manager.rootScopeFocusLevel == 2 ? themeColor(.focusRing) : Color.clear,
-              lineWidth: 1
-            )
+        .overlay(alignment: .bottom) {
+          if manager.rootScopeFocusLevel == 2 {
+            Rectangle()
+              .fill(themeColor(.focusRing))
+              .frame(height: 2)
+          }
         }
-        .padding(.horizontal, PopoverLayout.rootScopeHorizontalInset)
       } else if manager.rootTaskView == .kanban {
         let tags = manager.rootLevelTagNames(limit: 30)
         let hasParent = manager.currentParentId != 0
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 0) {
-            rootScopeChip(
-              title: "All tasks",
-              isSelected: manager.kanbanFilterTag.isEmpty && !manager.kanbanFilterSubtasks
-            ) {
-              manager.kanbanFilterTag = ""
-              manager.kanbanFilterSubtasks = false
-            }
-
-            if hasParent {
-              rootScopeSeparator()
+        Group {
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
               rootScopeChip(
-                title: "Subtasks",
-                isSelected: manager.kanbanFilterSubtasks
+                title: "All tasks",
+                isSelected: manager.kanbanFilterTag.isEmpty && !manager.kanbanFilterSubtasks
               ) {
-                manager.kanbanFilterSubtasks.toggle()
-                if manager.kanbanFilterSubtasks { manager.kanbanFilterTag = "" }
+                manager.kanbanFilterTag = ""
+                manager.kanbanFilterSubtasks = false
               }
-            }
 
-            if !tags.isEmpty {
-              rootScopeSeparator()
-            }
+              if hasParent {
+                rootScopeSeparator()
+                rootScopeChip(
+                  title: "Subtasks",
+                  isSelected: manager.kanbanFilterSubtasks
+                ) {
+                  manager.kanbanFilterSubtasks.toggle()
+                  if manager.kanbanFilterSubtasks { manager.kanbanFilterTag = "" }
+                }
+              }
 
-            ForEach(Array(tags.enumerated()), id: \.element) { index, tag in
-              if index > 0 {
+              if !tags.isEmpty {
                 rootScopeSeparator()
               }
-              rootScopeChip(
-                title: tag,
-                isSelected: manager.kanbanFilterTag == tag
-              ) {
-                manager.kanbanFilterTag = manager.kanbanFilterTag == tag ? "" : tag
-                if !manager.kanbanFilterTag.isEmpty { manager.kanbanFilterSubtasks = false }
+
+              ForEach(Array(tags.enumerated()), id: \.element) { index, tag in
+                if index > 0 {
+                  rootScopeSeparator()
+                }
+                rootScopeChip(
+                  title: tag,
+                  isSelected: manager.kanbanFilterTag == tag
+                ) {
+                  manager.kanbanFilterTag = manager.kanbanFilterTag == tag ? "" : tag
+                  if !manager.kanbanFilterTag.isEmpty { manager.kanbanFilterSubtasks = false }
+                }
               }
             }
           }
@@ -903,14 +904,13 @@ struct PopoverView: View {
         .overlay {
           Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
         }
-        .overlay {
-          Rectangle()
-            .stroke(
-              manager.rootScopeFocusLevel == 2 ? themeColor(.focusRing) : Color.clear,
-              lineWidth: 1
-            )
+        .overlay(alignment: .bottom) {
+          if manager.rootScopeFocusLevel == 2 {
+            Rectangle()
+              .fill(themeColor(.focusRing))
+              .frame(height: 2)
+          }
         }
-        .padding(.horizontal, PopoverLayout.rootScopeHorizontalInset)
       } else if manager.rootTaskView == .tags {
         let tags = manager.rootLevelTagNames(limit: 30)
         ScrollViewReader { proxy in
@@ -957,14 +957,13 @@ struct PopoverView: View {
         .overlay {
           Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
         }
-        .overlay {
-          Rectangle()
-            .stroke(
-              manager.rootScopeFocusLevel == 2 ? themeColor(.focusRing) : Color.clear,
-              lineWidth: 1
-            )
+        .overlay(alignment: .bottom) {
+          if manager.rootScopeFocusLevel == 2 {
+            Rectangle()
+              .fill(themeColor(.focusRing))
+              .frame(height: 2)
+          }
         }
-        .padding(.horizontal, PopoverLayout.rootScopeHorizontalInset)
       }
     }
     .onAppear {
@@ -995,7 +994,7 @@ struct PopoverView: View {
       Text(scope.title)
         .font(.system(size: 12, weight: .semibold))
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
         .background(selected ? themeColor(.selectionBackground) : Color.clear)
         .foregroundColor(selected ? themeColor(.selectionForeground) : themeColor(.textSecondary))
     }
@@ -1106,7 +1105,8 @@ struct PopoverView: View {
           }
           .onChange(of: manager.isQuickEntryFocused) { _, focused in
             if focused && [.addSibling, .addChild].contains(manager.quickEntryMode) {
-              DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+              Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(100))
                 // Keep the inline composer visually attached to its task row.
                 proxy.scrollTo("quickEntry", anchor: .center)
               }
@@ -1366,29 +1366,6 @@ struct PopoverView: View {
     let hasGoogleCalendarLink = manager.hasGoogleCalendarEventLink(taskId: task.id)
 
     HStack(alignment: .top, spacing: PopoverLayout.rowContentSpacing) {
-      Image(
-        systemName: isCompleting
-          ? "checkmark.circle.fill" : showsSelectedStyling ? "largecircle.fill.circle" : "circle"
-      )
-      .foregroundColor(
-        isCompleting
-          ? themeColor(.success)
-          : showsSelectedStyling ? themeColor(.selectionForeground) : themeColor(.textSecondary)
-      )
-      .font(.system(size: 14))
-      .frame(width: PopoverLayout.rowIconWidth, alignment: .center)
-      .padding(.top, 1)
-      .scaleEffect(isCompleting ? 1.35 : 1.0)
-      .animation(.spring(response: 0.28, dampingFraction: 0.45), value: isCompleting)
-      .symbolEffect(.bounce, value: isCompleting)
-      .onTapGesture {
-        Task {
-          manager.rootScopeFocusLevel = 0
-          manager.currentSiblingIndex = index
-          await manager.markCurrentTaskDone()
-        }
-      }
-
       VStack(alignment: .leading, spacing: 3) {
         if manager.shouldShowBreadcrumbPath(for: task) {
           let includeCurrentParent =
@@ -1850,7 +1827,8 @@ struct PopoverView: View {
 
   @ViewBuilder
   func dueBadge(due: String, overdue: Bool, today: Bool) -> some View {
-    Text(due).font(.caption2)
+    let displayText = due == "asap" ? "ASAP" : naturalDateString(from: due)
+    Text(displayText).font(.caption2)
       .padding(.horizontal, 5).padding(.vertical, 2)
       .background(
         overdue
@@ -1863,6 +1841,46 @@ struct PopoverView: View {
           : today ? themeColor(.warning) : themeColor(.textSecondary)
       )
       .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+  
+  private func naturalDateString(from dueString: String) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    // Try date-only format first
+    formatter.dateFormat = "yyyy-MM-dd"
+    if let date = formatter.date(from: dueString) {
+      return naturalDateString(from: date)
+    }
+    // Try datetime format
+    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+    if let date = formatter.date(from: dueString) {
+      return naturalDateString(from: date)
+    }
+    return dueString
+  }
+  
+  private func naturalDateString(from date: Date) -> String {
+    let calendar = Calendar.current
+    let now = Date()
+    let today = calendar.startOfDay(for: now)
+    let targetDay = calendar.startOfDay(for: date)
+    let dayDiff = calendar.dateComponents([.day], from: today, to: targetDay).day ?? 0
+    
+    switch dayDiff {
+    case 0: return "Today"
+    case 1: return "Tomorrow"
+    case -1: return "Yesterday"
+    case 2...6:
+      let formatter = DateFormatter()
+      formatter.dateFormat = "EEEE"  // Day name
+      return formatter.string(from: date)
+    case 7...13: return "Next week"
+    case -7...(-2): return "Last week"
+    default:
+      let formatter = DateFormatter()
+      formatter.dateFormat = "MMM d"
+      return formatter.string(from: date)
+    }
   }
 
   @ViewBuilder
