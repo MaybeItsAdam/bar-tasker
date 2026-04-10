@@ -13,6 +13,7 @@ The goal is to decompose it into focused domain managers composed under a thin c
 - ✅ **Phase 1 complete**: `TimerManager` extracted, timer call sites rewired (`AppDelegate`, command executor, keyboard router, settings, popover), and project build succeeds.
 - ✅ **Phase 2 complete**: shortcut/theme behavior moved into `PreferencesManager`, call sites switched to `manager.preferences`, and `BarTaskerManager+PreferencesProxy.swift` removed.
 - ✅ **Phase 3 complete**: `KanbanManager` extracted with `KanbanTaskDataSource` protocol, all kanban state/logic moved, `BarTaskerManager+Kanban.swift` deleted, all call sites rewired.
+- ✅ **Phase 4 complete**: `RecurrenceManager` and `StartDateManager` extracted, persistence self-contained, coordinator extensions retained for `createNextOccurrence` orchestration and convenience accessors.
 
 ---
 
@@ -132,17 +133,31 @@ All managers are `@MainActor`. Cross-cutting operations (e.g. `markDone` → rep
 
 ---
 
-## Phase 4: Extract RecurrenceManager + StartDateManager
+## Phase 4: Extract RecurrenceManager + StartDateManager (Completed)
 
 **Risk**: Low — small, self-contained.
 
+**Status**: ✅ Completed
+
 **Create**: `Bar Tasker/Managers/RecurrenceManager.swift`, `Bar Tasker/Managers/StartDateManager.swift`
 
-**RecurrenceManager**: `recurrenceRulesByTaskId`, `recurrenceRule(for:)`, `setRecurrenceRule`, `clearRecurrenceRule`, `persistRecurrenceRules`, date parsing helpers. Note: `createNextOccurrence(for:)` **stays on the coordinator** because it calls `addTask` and `updateTask`.
+**RecurrenceManager**: `recurrenceRulesByTaskId`, `recurrenceRule(for:)`, `setRecurrenceRule`, `clearRecurrenceRule`, date parsing helpers, `computeNextOccurrence`, `transferRule`. Persistence is self-contained via `$recurrenceRulesByTaskId.sink`. Note: `createNextOccurrence(for:)` **stays on the coordinator** because it calls `addTask` and `updateTask`.
 
-**StartDateManager**: `taskStartDatesByTaskId`, all methods from `BarTaskerManager+StartTime.swift`
+**StartDateManager**: `taskStartDatesByTaskId`, all methods from `BarTaskerManager+StartTime.swift`. `setStartDate` receives a `resolveDueDate` closure from the coordinator for date resolution with named-time preferences. Persistence is self-contained via `$taskStartDatesByTaskId.sink`.
 
-**Files to update**: `BarTaskerManager.swift`, `BarTaskerManager+Recurrence.swift` (mostly deleted), `BarTaskerManager+StartTime.swift` (deleted), `BarTaskerManager+StateAndLifecycle.swift`
+**Completed so far**:
+- `RecurrenceManager` exists and owns recurrence rule storage, parsing, validation, and persistence.
+- `StartDateManager` exists and owns start date storage, display labels, date parsing, and persistence.
+- `BarTaskerManager` now owns `let recurrence = RecurrenceManager(...)` and `let startDates = StartDateManager(...)`.
+- `recurrence.objectWillChange` and `startDates.objectWillChange` forwarding is wired.
+- `@Published var recurrenceRulesByTaskId` and `@Published var taskStartDatesByTaskId` removed from `BarTaskerManager`.
+- `BarTaskerManager+Recurrence.swift` now delegates to `recurrence` for rule CRUD; `createNextOccurrence` remains as coordinator orchestration.
+- `BarTaskerManager+StartTime.swift` now delegates to `startDates` for all accessors and mutations.
+- Recurrence persistence sink removed from `BarTaskerManager+StateAndLifecycle.swift`.
+- Cache invalidation publisher updated to observe `startDates.$taskStartDatesByTaskId`.
+- All call sites (`PopoverView`, `BarTaskerCommandExecutor`) continue to work through the convenience methods on the coordinator extensions.
+
+**Files updated**: `BarTaskerManager.swift`, `BarTaskerManager+Recurrence.swift` (rewritten as thin coordinator extension), `BarTaskerManager+StartTime.swift` (rewritten as thin coordinator extension), `BarTaskerManager+StateAndLifecycle.swift`
 
 ---
 
@@ -236,6 +251,6 @@ Bar Tasker/Managers/
 | `BarTaskerManager+Integrations.swift` | Deleted in Phase 5 |
 | `BarTaskerManager+PreferencesAndShortcuts.swift` | Mostly deleted in Phase 2, remainder in Phase 5 |
 | `BarTaskerManager+PreferencesProxy.swift` | Deleted (Phase 2 complete) |
-| `BarTaskerManager+Recurrence.swift` | Mostly deleted in Phase 4 |
-| `BarTaskerManager+StartTime.swift` | Deleted in Phase 4 |
+| `BarTaskerManager+Recurrence.swift` | Rewritten as thin coordinator extension in Phase 4 (orchestration for `createNextOccurrence`) |
+| `BarTaskerManager+StartTime.swift` | Rewritten as thin coordinator extension in Phase 4 (convenience accessors) |
 | `BarTaskerManager+ReorderingAndTiming.swift` | Timer methods removed in Phase 1, reorder methods stay until Phase 7 |

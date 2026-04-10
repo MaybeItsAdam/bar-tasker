@@ -91,13 +91,11 @@ class BarTaskerManager: ObservableObject {
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
   private static let pendingObsidianSyncDefaultsKey = "pendingObsidianSyncTaskIdsByListId"
 
-  // MARK: - Start Dates (locally stored; Checkvist API has no start date field)
-  /// Maps task ID → start date string (same format as `due`).
-  @Published var taskStartDatesByTaskId: [Int: String] = [:]
+  // MARK: - Start Dates
+  let startDates: StartDateManager
 
-  // MARK: - Recurrence (locally stored; Checkvist API has no recurrence field)
-  /// Maps task ID → raw recurrence rule string (e.g. "daily", "every 3 days").
-  @Published var recurrenceRulesByTaskId: [Int: String] = [:]
+  // MARK: - Recurrence
+  let recurrence: RecurrenceManager
 
   // MARK: - Timer
   let timer: TimerManager
@@ -256,20 +254,8 @@ class BarTaskerManager: ObservableObject {
       }
     }
     self.timer = TimerManager(preferencesStore: preferencesStore)
-    let storedStartDates = preferencesStore.stringDictionary(.taskStartDatesByTaskId)
-    self.taskStartDatesByTaskId = Dictionary(
-      uniqueKeysWithValues: storedStartDates.compactMap { key, value in
-        guard let id = Int(key) else { return nil }
-        return (id, value)
-      }
-    )
-    let storedRecurrenceRules = preferencesStore.stringDictionary(.recurrenceRulesByTaskId)
-    self.recurrenceRulesByTaskId = Dictionary(
-      uniqueKeysWithValues: storedRecurrenceRules.compactMap { key, value in
-        guard let id = Int(key) else { return nil }
-        return (id, value)
-      }
-    )
+    self.startDates = StartDateManager(preferencesStore: preferencesStore)
+    self.recurrence = RecurrenceManager(preferencesStore: preferencesStore)
     self.activeOnboardingDialog = nil
     let persistedDismissedDialogs = preferencesStore.stringArray(.dismissedOnboardingDialogs)
     self.dismissedOnboardingDialogs = Set(
@@ -295,6 +281,12 @@ class BarTaskerManager: ObservableObject {
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
     kanban.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+    startDates.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+    recurrence.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
     kanban.dataSource = self

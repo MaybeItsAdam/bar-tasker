@@ -33,7 +33,7 @@ extension BarTaskerManager {
       kanban.$kanbanFilterTag.map { _ in () }.eraseToAnyPublisher(),
       kanban.$kanbanFilterSubtasks.map { _ in () }.eraseToAnyPublisher(),
       kanban.$kanbanFilterParentId.map { _ in () }.eraseToAnyPublisher(),
-      $taskStartDatesByTaskId.map { _ in () }.eraseToAnyPublisher()
+      startDates.$taskStartDatesByTaskId.map { _ in () }.eraseToAnyPublisher()
     )
     .sink { [weak self] _ in
       self?.invalidateCaches()
@@ -142,11 +142,8 @@ extension BarTaskerManager {
       }
       .store(in: &cancellables)
     // Timer persistence bindings are owned by TimerManager
-    $recurrenceRulesByTaskId.sink { [weak self] rules in
-      guard let self else { return }
-      let encoded = Dictionary(uniqueKeysWithValues: rules.map { (String($0.key), $0.value) })
-      self.preferencesStore.set(encoded, for: .recurrenceRulesByTaskId)
-    }.store(in: &cancellables)
+    // Recurrence persistence bindings are owned by RecurrenceManager
+    // Start date persistence bindings are owned by StartDateManager
   }
   // swiftlint:enable function_body_length
 
