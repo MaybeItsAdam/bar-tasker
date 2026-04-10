@@ -541,12 +541,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   func closeWindow() {
     window?.orderOut(nil)
     if [.addSibling, .addChild, .quickAddDefault, .quickAddSpecific].contains(
-      checkvistManager.quickEntryMode)
+      checkvistManager.quickEntry.quickEntryMode)
     {
-      checkvistManager.quickEntryText = ""
-      checkvistManager.quickEntryMode = .search
+      checkvistManager.quickEntry.quickEntryText = ""
+      checkvistManager.quickEntry.quickEntryMode = .search
     }
-    checkvistManager.isQuickEntryFocused = false
+    checkvistManager.quickEntry.isQuickEntryFocused = false
     updateTitle()  // Commit current selection as the menu bar title
   }
 
