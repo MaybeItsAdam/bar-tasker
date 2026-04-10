@@ -20,12 +20,12 @@ extension BarTaskerManager {
     Publishers.MergeMany(
       $tasks.map { _ in () }.eraseToAnyPublisher(),
       $currentParentId.map { _ in () }.eraseToAnyPublisher(),
-      $searchText.map { _ in () }.eraseToAnyPublisher(),
+      quickEntry.$searchText.map { _ in () }.eraseToAnyPublisher(),
       $hideFuture.map { _ in () }.eraseToAnyPublisher(),
       $rootTaskView.map { _ in () }.eraseToAnyPublisher(),
       $selectedRootDueBucketRawValue.map { _ in () }.eraseToAnyPublisher(),
       $selectedRootTag.map { _ in () }.eraseToAnyPublisher(),
-      $quickEntryMode.map { _ in () }.eraseToAnyPublisher(),
+      quickEntry.$quickEntryMode.map { _ in () }.eraseToAnyPublisher(),
       $priorityTaskIds.map { _ in () }.eraseToAnyPublisher(),
       timer.$timerByTaskId.map { _ in () }.eraseToAnyPublisher(),
       kanban.$kanbanColumns.map { _ in () }.eraseToAnyPublisher(),
@@ -66,27 +66,10 @@ extension BarTaskerManager {
       .sink { [weak self] value in
         self?.preferencesStore.set(value, for: .checkvistListId)
         self?.loadPriorityQueue(for: value)
-        self?.loadPendingObsidianSyncQueue(for: value)
+        self?.integrations.loadPendingObsidianSyncQueue(for: value)
         self?.refreshOnboardingDialogState()
       }.store(in: &cancellables)
-    $obsidianIntegrationEnabled
-      .sink { [weak self] value in
-        self?.preferencesStore.set(value, for: .obsidianIntegrationEnabled)
-        self?.refreshOnboardingDialogState()
-      }
-      .store(in: &cancellables)
-    $googleCalendarIntegrationEnabled
-      .sink { [weak self] value in
-        self?.preferencesStore.set(value, for: .googleCalendarIntegrationEnabled)
-        self?.refreshOnboardingDialogState()
-      }
-      .store(in: &cancellables)
-    $mcpIntegrationEnabled
-      .sink { [weak self] in
-        self?.preferencesStore.set($0, for: .mcpIntegrationEnabled)
-        self?.refreshOnboardingDialogState()
-      }
-      .store(in: &cancellables)
+    // Integration enable/disable persistence is owned by IntegrationCoordinator
     $rootTaskView.sink { [weak self] in
       self?.preferencesStore.set($0.rawValue, for: .rootTaskView)
     }
@@ -164,35 +147,12 @@ extension BarTaskerManager {
     priorityTaskIds = priorityQueueStore.load(for: listId)
   }
 
-  private func loadPendingObsidianSyncQueue(for listId: String) {
-    pendingObsidianSyncTaskIds = pendingSyncQueueStore.load(for: listId)
-  }
-
   func savePriorityQueue(_ queue: [Int]) {
     let normalized = Self.normalizedTaskIdQueue(queue, maximumCount: Self.maxPriorityRank)
     priorityTaskIds = normalized
 
     guard !listId.isEmpty else { return }
     priorityQueueStore.save(normalized, for: listId)
-  }
-
-  func savePendingObsidianSyncQueue(_ queue: [Int]) {
-    let normalized = Self.normalizedTaskIdQueue(queue)
-    pendingObsidianSyncTaskIds = normalized
-
-    guard !listId.isEmpty else { return }
-    pendingSyncQueueStore.save(normalized, for: listId)
-  }
-
-  @MainActor func enqueuePendingObsidianSync(taskId: Int) {
-    var queue = pendingObsidianSyncTaskIds
-    queue.removeAll { $0 == taskId }
-    queue.append(taskId)
-    savePendingObsidianSyncQueue(queue)
-  }
-
-  @MainActor func dequeuePendingObsidianSync(taskId: Int) {
-    savePendingObsidianSyncQueue(pendingObsidianSyncTaskIds.filter { $0 != taskId })
   }
 
   func setupNetworkMonitor() {
@@ -202,10 +162,12 @@ extension BarTaskerManager {
         self.isNetworkReachable = reachable
         guard reachable else { return }
         await self.flushPendingTaskMutations()
-        guard self.obsidianIntegrationEnabled, !self.pendingObsidianSyncTaskIds.isEmpty else {
+        guard self.integrations.obsidianIntegrationEnabled,
+          !self.integrations.pendingObsidianSyncTaskIds.isEmpty
+        else {
           return
         }
-        await self.processPendingObsidianSyncQueue()
+        await self.integrations.processPendingObsidianSyncQueue()
       }
     }
     reachabilityMonitor.start()
@@ -227,11 +189,10 @@ extension BarTaskerManager {
   }
 
   @MainActor func reconcilePendingObsidianSyncQueueWithOpenTasks() {
-    let openTaskIds = Set(tasks.map(\.id))
-    let filtered = pendingObsidianSyncTaskIds.filter { openTaskIds.contains($0) }
-    if filtered != pendingObsidianSyncTaskIds {
-      savePendingObsidianSyncQueue(filtered)
-    }
+    integrations.reconcilePendingObsidianSyncQueueWithOpenTasks(
+      openTaskIds: Set(tasks.map(\.id)),
+      listId: listId
+    )
   }
 
   @MainActor
@@ -406,7 +367,7 @@ extension BarTaskerManager {
     case .checkvist:
       return false
     case .obsidian:
-      return obsidianIntegrationEnabled && obsidianInboxPath.isEmpty
+      return integrations.obsidianIntegrationEnabled && integrations.obsidianInboxPath.isEmpty
     case .googleCalendar:
       return false
     case .mcp:

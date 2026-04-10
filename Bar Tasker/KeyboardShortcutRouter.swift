@@ -32,11 +32,11 @@ struct KeyboardShortcutRouter {
     let typingInNativeTextField = firstResponder is NSTextView
     // The binding can drift briefly during AppKit focus changes; trust the native
     // first responder so Enter stays with the active text field.
-    let isFocused = manager.isQuickEntryFocused || typingInNativeTextField
+    let isFocused = manager.quickEntry.isQuickEntryFocused || typingInNativeTextField
     if manager.needsInitialSetup {
       // During onboarding, let all key events through to the setup form.
       // Only handle Escape to close the window.
-      manager.keyBuffer = ""
+      manager.quickEntry.keyBuffer = ""
       if event.keyCode == 53 {
         closeWindow()
         return true
@@ -45,7 +45,7 @@ struct KeyboardShortcutRouter {
     }
     if manager.activeOnboardingDialog != nil {
       // Do not trigger task shortcuts while onboarding UI is active.
-      manager.keyBuffer = ""
+      manager.quickEntry.keyBuffer = ""
       if event.keyCode == 53 {
         closeWindow()
         return true
@@ -82,36 +82,36 @@ struct KeyboardShortcutRouter {
 
     // Reliable fallback for command/actions prompt.
     if !isFocused && matches(.openCommandPalette) {
-      manager.keyBuffer = ""
-      manager.quickEntryMode = .command
-      manager.quickEntryText = ""
-      manager.isQuickEntryFocused = true
-      manager.commandSuggestionIndex = 0
+      manager.quickEntry.keyBuffer = ""
+      manager.quickEntry.quickEntryMode = .command
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.isQuickEntryFocused = true
+      manager.quickEntry.commandSuggestionIndex = 0
       logger.log("Opened command palette via Cmd+K")
       return true
     }
 
-    if manager.quickEntryMode == .command && isFocused {
+    if manager.quickEntry.quickEntryMode == .command && isFocused {
       if event.keyCode == 125 {
-        manager.selectNextCommandSuggestion(for: manager.quickEntryText)
+        manager.selectNextCommandSuggestion(for: manager.quickEntry.quickEntryText)
         return true
       }
       if event.keyCode == 126 {
-        manager.selectPreviousCommandSuggestion(for: manager.quickEntryText)
+        manager.selectPreviousCommandSuggestion(for: manager.quickEntry.quickEntryText)
         return true
       }
       if event.keyCode == 36 {
-        let suggestions = manager.filteredCommandSuggestions(query: manager.quickEntryText)
-        if suggestions.indices.contains(manager.commandSuggestionIndex) {
-          let selected = suggestions[manager.commandSuggestionIndex]
+        let suggestions = manager.filteredCommandSuggestions(query: manager.quickEntry.quickEntryText)
+        if suggestions.indices.contains(manager.quickEntry.commandSuggestionIndex) {
+          let selected = suggestions[manager.quickEntry.commandSuggestionIndex]
           if selected.submitImmediately {
-            manager.isQuickEntryFocused = false
-            manager.quickEntryMode = .search
-            manager.quickEntryText = ""
+            manager.quickEntry.isQuickEntryFocused = false
+            manager.quickEntry.quickEntryMode = .search
+            manager.quickEntry.quickEntryText = ""
             Task { await manager.executeCommandInput(selected.command) }
           } else {
-            manager.quickEntryText = selected.command
-            manager.isQuickEntryFocused = true
+            manager.quickEntry.quickEntryText = selected.command
+            manager.quickEntry.isQuickEntryFocused = true
           }
           return true
         }
@@ -119,9 +119,9 @@ struct KeyboardShortcutRouter {
     }
 
     // Delete confirmation: Return confirms, anything else cancels.
-    if manager.pendingDeleteConfirmation {
+    if manager.quickEntry.pendingDeleteConfirmation {
       if event.keyCode == 36 {  // Return - confirm delete.
-        manager.pendingDeleteConfirmation = false
+        manager.quickEntry.pendingDeleteConfirmation = false
         Task {
           if let task = manager.currentTask {
             await manager.deleteTask(task)
@@ -130,10 +130,10 @@ struct KeyboardShortcutRouter {
         }
         return true
       } else {
-        manager.pendingDeleteConfirmation = false
-        manager.quickEntryText = ""
-        manager.quickEntryMode = .search
-        manager.isQuickEntryFocused = false
+        manager.quickEntry.pendingDeleteConfirmation = false
+        manager.quickEntry.quickEntryText = ""
+        manager.quickEntry.quickEntryMode = .search
+        manager.quickEntry.isQuickEntryFocused = false
         if event.keyCode == 53 { return true }  // Escape just cancels.
       }
     }
@@ -303,10 +303,10 @@ struct KeyboardShortcutRouter {
       if isFocused { return false }
       manager.rootScopeFocusLevel = 0
       manager.enterChildren()
-      if !manager.searchText.isEmpty {
-        manager.searchText = ""
-        manager.quickEntryMode = .search
-        manager.isQuickEntryFocused = false
+      if !manager.quickEntry.searchText.isEmpty {
+        manager.quickEntry.searchText = ""
+        manager.quickEntry.quickEntryMode = .search
+        manager.quickEntry.isQuickEntryFocused = false
       }
       return true
     }
@@ -314,10 +314,10 @@ struct KeyboardShortcutRouter {
     if matches(.exitToParent) {
       if isFocused { return false }
       manager.rootScopeFocusLevel = 0
-      if !manager.searchText.isEmpty {
-        manager.searchText = ""
-        manager.quickEntryMode = .search
-        manager.isQuickEntryFocused = false
+      if !manager.quickEntry.searchText.isEmpty {
+        manager.quickEntry.searchText = ""
+        manager.quickEntry.quickEntryMode = .search
+        manager.quickEntry.isQuickEntryFocused = false
       }
       manager.exitToParent()
       updateTitle()
@@ -351,9 +351,9 @@ struct KeyboardShortcutRouter {
         return true
       }
       if isFocused { return false }
-      manager.quickEntryMode = .addSibling
-      manager.quickEntryText = ""
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .addSibling
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.isQuickEntryFocused = true
       return true
     }
     if matches(.addChild) {
@@ -362,9 +362,9 @@ struct KeyboardShortcutRouter {
         return true
       }
       if isFocused { return false }
-      manager.quickEntryMode = .addChild
-      manager.quickEntryText = ""
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .addChild
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.isQuickEntryFocused = true
       return true
     }
 
@@ -384,17 +384,17 @@ struct KeyboardShortcutRouter {
         manager.rootScopeFocusLevel = 0
         return true
       }
-      if manager.quickEntryMode == .search {
-        if isFocused || !manager.searchText.isEmpty {
-          manager.isQuickEntryFocused = false
-          manager.searchText = ""
+      if manager.quickEntry.quickEntryMode == .search {
+        if isFocused || !manager.quickEntry.searchText.isEmpty {
+          manager.quickEntry.isQuickEntryFocused = false
+          manager.quickEntry.searchText = ""
           return true
         }
-      } else if isFocused || !manager.quickEntryText.isEmpty {
-        manager.isQuickEntryFocused = false
-        manager.quickEntryMode = .search
-        manager.quickEntryText = ""
-        manager.commandSuggestionIndex = 0
+      } else if isFocused || !manager.quickEntry.quickEntryText.isEmpty {
+        manager.quickEntry.isQuickEntryFocused = false
+        manager.quickEntry.quickEntryMode = .search
+        manager.quickEntry.quickEntryText = ""
+        manager.quickEntry.commandSuggestionIndex = 0
         return true
       }
       closeWindow()
@@ -403,10 +403,10 @@ struct KeyboardShortcutRouter {
 
     // F2 - edit task, cursor at end.
     if !isFocused && matches(.editTaskAtEnd) {
-      manager.quickEntryMode = .editTask
-      manager.editCursorAtEnd = true
-      manager.quickEntryText = manager.currentTask?.content ?? ""
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .editTask
+      manager.quickEntry.editCursorAtEnd = true
+      manager.quickEntry.quickEntryText = manager.currentTask?.content ?? ""
+      manager.quickEntry.isQuickEntryFocused = true
       return true
     }
 
@@ -414,11 +414,11 @@ struct KeyboardShortcutRouter {
     if !isFocused && matches(.deleteTask) {
       if isRepeat { return true }
       if manager.preferences.confirmBeforeDelete {
-        manager.pendingDeleteConfirmation = true
-        manager.quickEntryMode = .command
-        manager.commandSuggestionIndex = 0
-        manager.quickEntryText = ""
-        manager.isQuickEntryFocused = false
+        manager.quickEntry.pendingDeleteConfirmation = true
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = ""
+        manager.quickEntry.isQuickEntryFocused = false
       } else {
         Task {
           if let task = manager.currentTask {
@@ -488,37 +488,37 @@ struct KeyboardShortcutRouter {
         return String(token.prefix(1))
       }
     )
-    if !manager.keyBuffer.isEmpty {
-      let sequence = manager.keyBuffer + chars
-      manager.keyBuffer = ""
+    if !manager.quickEntry.keyBuffer.isEmpty {
+      let sequence = manager.quickEntry.keyBuffer + chars
+      manager.quickEntry.keyBuffer = ""
       if !isFocused {
         if manager.preferences.shortcutMatchesSequence(action: .sequenceDue, sequence: sequence) {
-          manager.quickEntryMode = .command
-          manager.commandSuggestionIndex = 0
-          manager.quickEntryText = "due "
-          manager.isQuickEntryFocused = true
+          manager.quickEntry.quickEntryMode = .command
+          manager.quickEntry.commandSuggestionIndex = 0
+          manager.quickEntry.quickEntryText = "due "
+          manager.quickEntry.isQuickEntryFocused = true
           return true
         }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceDueToday, sequence: sequence)
         {
-          manager.quickEntryMode = .command
-          manager.commandSuggestionIndex = 0
-          manager.quickEntryText = "due today "
-          manager.isQuickEntryFocused = true
+          manager.quickEntry.quickEntryMode = .command
+          manager.quickEntry.commandSuggestionIndex = 0
+          manager.quickEntry.quickEntryText = "due today "
+          manager.quickEntry.isQuickEntryFocused = true
           return true
         }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceStart, sequence: sequence) {
-          manager.quickEntryMode = .command
-          manager.commandSuggestionIndex = 0
-          manager.quickEntryText = "start "
-          manager.isQuickEntryFocused = true
+          manager.quickEntry.quickEntryMode = .command
+          manager.quickEntry.commandSuggestionIndex = 0
+          manager.quickEntry.quickEntryText = "start "
+          manager.quickEntry.isQuickEntryFocused = true
           return true
         }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceRepeat, sequence: sequence) {
-          manager.quickEntryMode = .command
-          manager.commandSuggestionIndex = 0
-          manager.quickEntryText = "repeat "
-          manager.isQuickEntryFocused = true
+          manager.quickEntry.quickEntryMode = .command
+          manager.quickEntry.commandSuggestionIndex = 0
+          manager.quickEntry.quickEntryText = "repeat "
+          manager.quickEntry.isQuickEntryFocused = true
           return true
         }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceOpenLink, sequence: sequence)
@@ -534,17 +534,17 @@ struct KeyboardShortcutRouter {
           return true
         }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceTag, sequence: sequence) {
-          manager.quickEntryMode = .command
-          manager.commandSuggestionIndex = 0
-          manager.quickEntryText = "tag "
-          manager.isQuickEntryFocused = true
+          manager.quickEntry.quickEntryMode = .command
+          manager.quickEntry.commandSuggestionIndex = 0
+          manager.quickEntry.quickEntryText = "tag "
+          manager.quickEntry.isQuickEntryFocused = true
           return true
         }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceUntag, sequence: sequence) {
-          manager.quickEntryMode = .command
-          manager.commandSuggestionIndex = 0
-          manager.quickEntryText = "untag "
-          manager.isQuickEntryFocused = true
+          manager.quickEntry.quickEntryMode = .command
+          manager.quickEntry.commandSuggestionIndex = 0
+          manager.quickEntry.quickEntryText = "untag "
+          manager.quickEntry.isQuickEntryFocused = true
           return true
         }
         if manager.preferences.shortcutMatchesSequence(
@@ -558,7 +558,7 @@ struct KeyboardShortcutRouter {
       return false
     }
     if sequenceStarters.contains(chars) && !shift && !ctrl && !isFocused {
-      manager.keyBuffer = chars
+      manager.quickEntry.keyBuffer = chars
       return true
     }
 
@@ -594,10 +594,10 @@ struct KeyboardShortcutRouter {
 
     // Shift+L - fast list switch prompt.
     if !isFocused && matches(.quickListSwitch) {
-      manager.quickEntryMode = .command
-      manager.commandSuggestionIndex = 0
-      manager.quickEntryText = "list "
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .command
+      manager.quickEntry.commandSuggestionIndex = 0
+      manager.quickEntry.quickEntryText = "list "
+      manager.quickEntry.isQuickEntryFocused = true
       return true
     }
 
@@ -609,8 +609,8 @@ struct KeyboardShortcutRouter {
 
     // Forward-slash - focus search.
     if !isFocused && matches(.focusSearch) {
-      manager.quickEntryMode = .search
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .search
+      manager.quickEntry.isQuickEntryFocused = true
       return true
     }
 
@@ -638,10 +638,10 @@ struct KeyboardShortcutRouter {
 
     // i - insert, a - append.
     if !isFocused && matches(.editTaskAtStart) {
-      manager.quickEntryMode = .editTask
-      manager.editCursorAtEnd = false
-      manager.quickEntryText = manager.currentTask?.content ?? ""
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .editTask
+      manager.quickEntry.editCursorAtEnd = false
+      manager.quickEntry.quickEntryText = manager.currentTask?.content ?? ""
+      manager.quickEntry.isQuickEntryFocused = true
       return true
     }
 

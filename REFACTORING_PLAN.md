@@ -161,17 +161,17 @@ All managers are `@MainActor`. Cross-cutting operations (e.g. `markDone` → rep
 
 ---
 
-## Phase 5: Extract IntegrationCoordinator + QuickEntryManager
+## Phase 5: Extract IntegrationCoordinator + QuickEntryManager (Completed)
 
 **Risk**: Medium — integration code touches `errorMessage`, `tasks`, `listId`.
 
 **Create**: `Bar Tasker/Managers/IntegrationCoordinator.swift`, `Bar Tasker/Managers/QuickEntryManager.swift`
 
-**IntegrationCoordinator**: Absorbs `BarTaskerManager+Integrations.swift`. Holds `obsidianIntegrationEnabled`, `obsidianInboxPath`, `googleCalendarIntegrationEnabled`, `googleCalendarEventLinksByTaskKey`, `mcpIntegrationEnabled`, `mcpServerCommandPath`, `pendingObsidianSyncTaskIds`. Receives plugin references at init.
+**IntegrationCoordinator**: Absorbs `BarTaskerManager+Integrations.swift`. Holds `obsidianIntegrationEnabled`, `obsidianInboxPath`, `googleCalendarIntegrationEnabled`, `googleCalendarEventLinksByTaskKey`, `mcpIntegrationEnabled`, `mcpServerCommandPath`, `pendingObsidianSyncTaskIds`. Receives plugin references at init. Uses `IntegrationDataSource` protocol for decoupled access to tasks/listId/credentials. Methods return `String?` errors instead of setting `errorMessage` directly.
 
-**QuickEntryManager**: `quickEntryText`, `quickEntryMode`, `isQuickEntryFocused`, `editCursorAtEnd`, `commandSuggestionIndex`, `searchText`, `keyBuffer`, `pendingDeleteConfirmation`, `completingTaskId`. Also: `filteredCommandSuggestions`, selection cycling methods.
+**QuickEntryManager**: `quickEntryText`, `quickEntryMode`, `isQuickEntryFocused`, `editCursorAtEnd`, `commandSuggestionIndex`, `searchText`, `keyBuffer`, `pendingDeleteConfirmation`, `completingTaskId`. Also: `filteredCommandSuggestions`, selection cycling methods, `isSearchFilterActive` computed property.
 
-**Files to update**: `BarTaskerManager.swift`, `BarTaskerManager+Integrations.swift` (deleted), `BarTaskerManager+PreferencesAndShortcuts.swift`, `BarTaskerCommandExecutor.swift`, `PopoverView.swift`, `KeyboardShortcutRouter.swift`
+**Files updated**: `BarTaskerManager.swift`, `BarTaskerManager+Integrations.swift` (rewritten as thin delegation layer), `BarTaskerManager+PreferencesAndShortcuts.swift`, `BarTaskerManager+StateAndLifecycle.swift`, `BarTaskerManager+TaskOperations.swift`, `BarTaskerManager+TaskScoping.swift`, `BarTaskerCommandExecutor.swift`, `PopoverView.swift`, `KeyboardShortcutRouter.swift`, `KanbanBoardView.swift`, `SettingsView.swift`, plugin settings views
 
 ---
 
@@ -248,8 +248,8 @@ Bar Tasker/Managers/
 | `BarTaskerManager+TaskOperations.swift` | Shrinks phases 1-5 → absorbed into TaskRepository in Phase 7 |
 | `BarTaskerManager+TaskScoping.swift` | Stays on coordinator (visibility/cache logic) or moves to TaskRepository |
 | `BarTaskerManager+Kanban.swift` | Deleted in Phase 3 |
-| `BarTaskerManager+Integrations.swift` | Deleted in Phase 5 |
-| `BarTaskerManager+PreferencesAndShortcuts.swift` | Mostly deleted in Phase 2, remainder in Phase 5 |
+| `BarTaskerManager+Integrations.swift` | Rewritten as thin delegation layer in Phase 5 |
+| `BarTaskerManager+PreferencesAndShortcuts.swift` | Rewritten as thin delegation layer in Phase 5 |
 | `BarTaskerManager+PreferencesProxy.swift` | Deleted (Phase 2 complete) |
 | `BarTaskerManager+Recurrence.swift` | Rewritten as thin coordinator extension in Phase 4 (orchestration for `createNextOccurrence`) |
 | `BarTaskerManager+StartTime.swift` | Rewritten as thin coordinator extension in Phase 4 (convenience accessors) |

@@ -14,13 +14,13 @@ private struct MCPIntegrationPluginSettingsView: View {
 
   var body: some View {
     Section(header: Text("MCP Plugin")) {
-      Toggle("Enable MCP integration", isOn: $manager.mcpIntegrationEnabled)
+      Toggle("Enable MCP integration", isOn: $manager.integrations.mcpIntegrationEnabled)
 
-      if manager.mcpIntegrationEnabled {
+      if manager.integrations.mcpIntegrationEnabled {
         VStack(alignment: .leading, spacing: 8) {
           Text("MCP Server")
           if manager.hasResolvedMCPServerCommand {
-            Text(manager.mcpServerCommandPath)
+            Text(manager.integrations.mcpServerCommandPath)
               .font(.caption)
               .textSelection(.enabled)
           } else {

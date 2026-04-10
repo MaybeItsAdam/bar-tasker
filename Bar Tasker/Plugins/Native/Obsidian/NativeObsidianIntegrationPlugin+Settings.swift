@@ -14,17 +14,17 @@ private struct ObsidianIntegrationPluginSettingsView: View {
 
   var body: some View {
     Section(header: Text("Obsidian Plugin")) {
-      Toggle("Enable Obsidian integration", isOn: $manager.obsidianIntegrationEnabled)
+      Toggle("Enable Obsidian integration", isOn: $manager.integrations.obsidianIntegrationEnabled)
 
-      if manager.obsidianIntegrationEnabled {
+      if manager.integrations.obsidianIntegrationEnabled {
         VStack(alignment: .leading, spacing: 8) {
           Text("Obsidian Inbox")
-          if manager.obsidianInboxPath.isEmpty {
+          if manager.integrations.obsidianInboxPath.isEmpty {
             Text("No folder selected")
               .foregroundColor(.secondary)
               .font(.caption)
           } else {
-            Text(manager.obsidianInboxPath)
+            Text(manager.integrations.obsidianInboxPath)
               .font(.caption)
               .textSelection(.enabled)
           }
@@ -33,7 +33,7 @@ private struct ObsidianIntegrationPluginSettingsView: View {
             Button("Choose Folder") {
               manager.chooseObsidianInboxFolder()
             }
-            if !manager.obsidianInboxPath.isEmpty {
+            if !manager.integrations.obsidianInboxPath.isEmpty {
               Button("Clear") {
                 manager.clearObsidianInboxFolder()
               }

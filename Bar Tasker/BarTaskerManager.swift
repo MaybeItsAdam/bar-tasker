@@ -31,16 +31,12 @@ class BarTaskerManager: ObservableObject {
   // MARK: - Undo
   @Published var lastUndo: UndoableAction? = nil
 
-  @Published var searchText: String = ""
-  @Published var quickEntryText: String = ""
   @Published var hideFuture: Bool = false
   @Published var rootTaskView: RootTaskView
   @Published var selectedRootDueBucketRawValue: Int
   @Published var selectedRootTag: String
   /// 0 = task list, 1 = root tabs (All/Due/Tags), 2 = root filter row (due buckets/tags)
   @Published var rootScopeFocusLevel: Int = 0
-  @Published var keyBuffer: String = ""
-  
   var orderedRootTaskViews: [RootTaskView] {
     if let data = UserDefaults.standard.data(forKey: "rootTaskViewOrder"),
        let rawValues = try? JSONDecoder().decode([Int].self, from: data) {
@@ -60,23 +56,8 @@ class BarTaskerManager: ObservableObject {
       UserDefaults.standard.set(data, forKey: "rootTaskViewOrder")
     }
   }
-  @Published var quickEntryMode: QuickEntryMode = .search
-  @Published var isQuickEntryFocused: Bool = false
-  @Published var editCursorAtEnd: Bool = true  // true = append (a), false = insert (i)
-  @Published var pendingDeleteConfirmation: Bool = false
-  @Published var completingTaskId: Int? = nil
-  @Published var commandSuggestionIndex: Int = 0
   @Published var priorityTaskIds: [Int]
 
-  static let commandSuggestions: [CommandSuggestion] = BarTaskerCommandEngine.suggestions.map {
-    .init(
-      label: $0.label,
-      command: $0.command,
-      preview: $0.preview,
-      keybind: $0.keybind,
-      submitImmediately: $0.submitImmediately
-    )
-  }
   static let maxPriorityRank = 9
 
   // MARK: - Carbon hotkey constants
@@ -89,7 +70,6 @@ class BarTaskerManager: ObservableObject {
     static let shiftOption = 0x0A00
   }
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
-  private static let pendingObsidianSyncDefaultsKey = "pendingObsidianSyncTaskIdsByListId"
 
   // MARK: - Start Dates
   let startDates: StartDateManager
@@ -101,9 +81,10 @@ class BarTaskerManager: ObservableObject {
   let timer: TimerManager
 
   // MARK: - Integrations
-  @Published var obsidianIntegrationEnabled: Bool
-  @Published var googleCalendarIntegrationEnabled: Bool
-  @Published var mcpIntegrationEnabled: Bool
+  @Published var integrations: IntegrationCoordinator
+
+  // MARK: - Quick Entry
+  @Published var quickEntry: QuickEntryManager
 
   // MARK: - Kanban
   let kanban: KanbanManager
@@ -111,10 +92,6 @@ class BarTaskerManager: ObservableObject {
   let preferences: PreferencesManager
   @Published var onboardingCompleted: Bool
   @Published var activeOnboardingDialog: OnboardingDialog?
-  @Published var obsidianInboxPath: String
-  @Published var mcpServerCommandPath: String
-  @Published var pendingObsidianSyncTaskIds: [Int]
-  @Published var googleCalendarEventLinksByTaskKey: [String: String]
   @Published var isNetworkReachable: Bool = true
 
   /// Mutations that failed due to network unavailability, pending a retry when connectivity is restored.
@@ -132,15 +109,11 @@ class BarTaskerManager: ObservableObject {
   var loadingOperationCount: Int = 0
   var cancellables = Set<AnyCancellable>()
   let reorderQueue = BarTaskerReorderQueue()
-  var hasPendingSyncProcessingTask = false
   var isApplyingLaunchAtLoginChange = false
   var hasAttemptedRemoteKeyBootstrap = false
   let preferencesStore = BarTaskerPreferencesStore()
   let localTaskStore: LocalTaskStore
   let checkvistSyncPlugin: any CheckvistSyncPlugin
-  let obsidianPlugin: any ObsidianIntegrationPlugin
-  let googleCalendarPlugin: any GoogleCalendarIntegrationPlugin
-  let mcpIntegrationPlugin: any MCPIntegrationPlugin
   let userPluginManager: UserPluginManager
   lazy var commandExecutor = BarTaskerCommandExecutor(manager: self)
   let navigationCoordinator = TaskNavigationCoordinator()
@@ -148,9 +121,6 @@ class BarTaskerManager: ObservableObject {
   let priorityQueueStore = ListScopedTaskIDStore(
     defaultsKey: BarTaskerManager.priorityQueuesDefaultsKey,
     maximumCount: BarTaskerManager.maxPriorityRank
-  )
-  let pendingSyncQueueStore = ListScopedTaskIDStore(
-    defaultsKey: BarTaskerManager.pendingObsidianSyncDefaultsKey
   )
   var usesKeychainStorage: Bool {
     #if DEBUG
@@ -181,9 +151,6 @@ class BarTaskerManager: ObservableObject {
       ?? NativeMCPIntegrationPlugin()
     self.checkvistSyncPlugin = resolvedCheckvistSyncPlugin
     self.localTaskStore = resolvedLocalTaskStore
-    self.obsidianPlugin = resolvedObsidianPlugin
-    self.googleCalendarPlugin = resolvedGoogleCalendarPlugin
-    self.mcpIntegrationPlugin = resolvedMCPIntegrationPlugin
     self.userPluginManager = UserPluginManager(
       builtInPluginIdentifiers: [
         resolvedCheckvistSyncPlugin.pluginIdentifier,
@@ -199,12 +166,6 @@ class BarTaskerManager: ObservableObject {
     let storedOnboardingCompletedFlag = preferencesStore.optionalBool(.onboardingCompleted)
     let storedPluginSelectionOnboardingCompletedFlag = preferencesStore.optionalBool(
       .pluginSelectionOnboardingCompleted)
-    let storedObsidianIntegrationEnabled = preferencesStore.optionalBool(
-      .obsidianIntegrationEnabled)
-    let storedGoogleCalendarIntegrationEnabled = preferencesStore.optionalBool(
-      .googleCalendarIntegrationEnabled)
-    let storedMCPIntegrationEnabled = preferencesStore.optionalBool(.mcpIntegrationEnabled)
-    let storedObsidianInboxPath = resolvedObsidianPlugin.inboxPath
     self.username = storedUsername
     self.listId = storedListId
     self.tasks =
@@ -213,21 +174,7 @@ class BarTaskerManager: ObservableObject {
     self.offlineArchivedTasksById = Dictionary(
       uniqueKeysWithValues: offlinePayload.archivedTasks.map { ($0.id, $0) })
     self.nextOfflineTaskIdValue = max(offlinePayload.nextTaskId, 1)
-    self.pendingObsidianSyncTaskIds = pendingSyncQueueStore.load(for: storedListId)
-    self.googleCalendarEventLinksByTaskKey = preferencesStore.stringDictionary(
-      .googleCalendarEventLinksByTaskKey)
     self.priorityTaskIds = priorityQueueStore.load(for: storedListId)
-    self.obsidianInboxPath = storedObsidianInboxPath
-    self.obsidianIntegrationEnabled =
-      storedObsidianIntegrationEnabled
-      ?? preferencesStore.bool(.obsidianIntegrationEnabled, default: false)
-    self.googleCalendarIntegrationEnabled =
-      storedGoogleCalendarIntegrationEnabled
-      ?? preferencesStore.bool(.googleCalendarIntegrationEnabled, default: false)
-    self.mcpIntegrationEnabled =
-      storedMCPIntegrationEnabled
-      ?? preferencesStore.bool(.mcpIntegrationEnabled, default: false)
-    self.mcpServerCommandPath = resolvedMCPIntegrationPlugin.serverCommandURL()?.path ?? ""
     self.rootTaskView =
       RootTaskView(rawValue: preferencesStore.int(.rootTaskView, default: 1)) ?? .due
     self.selectedRootDueBucketRawValue = preferencesStore.int(
@@ -237,11 +184,15 @@ class BarTaskerManager: ObservableObject {
     if let storedOnboarding = storedOnboardingCompletedFlag {
       self.onboardingCompleted = storedOnboarding
     } else {
-      // Existing installs with saved account + list skip onboarding by default.
       self.onboardingCompleted = !storedUsername.isEmpty && !storedListId.isEmpty
     }
 
     if storedPluginSelectionOnboardingCompletedFlag == nil {
+      let storedObsidianIntegrationEnabled = preferencesStore.optionalBool(
+        .obsidianIntegrationEnabled)
+      let storedGoogleCalendarIntegrationEnabled = preferencesStore.optionalBool(
+        .googleCalendarIntegrationEnabled)
+      let storedMCPIntegrationEnabled = preferencesStore.optionalBool(.mcpIntegrationEnabled)
       let hasLegacyState =
         storedOnboardingCompletedFlag != nil
         || !storedUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -256,6 +207,14 @@ class BarTaskerManager: ObservableObject {
     self.timer = TimerManager(preferencesStore: preferencesStore)
     self.startDates = StartDateManager(preferencesStore: preferencesStore)
     self.recurrence = RecurrenceManager(preferencesStore: preferencesStore)
+    self.quickEntry = QuickEntryManager()
+    self.integrations = IntegrationCoordinator(
+      preferencesStore: preferencesStore,
+      obsidianPlugin: resolvedObsidianPlugin,
+      googleCalendarPlugin: resolvedGoogleCalendarPlugin,
+      mcpIntegrationPlugin: resolvedMCPIntegrationPlugin,
+      initialListId: storedListId
+    )
     self.activeOnboardingDialog = nil
     let persistedDismissedDialogs = preferencesStore.stringArray(.dismissedOnboardingDialogs)
     self.dismissedOnboardingDialogs = Set(
@@ -274,22 +233,18 @@ class BarTaskerManager: ObservableObject {
       useKeychainStorageAtInit: useKeychainStorageAtInit)
 
     setupBindings()
-    preferences.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &cancellables)
-    timer.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &cancellables)
-    kanban.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &cancellables)
-    startDates.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &cancellables)
-    recurrence.objectWillChange
-      .sink { [weak self] _ in self?.objectWillChange.send() }
-      .store(in: &cancellables)
+    for child: any ObservableObject in [
+      preferences, timer, kanban, startDates, recurrence, quickEntry, integrations,
+    ] {
+      child.objectWillChange
+        .sink { [weak self] _ in self?.objectWillChange.send() }
+        .store(in: &cancellables)
+    }
     kanban.dataSource = self
+    integrations.dataSource = self
+    integrations.onIntegrationStateChanged = { [weak self] in
+      self?.refreshOnboardingDialogState()
+    }
     setupNetworkMonitor()
     Task { @MainActor [weak self] in
       self?.presentOnboardingDialogIfNeeded()
@@ -309,6 +264,10 @@ class BarTaskerManager: ObservableObject {
 // MARK: - KanbanTaskDataSource conformance
 
 extension BarTaskerManager: KanbanTaskDataSource {}
+
+// MARK: - IntegrationDataSource conformance
+
+extension BarTaskerManager: IntegrationDataSource {}
 
 // MARK: - Kanban move orchestration (cross-cutting: kanban + task CRUD)
 

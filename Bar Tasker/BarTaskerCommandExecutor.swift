@@ -33,9 +33,9 @@ final class BarTaskerCommandExecutor {
       _ = await manager.uploadOfflineTasksToCheckvist(destinationListId: destinationListId)
       return
     case .addSibling:
-      manager.quickEntryMode = .addSibling
-      manager.quickEntryText = ""
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .addSibling
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.isQuickEntryFocused = true
       return
     case .chooseObsidianInbox:
       _ = manager.chooseObsidianInboxFolder()
@@ -44,9 +44,9 @@ final class BarTaskerCommandExecutor {
       manager.clearObsidianInboxFolder()
       return
     case .search:
-      manager.quickEntryMode = .search
-      manager.searchText = ""
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .search
+      manager.quickEntry.searchText = ""
+      manager.quickEntry.isQuickEntryFocused = true
       return
     case .list(let query):
       guard !query.isEmpty else {
@@ -65,8 +65,8 @@ final class BarTaskerCommandExecutor {
       manager.listId = "\(found.id)"
       manager.currentParentId = 0
       manager.currentSiblingIndex = 0
-      manager.searchText = ""
-      manager.quickEntryText = ""
+      manager.quickEntry.searchText = ""
+      manager.quickEntry.quickEntryText = ""
       await manager.fetchTopTask()
       return
     case .undo:
@@ -141,21 +141,21 @@ final class BarTaskerCommandExecutor {
     case .clearRecurrence:
       manager.clearRecurrenceRule(for: task)
     case .edit:
-      manager.quickEntryMode = .editTask
-      manager.editCursorAtEnd = true
-      manager.quickEntryText = task.content
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .editTask
+      manager.quickEntry.editCursorAtEnd = true
+      manager.quickEntry.quickEntryText = task.content
+      manager.quickEntry.isQuickEntryFocused = true
     case .addChild:
-      manager.quickEntryMode = .addChild
-      manager.quickEntryText = ""
-      manager.isQuickEntryFocused = true
+      manager.quickEntry.quickEntryMode = .addChild
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.isQuickEntryFocused = true
     case .openLink:
       manager.openTaskLink()
     case .toggleTimer:
       manager.timer.toggleTimer(forTaskId: task.id)
     case .delete:
       if manager.preferences.confirmBeforeDelete {
-        manager.pendingDeleteConfirmation = true
+        manager.quickEntry.pendingDeleteConfirmation = true
       } else {
         await manager.deleteTask(task)
       }

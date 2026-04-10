@@ -23,10 +23,10 @@ private struct GoogleCalendarIntegrationPluginSettingsView: View {
     Section(header: Text("Google Calendar Plugin")) {
       Toggle(
         "Enable Google Calendar integration",
-        isOn: $manager.googleCalendarIntegrationEnabled
+        isOn: $manager.integrations.googleCalendarIntegrationEnabled
       )
 
-      if manager.googleCalendarIntegrationEnabled {
+      if manager.integrations.googleCalendarIntegrationEnabled {
         VStack(alignment: .leading, spacing: 10) {
           Text("OAuth Client ID (Desktop app)")
           TextField(

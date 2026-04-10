@@ -86,7 +86,7 @@ extension BarTaskerManager {
       currentParentId: currentParentId,
       currentSiblingIndex: currentSiblingIndex,
       priorityTaskIds: priorityTaskIds,
-      pendingObsidianSyncTaskIds: pendingObsidianSyncTaskIds,
+      pendingObsidianSyncTaskIds: integrations.pendingObsidianSyncTaskIds,
       timerByTaskId: timer.timerByTaskId,
       timedTaskId: timer.timedTaskId,
       timerRunning: timer.timerRunning
@@ -302,7 +302,7 @@ extension BarTaskerManager {
       try await Task.sleep(nanoseconds: 60_000_000)
       NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
       // Spring the checkmark in.
-      withAnimation(.spring(response: 0.28, dampingFraction: 0.45)) { completingTaskId = task.id }
+      withAnimation(.spring(response: 0.28, dampingFraction: 0.45)) { quickEntry.completingTaskId = task.id }
       // Confirmation tap.
       try await Task.sleep(nanoseconds: 120_000_000)
       NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -310,10 +310,10 @@ extension BarTaskerManager {
       try await Task.sleep(nanoseconds: 360_000_000)
     } catch {
       // Cancelled — clean up animation state and bail out without completing.
-      withAnimation { completingTaskId = nil }
+      withAnimation { quickEntry.completingTaskId = nil }
       return
     }
-    withAnimation { completingTaskId = nil }
+    withAnimation { quickEntry.completingTaskId = nil }
     await taskAction(task, endpoint: "close")
     await createNextOccurrence(for: task)
   }
@@ -347,7 +347,7 @@ extension BarTaskerManager {
       timer.timerByTaskId = timer.timerByTaskId.filter { !removedTaskIds.contains($0.key) }
       removeTasksFromPriorityQueue(removedTaskIds)
       savePendingObsidianSyncQueue(
-        pendingObsidianSyncTaskIds.filter { !removedTaskIds.contains($0) })
+        integrations.pendingObsidianSyncTaskIds.filter { !removedTaskIds.contains($0) })
       pendingTaskMutations = pendingTaskMutations.filter { !removedTaskIds.contains($0.key) }
       if let filterParentId = kanban.kanbanFilterParentId, removedTaskIds.contains(filterParentId) {
         kanban.kanbanFilterParentId = nil
@@ -959,11 +959,11 @@ extension BarTaskerManager {
       return false
     }
 
-    pendingDeleteConfirmation = false
-    commandSuggestionIndex = 0
-    quickEntryMode = useSpecificLocation ? .quickAddSpecific : .quickAddDefault
-    quickEntryText = ""
-    isQuickEntryFocused = true
+    quickEntry.pendingDeleteConfirmation = false
+    quickEntry.commandSuggestionIndex = 0
+    quickEntry.quickEntryMode = useSpecificLocation ? .quickAddSpecific : .quickAddDefault
+    quickEntry.quickEntryText = ""
+    quickEntry.isQuickEntryFocused = true
     return true
   }
 
@@ -1025,9 +1025,9 @@ extension BarTaskerManager {
       tasks = updatedTasks
       persistOfflineTaskState()
       lastUndo = .restoreOfflineState(snapshot: snapshot)
-      quickEntryMode = .search
-      quickEntryText = ""
-      isQuickEntryFocused = false
+      quickEntry.quickEntryMode = .search
+      quickEntry.quickEntryText = ""
+      quickEntry.isQuickEntryFocused = false
       errorMessage = nil
       return
     }
@@ -1056,9 +1056,9 @@ extension BarTaskerManager {
       }
       lastUndo = .add(taskId: createdTask.id)
       await fetchTopTask()
-      quickEntryMode = .search
-      quickEntryText = ""
-      isQuickEntryFocused = false
+      quickEntry.quickEntryMode = .search
+      quickEntry.quickEntryText = ""
+      quickEntry.isQuickEntryFocused = false
     } catch CheckvistSessionError.authenticationUnavailable {
       setAuthenticationRequiredErrorIfNeeded()
     } catch {
@@ -1197,7 +1197,7 @@ extension BarTaskerManager {
       timer.timerByTaskId = timer.timerByTaskId.filter { !removedTaskIds.contains($0.key) }
       removeTasksFromPriorityQueue(removedTaskIds)
       savePendingObsidianSyncQueue(
-        pendingObsidianSyncTaskIds.filter { !removedTaskIds.contains($0) })
+        integrations.pendingObsidianSyncTaskIds.filter { !removedTaskIds.contains($0) })
       pendingTaskMutations = pendingTaskMutations.filter { !removedTaskIds.contains($0.key) }
       if let filterParentId = kanban.kanbanFilterParentId, removedTaskIds.contains(filterParentId) {
         kanban.kanbanFilterParentId = nil

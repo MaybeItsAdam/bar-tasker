@@ -419,11 +419,11 @@ struct SettingsView: View {
     case "native.checkvist.sync":
       return "Active"
     case "native.obsidian.integration":
-      return checkvistManager.obsidianIntegrationEnabled ? "Enabled" : "Disabled"
+      return checkvistManager.integrations.obsidianIntegrationEnabled ? "Enabled" : "Disabled"
     case "native.google.calendar.integration":
-      return checkvistManager.googleCalendarIntegrationEnabled ? "Enabled" : "Disabled"
+      return checkvistManager.integrations.googleCalendarIntegrationEnabled ? "Enabled" : "Disabled"
     case "native.mcp.integration":
-      return checkvistManager.mcpIntegrationEnabled ? "Enabled" : "Disabled"
+      return checkvistManager.integrations.mcpIntegrationEnabled ? "Enabled" : "Disabled"
     default:
       return "Built-in plugin"
     }

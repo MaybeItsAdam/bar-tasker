@@ -212,7 +212,7 @@ private struct KanbanTaskCard: View {
     manager.preferences.themeColor(for: token)
   }
 
-  private var isCompleting: Bool { manager.completingTaskId == task.id }
+  private var isCompleting: Bool { manager.quickEntry.completingTaskId == task.id }
 
   private func showInAllView() {
     manager.rootTaskView = .all

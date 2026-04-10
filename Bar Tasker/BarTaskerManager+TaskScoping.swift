@@ -27,11 +27,11 @@ extension BarTaskerManager {
   }
 
   var hasResolvedMCPServerCommand: Bool {
-    !mcpServerCommandPath.isEmpty
+    !integrations.mcpServerCommandPath.isEmpty
   }
 
   var mcpClientConfigurationPreview: String {
-    mcpIntegrationPlugin.makeClientConfigurationJSON(
+    integrations.mcpIntegrationPlugin.makeClientConfigurationJSON(
       credentials: activeCredentials,
       listId: listId,
       redactSecrets: true
@@ -41,9 +41,9 @@ extension BarTaskerManager {
   var activePluginSettingsPages: [any PluginSettingsPageProviding] {
     [
       checkvistSyncPlugin as any BarTaskerPlugin,
-      obsidianPlugin as any BarTaskerPlugin,
-      googleCalendarPlugin as any BarTaskerPlugin,
-      mcpIntegrationPlugin as any BarTaskerPlugin,
+      integrations.obsidianPlugin as any BarTaskerPlugin,
+      integrations.googleCalendarPlugin as any BarTaskerPlugin,
+      integrations.mcpIntegrationPlugin as any BarTaskerPlugin,
     ].compactMap { $0 as? any PluginSettingsPageProviding }
   }
 
@@ -104,7 +104,7 @@ extension BarTaskerManager {
         currentLevelTasks: currentLevelTasks,
         currentParentId: currentParentId,
         isSearchFilterActive: isSearchFilterActive,
-        searchText: searchText,
+        searchText: quickEntry.searchText,
         hideFuture: hideFuture,
         shouldShowRootScopeSection: shouldShowRootScopeSection,
         isRootLevel: isRootLevel,
@@ -212,7 +212,7 @@ extension BarTaskerManager {
     return cache.priorityRank[task.id]
   }
 
-  var isSearchFilterActive: Bool { !searchText.isEmpty && quickEntryMode == .search }
+  var isSearchFilterActive: Bool { quickEntry.isSearchFilterActive }
 
   var shouldShowDueSectionHeaders: Bool {
     isRootLevel && shouldShowRootScopeSection && rootTaskView == .due
