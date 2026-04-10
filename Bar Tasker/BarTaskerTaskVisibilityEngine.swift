@@ -39,8 +39,13 @@ struct BarTaskerTaskVisibilityEngine {
         switch context.rootTaskView {
         case .all:
           baseTasks = context.currentLevelTasks
-        case .due, .tags, .priority, .kanban:
+        case .due, .tags, .priority:
           baseTasks = context.tasks
+        case .kanban:
+          // Kanban has its own per-column task lists via tasksForKanbanColumn;
+          // visibleTasks is unused in kanban mode, so return empty to prevent
+          // any stale-index interaction with currentSiblingIndex.
+          return []
         }
       } else {
         baseTasks = context.currentLevelTasks
@@ -83,7 +88,7 @@ struct BarTaskerTaskVisibilityEngine {
           result = result.filter { context.taskMatchesActiveRootScope($0) }
           result.sort(by: context.compareByPriorityThenPosition)
         case .kanban:
-          break
+          break  // unreachable — kanban returns [] above
         }
       } else {
         if let parentTask = context.taskById[context.currentParentId],

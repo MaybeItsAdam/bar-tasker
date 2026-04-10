@@ -7,10 +7,7 @@ extension BarTaskerManager {
   }
 
   var canAttemptLogin: Bool {
-    let hasUsername = !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    guard hasUsername else { return false }
-    if hasCredentials { return true }
-    return usesKeychainStorage
+    hasCredentials
   }
 
   var hasListSelection: Bool {
@@ -24,7 +21,7 @@ extension BarTaskerManager {
   }
 
   var quickAddSpecificParentTaskIdValue: Int? {
-    let raw = quickAddSpecificParentTaskId.trimmingCharacters(in: .whitespacesAndNewlines)
+    let raw = preferences.quickAddSpecificParentTaskId.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !raw.isEmpty, let value = Int(raw), value > 0 else { return nil }
     return value
   }
@@ -59,6 +56,9 @@ extension BarTaskerManager {
   }
 
   var currentTask: CheckvistTask? {
+    if rootTaskView == .kanban {
+      return kanban.currentKanbanTask
+    }
     let level = visibleTasks
     guard !level.isEmpty else { return nil }
     let clampedIndex = min(max(currentSiblingIndex, 0), level.count - 1)
@@ -157,7 +157,7 @@ extension BarTaskerManager {
     if isSearchFilterActive {
       return pid != currentParentId
     }
-    if showTaskBreadcrumbContext {
+    if preferences.showTaskBreadcrumbContext {
       return pid != 0
     }
     return false
@@ -355,8 +355,42 @@ extension BarTaskerManager {
       selectedRootTag = ""
     }
     if view != .kanban {
-      kanbanFilterTag = ""
-      kanbanFilterSubtasks = false
+      kanban.kanbanFilterTag = ""
+      kanban.kanbanFilterSubtasks = false
+      kanban.kanbanFilterParentId = nil
+    } else {
+      // Clear stale root-scope focus so column navigation works immediately.
+      rootScopeFocusLevel = 0
+      // Ensure a valid selection when entering kanban. Search ALL columns for the
+      // selected task — not just the focused column — since the task may have moved
+      // to a different column while we were in another view.
+      let cols = kanban.kanbanColumns
+      var selectionValidInColumn: Int? = nil
+      if let selectedId = kanban.kanbanSelectedTaskId {
+        for (idx, col) in cols.enumerated() {
+          let colTasks = kanban.tasksForKanbanColumn(col, allColumns: cols)
+          if colTasks.contains(where: { $0.id == selectedId }) {
+            selectionValidInColumn = idx
+            break
+          }
+        }
+      }
+      if let validIdx = selectionValidInColumn {
+        // Task is valid but may be in a different column; update focus to match.
+        kanban.kanbanFocusedColumnIndex = validIdx
+      } else {
+        // Selection is stale — find the first non-empty column and select its first task.
+        kanban.kanbanSelectedTaskId = nil
+        for (idx, col) in cols.enumerated() {
+          let colTasks = kanban.tasksForKanbanColumn(col, allColumns: cols)
+          if let firstTask = colTasks.first {
+            kanban.kanbanFocusedColumnIndex = idx
+            kanban.kanbanSelectedTaskId = firstTask.id
+            currentSiblingIndex = 0
+            break
+          }
+        }
+      }
     }
     if !(view == .due || view == .tags || view == .kanban), rootScopeFocusLevel > 1 {
       rootScopeFocusLevel = 1
@@ -380,13 +414,14 @@ extension BarTaskerManager {
       let tags = rootLevelTagNames(limit: 30)
       // options: "all", each tag (tag filter cycling; subtasks toggled separately)
       let options = [""] + tags
-      guard let currentIndex = options.firstIndex(of: kanbanFilterTag) else {
-        kanbanFilterTag = ""
+      guard let currentIndex = options.firstIndex(of: kanban.kanbanFilterTag) else {
+        kanban.kanbanFilterTag = ""
         return
       }
       let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
-      kanbanFilterTag = options[nextIndex]
-      if !kanbanFilterTag.isEmpty { kanbanFilterSubtasks = false }
+      kanban.kanbanFilterTag = options[nextIndex]
+      if !kanban.kanbanFilterTag.isEmpty { kanban.kanbanFilterSubtasks = false; kanban.kanbanFilterParentId = nil }
+      currentSiblingIndex = 0
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
       guard let currentIndex = options.firstIndex(where: { $0 == selectedRootDueBucket }) else {
@@ -421,8 +456,9 @@ extension BarTaskerManager {
       let tags = rootLevelTagNames(limit: 30)
       let options = [""] + tags
       guard options.indices.contains(index) else { return }
-      kanbanFilterTag = options[index]
-      if !kanbanFilterTag.isEmpty { kanbanFilterSubtasks = false }
+      kanban.kanbanFilterTag = options[index]
+      if !kanban.kanbanFilterTag.isEmpty { kanban.kanbanFilterSubtasks = false; kanban.kanbanFilterParentId = nil }
+      currentSiblingIndex = 0
       rootScopeFocusLevel = 2
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
@@ -520,7 +556,7 @@ extension BarTaskerManager {
     let nodes = tasks.map { BarTaskerTimerNode(id: $0.id, parentId: $0.parentId) }
     cache.childCount = BarTaskerTimerStore.childCountByTaskId(nodes: nodes)
     cache.rolledUpElapsed = BarTaskerTimerStore.rolledUpElapsedByTaskId(
-      nodes: nodes, ownElapsed: timerByTaskId)
+      nodes: nodes, ownElapsed: timer.timerByTaskId)
     cache.rootLevelTagNames = computeRootLevelTagNames(limit: 30)
   }
 

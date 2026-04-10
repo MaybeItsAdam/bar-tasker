@@ -11,7 +11,7 @@ enum PopoverLayout {
   @MainActor
   static func preferredWidth(for manager: BarTaskerManager) -> CGFloat {
     guard manager.rootTaskView == .kanban else { return width }
-    let count = max(1, manager.kanbanColumns.count)
+    let count = max(1, manager.kanban.kanbanColumns.count)
     return CGFloat(count) * kanbanColumnWidth
   }
   static let cornerRadius: CGFloat = 10
@@ -41,7 +41,7 @@ enum PopoverLayout {
     if manager.shouldShowRootScopeSection {
       fixedHeight += (manager.rootScopeShowsFilterControls ? 72 : 40) + dividerHeight
     }
-    if manager.showTaskBreadcrumbContext {
+    if manager.preferences.showTaskBreadcrumbContext {
       fixedHeight += 24 + dividerHeight
     }
     if manager.hideFuture {
@@ -353,7 +353,7 @@ struct PopoverView: View {
   @EnvironmentObject var manager: BarTaskerManager
 
   private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
-    manager.themeColor(for: token)
+    manager.preferences.themeColor(for: token)
   }
 
   var body: some View {
@@ -408,7 +408,7 @@ struct PopoverView: View {
     }
     .frame(width: panelWidth, height: panelHeight, alignment: .top)
     .background(themeColor(.panelBackground))
-    .tint(manager.themeAccentColor)
+    .tint(manager.preferences.themeAccentColor)
     .clipShape(RoundedRectangle(cornerRadius: PopoverLayout.cornerRadius))
     .onAppear {
       manager.presentOnboardingDialogIfNeeded()
@@ -864,20 +864,25 @@ struct PopoverView: View {
             HStack(spacing: 0) {
               rootScopeChip(
                 title: "All tasks",
-                isSelected: manager.kanbanFilterTag.isEmpty && !manager.kanbanFilterSubtasks
+                isSelected: manager.kanban.kanbanFilterTag.isEmpty && !manager.kanban.kanbanFilterSubtasks
+                  && manager.kanban.kanbanFilterParentId == nil
               ) {
-                manager.kanbanFilterTag = ""
-                manager.kanbanFilterSubtasks = false
+                manager.kanban.kanbanFilterTag = ""
+                manager.kanban.kanbanFilterSubtasks = false
+                manager.kanban.kanbanFilterParentId = nil
               }
 
               if hasParent {
                 rootScopeSeparator()
                 rootScopeChip(
                   title: "Subtasks",
-                  isSelected: manager.kanbanFilterSubtasks
+                  isSelected: manager.kanban.kanbanFilterSubtasks
                 ) {
-                  manager.kanbanFilterSubtasks.toggle()
-                  if manager.kanbanFilterSubtasks { manager.kanbanFilterTag = "" }
+                  manager.kanban.kanbanFilterSubtasks.toggle()
+                  if manager.kanban.kanbanFilterSubtasks {
+                    manager.kanban.kanbanFilterTag = ""
+                    manager.kanban.kanbanFilterParentId = nil
+                  }
                 }
               }
 
@@ -891,10 +896,13 @@ struct PopoverView: View {
                 }
                 rootScopeChip(
                   title: tag,
-                  isSelected: manager.kanbanFilterTag == tag
+                  isSelected: manager.kanban.kanbanFilterTag == tag
                 ) {
-                  manager.kanbanFilterTag = manager.kanbanFilterTag == tag ? "" : tag
-                  if !manager.kanbanFilterTag.isEmpty { manager.kanbanFilterSubtasks = false }
+                  manager.kanban.kanbanFilterTag = manager.kanban.kanbanFilterTag == tag ? "" : tag
+                  if !manager.kanban.kanbanFilterTag.isEmpty {
+                    manager.kanban.kanbanFilterSubtasks = false
+                    manager.kanban.kanbanFilterParentId = nil
+                  }
                 }
               }
             }
@@ -967,7 +975,8 @@ struct PopoverView: View {
       }
     }
     .onAppear {
-      if manager.currentParentId == 0
+      if manager.rootTaskView != .kanban
+        && manager.currentParentId == 0
         && manager.visibleTasks.isEmpty
         && manager.rootScopeFocusLevel == 0
       {
@@ -975,7 +984,8 @@ struct PopoverView: View {
       }
     }
     .onChange(of: manager.visibleTasks.count) { _, count in
-      if manager.currentParentId == 0
+      if manager.rootTaskView != .kanban
+        && manager.currentParentId == 0
         && count == 0
         && manager.rootScopeFocusLevel == 0
       {
@@ -1369,7 +1379,7 @@ struct PopoverView: View {
       VStack(alignment: .leading, spacing: 3) {
         if manager.shouldShowBreadcrumbPath(for: task) {
           let includeCurrentParent =
-            manager.showTaskBreadcrumbContext
+            manager.preferences.showTaskBreadcrumbContext
             && !(manager.quickEntryMode == .search && !manager.searchText.isEmpty)
           let path = breadcrumbPath(
             for: task,
@@ -1634,7 +1644,6 @@ struct PopoverView: View {
 
   func submitSibling() {
     guard !manager.quickEntryText.isEmpty else {
-      // Dismiss if empty
       manager.quickEntryText = ""
       manager.quickEntryMode = .search
       manager.isQuickEntryFocused = false
@@ -1642,12 +1651,10 @@ struct PopoverView: View {
     }
     let content = manager.quickEntryText
     let targetTask = manager.currentTask
-    let shouldPreserveAddMode = manager.quickEntryMode == .addSibling
     manager.quickEntryText = ""
+    manager.quickEntryMode = .search
+    manager.isQuickEntryFocused = false
     manager.errorMessage = nil
-    if shouldPreserveAddMode {
-      manager.isQuickEntryFocused = true
-    }
     Task { await manager.addTask(content: content, insertAfterTask: targetTask) }
   }
 
@@ -1665,7 +1672,6 @@ struct PopoverView: View {
 
   func submitChild() {
     guard !manager.quickEntryText.isEmpty, let parent = manager.currentTask else {
-      // Dismiss if empty
       if manager.quickEntryText.isEmpty {
         manager.quickEntryText = ""
         manager.quickEntryMode = .search
@@ -1675,8 +1681,9 @@ struct PopoverView: View {
     }
     let content = manager.quickEntryText
     manager.quickEntryText = ""
+    manager.quickEntryMode = .search
+    manager.isQuickEntryFocused = false
     manager.errorMessage = nil
-    manager.isQuickEntryFocused = true
     Task { await manager.addTaskAsChild(content: content, parentId: parent.id) }
   }
 
@@ -1703,7 +1710,7 @@ struct PopoverView: View {
   }
 
   func formattedTimer(_ elapsed: TimeInterval) -> String {
-    BarTaskerManager.formattedTimer(elapsed)
+    TimerManager.formattedTimer(elapsed)
   }
 
   @ViewBuilder
@@ -1750,7 +1757,7 @@ struct PopoverView: View {
     let recurrenceRule = manager.recurrenceRule(for: task)
     if !metadataTokens.isEmpty
       || manager.priorityRank(for: task) != nil
-      || (manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id))
+      || (manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id))
       || task.due != nil
       || startLabel != nil
       || recurrenceRule != nil
@@ -1762,9 +1769,11 @@ struct PopoverView: View {
         if let priority = manager.priorityRank(for: task) {
           priorityBadge(priority)
         }
-        if manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id) {
+        if manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id) {
           timerBadge(
-            elapsed: elapsed, running: manager.timedTaskId == task.id && manager.timerRunning)
+            elapsed: elapsed,
+            running: manager.timer.timedTaskId == task.id && manager.timer.timerRunning
+          )
         }
         if let label = startLabel {
           startBadge(label: label, isFuture: manager.startDateIsInFuture(for: task))

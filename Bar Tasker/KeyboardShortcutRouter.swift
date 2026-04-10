@@ -25,7 +25,7 @@ struct KeyboardShortcutRouter {
       option: option
     )
     func matches(_ action: BarTaskerManager.ConfigurableShortcutAction) -> Bool {
-      manager.shortcutMatches(action: action, keyToken: keyToken)
+      manager.preferences.shortcutMatches(action: action, keyToken: keyToken)
     }
 
     let firstResponder = event.window?.firstResponder
@@ -58,10 +58,20 @@ struct KeyboardShortcutRouter {
       manager.rootScopeFocusLevel = 0
     }
     let rootScopeFocused = manager.shouldShowRootScopeSection && manager.rootScopeFocusLevel > 0
-    let canFocusRootScopeFromListTop =
-      manager.shouldShowRootScopeSection
-      && manager.currentSiblingIndex == 0
-      && (!manager.visibleTasks.isEmpty || manager.currentParentId == 0)
+    // Allow UP arrow to enter the scope row when at the top of the current view.
+    // In kanban mode, visibleTasks is intentionally empty (kanban uses per-column task lists),
+    // so we check the focused column's first task instead.
+    let canFocusRootScopeFromListTop: Bool
+    if manager.rootTaskView == .kanban {
+      canFocusRootScopeFromListTop =
+        manager.shouldShowRootScopeSection
+        && manager.kanban.isAtTopOfFocusedColumn
+    } else {
+      canFocusRootScopeFromListTop =
+        manager.shouldShowRootScopeSection
+        && manager.currentSiblingIndex == 0
+        && (!manager.visibleTasks.isEmpty || manager.currentParentId == 0)
+    }
 
     #if DEBUG
       if cmd && shift && !ctrl && !option && chars.lowercased() == "k" && !isFocused {
@@ -164,7 +174,7 @@ struct KeyboardShortcutRouter {
         return true
       }
       if matches(.kanbanShowInAll) {
-        if !isRepeat, let task = manager.currentKanbanTask {
+        if !isRepeat, let task = manager.kanban.currentKanbanTask {
           let childCounts = manager.childCountByTaskId()
           manager.rootTaskView = .all
           manager.rootScopeFocusLevel = 0
@@ -214,7 +224,7 @@ struct KeyboardShortcutRouter {
     }
 
     // Up/Down arrows - list navigation + root scope navigation.
-    if matches(.nextTask) {
+    if !isFocused && matches(.nextTask) {
       if rootScopeFocused {
         if manager.rootScopeFocusLevel == 1 && manager.rootScopeShowsFilterControls {
           manager.rootScopeFocusLevel = 2
@@ -223,11 +233,15 @@ struct KeyboardShortcutRouter {
         }
         return true
       }
-      manager.nextTask()
+      if manager.rootTaskView == .kanban {
+        manager.kanban.nextKanbanTask()
+      } else {
+        manager.nextTask()
+      }
       updateTitle()
       return true
     }
-    if matches(.previousTask) {
+    if !isFocused && matches(.previousTask) {
       if rootScopeFocused {
         if manager.rootScopeFocusLevel == 2 {
           manager.rootScopeFocusLevel = 1
@@ -238,7 +252,11 @@ struct KeyboardShortcutRouter {
         manager.rootScopeFocusLevel = manager.rootScopeShowsFilterControls ? 2 : 1
         return true
       }
-      manager.previousTask()
+      if manager.rootTaskView == .kanban {
+        manager.kanban.previousKanbanTask()
+      } else {
+        manager.previousTask()
+      }
       updateTitle()
       return true
     }
@@ -269,12 +287,12 @@ struct KeyboardShortcutRouter {
     // In kanban mode, ←/→ (h/l) navigate between columns without moving the task.
     if manager.rootTaskView == .kanban && !isFocused && !rootScopeFocused {
       if matches(.kanbanFocusLeft) {
-        manager.focusKanbanColumn(direction: -1)
+        manager.kanban.focusKanbanColumn(direction: -1)
         updateTitle()
         return true
       }
       if matches(.kanbanFocusRight) {
-        manager.focusKanbanColumn(direction: 1)
+        manager.kanban.focusKanbanColumn(direction: 1)
         updateTitle()
         return true
       }
@@ -395,7 +413,7 @@ struct KeyboardShortcutRouter {
     // Del (forward delete / Fn+Backspace) - delete task.
     if !isFocused && matches(.deleteTask) {
       if isRepeat { return true }
-      if manager.confirmBeforeDelete {
+      if manager.preferences.confirmBeforeDelete {
         manager.pendingDeleteConfirmation = true
         manager.quickEntryMode = .command
         manager.commandSuggestionIndex = 0
@@ -460,7 +478,7 @@ struct KeyboardShortcutRouter {
       .sequenceGoogleCalendar, .sequenceTag, .sequenceUntag, .sequenceToggleContext,
     ]
     let sequenceTokens = sequenceActions.flatMap {
-      manager.shortcutBinding(for: $0).split(separator: ",").map {
+      manager.preferences.shortcutBinding(for: $0).split(separator: ",").map {
         String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
       }
     }
@@ -474,58 +492,66 @@ struct KeyboardShortcutRouter {
       let sequence = manager.keyBuffer + chars
       manager.keyBuffer = ""
       if !isFocused {
-        if manager.shortcutMatchesSequence(action: .sequenceDue, sequence: sequence) {
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceDue, sequence: sequence) {
           manager.quickEntryMode = .command
           manager.commandSuggestionIndex = 0
           manager.quickEntryText = "due "
           manager.isQuickEntryFocused = true
           return true
         }
-        if manager.shortcutMatchesSequence(action: .sequenceDueToday, sequence: sequence) {
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceDueToday, sequence: sequence)
+        {
           manager.quickEntryMode = .command
           manager.commandSuggestionIndex = 0
           manager.quickEntryText = "due today "
           manager.isQuickEntryFocused = true
           return true
         }
-        if manager.shortcutMatchesSequence(action: .sequenceStart, sequence: sequence) {
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceStart, sequence: sequence) {
           manager.quickEntryMode = .command
           manager.commandSuggestionIndex = 0
           manager.quickEntryText = "start "
           manager.isQuickEntryFocused = true
           return true
         }
-        if manager.shortcutMatchesSequence(action: .sequenceRepeat, sequence: sequence) {
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceRepeat, sequence: sequence) {
           manager.quickEntryMode = .command
           manager.commandSuggestionIndex = 0
           manager.quickEntryText = "repeat "
           manager.isQuickEntryFocused = true
           return true
         }
-        if manager.shortcutMatchesSequence(action: .sequenceOpenLink, sequence: sequence) {
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceOpenLink, sequence: sequence)
+        {
           manager.openTaskLink()
           return true
         }
-        if manager.shortcutMatchesSequence(action: .sequenceGoogleCalendar, sequence: sequence) {
+        if manager.preferences.shortcutMatchesSequence(
+          action: .sequenceGoogleCalendar,
+          sequence: sequence
+        ) {
           manager.openCurrentTaskInGoogleCalendar()
           return true
         }
-        if manager.shortcutMatchesSequence(action: .sequenceTag, sequence: sequence) {
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceTag, sequence: sequence) {
           manager.quickEntryMode = .command
           manager.commandSuggestionIndex = 0
           manager.quickEntryText = "tag "
           manager.isQuickEntryFocused = true
           return true
         }
-        if manager.shortcutMatchesSequence(action: .sequenceUntag, sequence: sequence) {
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceUntag, sequence: sequence) {
           manager.quickEntryMode = .command
           manager.commandSuggestionIndex = 0
           manager.quickEntryText = "untag "
           manager.isQuickEntryFocused = true
           return true
         }
-        if manager.shortcutMatchesSequence(action: .sequenceToggleContext, sequence: sequence) {
-          manager.showTaskBreadcrumbContext.toggle()
+        if manager.preferences.shortcutMatchesSequence(
+          action: .sequenceToggleContext,
+          sequence: sequence
+        ) {
+          manager.preferences.showTaskBreadcrumbContext.toggle()
           return true
         }
       }
@@ -538,16 +564,18 @@ struct KeyboardShortcutRouter {
 
     // t - toggle timer.
     if !isFocused && matches(.toggleTimer) {
-      if !isRepeat && manager.timerIsEnabled {
-        manager.toggleTimerForCurrentTask()
+      if !isRepeat && manager.timer.timerIsEnabled {
+        if let task = manager.currentTask {
+          manager.timer.toggleTimer(forTaskId: task.id)
+        }
       }
       return true
     }
 
     // p - pause/resume timer.
     if !isFocused && matches(.toggleTimerPause) {
-      if !isRepeat && manager.timerIsEnabled {
-        if manager.timerRunning { manager.pauseTimer() } else { manager.resumeTimer() }
+      if !isRepeat && manager.timer.timerIsEnabled {
+        if manager.timer.timerRunning { manager.timer.pauseTimer() } else { manager.timer.resumeTimer() }
       }
       return true
     }

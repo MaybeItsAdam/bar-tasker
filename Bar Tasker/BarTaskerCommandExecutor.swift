@@ -83,7 +83,7 @@ final class BarTaskerCommandExecutor {
       manager.hideFuture.toggle()
       return
     case .pauseTimer:
-      if manager.timerRunning { manager.pauseTimer() } else { manager.resumeTimer() }
+      if manager.timer.timerRunning { manager.timer.pauseTimer() } else { manager.timer.resumeTimer() }
       return
     case .refreshMCPPath:
       manager.refreshMCPServerCommandPath()
@@ -152,9 +152,9 @@ final class BarTaskerCommandExecutor {
     case .openLink:
       manager.openTaskLink()
     case .toggleTimer:
-      manager.toggleTimerForCurrentTask()
+      manager.timer.toggleTimer(forTaskId: task.id)
     case .delete:
-      if manager.confirmBeforeDelete {
+      if manager.preferences.confirmBeforeDelete {
         manager.pendingDeleteConfirmation = true
       } else {
         await manager.deleteTask(task)

@@ -34,7 +34,6 @@ class BarTaskerManager: ObservableObject {
   @Published var searchText: String = ""
   @Published var quickEntryText: String = ""
   @Published var hideFuture: Bool = false
-  @Published var showTaskBreadcrumbContext: Bool
   @Published var rootTaskView: RootTaskView
   @Published var selectedRootDueBucketRawValue: Int
   @Published var selectedRootTag: String
@@ -96,59 +95,22 @@ class BarTaskerManager: ObservableObject {
   /// Maps task ID → start date string (same format as `due`).
   @Published var taskStartDatesByTaskId: [Int: String] = [:]
 
-  // MARK: - Named Time Preferences
-  @Published var namedTimeMorningHour: Int
-  @Published var namedTimeAfternoonHour: Int
-  @Published var namedTimeEveningHour: Int
-  @Published var namedTimeEodHour: Int
-
   // MARK: - Recurrence (locally stored; Checkvist API has no recurrence field)
   /// Maps task ID → raw recurrence rule string (e.g. "daily", "every 3 days").
   @Published var recurrenceRulesByTaskId: [Int: String] = [:]
 
   // MARK: - Timer
-  @Published var timedTaskId: Int? = nil
-  @Published var timerByTaskId: [Int: TimeInterval] = [:]
-  @Published var timerRunning: Bool = false
-  @Published var timerBarLeading: Bool
-  @Published var timerMode: TimerMode
-  var timerTask: Task<Void, Never>? = nil
+  let timer: TimerManager
 
-  // MARK: - Settings
-  @Published var confirmBeforeDelete: Bool
-  @Published var launchAtLogin: Bool
-  @Published var ignoreKeychainInDebug: Bool
+  // MARK: - Integrations
   @Published var obsidianIntegrationEnabled: Bool
   @Published var googleCalendarIntegrationEnabled: Bool
   @Published var mcpIntegrationEnabled: Bool
-  @Published var appTheme: AppTheme
-  @Published var themeAccentPreset: ThemeAccentPreset
-  @Published var themeCustomAccentHex: String
-  @Published var themeColorTokenHexOverrides: [String: String]
-  @Published var globalHotkeyEnabled: Bool
-  /// Carbon keyCode for the global hotkey (default 49 = Space)
-  @Published var globalHotkeyKeyCode: Int
-  /// Carbon modifier mask (default 0x0800 = optionKey i.e. ⌥)
-  @Published var globalHotkeyModifiers: Int
-  @Published var quickAddHotkeyEnabled: Bool
-  /// Carbon keyCode for the quick add hotkey (default 11 = B)
-  @Published var quickAddHotkeyKeyCode: Int
-  /// Carbon modifier mask (default 0x0A00 = shift+option)
-  @Published var quickAddHotkeyModifiers: Int
-  @Published var quickAddLocationMode: QuickAddLocationMode
-  @Published var quickAddSpecificParentTaskId: String
-  @Published var customizableShortcutsByAction: [String: String]
 
   // MARK: - Kanban
-  @Published var kanbanColumns: [KanbanColumn]
-  @Published var kanbanFocusedColumnIndex: Int = 0
-  /// Active tag filter in kanban view (empty = no filter)
-  @Published var kanbanFilterTag: String = ""
-  /// When true, kanban shows only subtasks of `currentParentId`
-  @Published var kanbanFilterSubtasks: Bool = false
+  let kanban: KanbanManager
 
-  /// Max width of the menu bar text
-  @Published var maxTitleWidth: Double
+  let preferences: PreferencesManager
   @Published var onboardingCompleted: Bool
   @Published var activeOnboardingDialog: OnboardingDialog?
   @Published var obsidianInboxPath: String
@@ -156,6 +118,10 @@ class BarTaskerManager: ObservableObject {
   @Published var pendingObsidianSyncTaskIds: [Int]
   @Published var googleCalendarEventLinksByTaskKey: [String: String]
   @Published var isNetworkReachable: Bool = true
+
+  /// Mutations that failed due to network unavailability, pending a retry when connectivity is restored.
+  /// Keyed by taskId; later mutations overwrite earlier ones for the same task.
+  var pendingTaskMutations: [Int: (content: String?, due: String?)] = [:]
 
   var dismissedOnboardingDialogs: Set<OnboardingDialog>
   var offlineArchivedTasksById: [Int: CheckvistTask]
@@ -190,7 +156,7 @@ class BarTaskerManager: ObservableObject {
   )
   var usesKeychainStorage: Bool {
     #if DEBUG
-      !ignoreKeychainInDebug
+      !preferences.ignoreKeychainInDebug
     #else
       true
     #endif
@@ -228,6 +194,7 @@ class BarTaskerManager: ObservableObject {
         resolvedMCPIntegrationPlugin.pluginIdentifier,
       ]
     )
+    self.preferences = PreferencesManager(preferencesStore: preferencesStore)
 
     let storedUsername = preferencesStore.string(.checkvistUsername)
     let storedListId = preferencesStore.string(.checkvistListId)
@@ -262,71 +229,13 @@ class BarTaskerManager: ObservableObject {
     self.mcpIntegrationEnabled =
       storedMCPIntegrationEnabled
       ?? preferencesStore.bool(.mcpIntegrationEnabled, default: false)
-    self.appTheme =
-      AppTheme(rawValue: preferencesStore.int(.appThemeRawValue, default: 0))
-      ?? .system
-    self.themeAccentPreset =
-      ThemeAccentPreset(
-        rawValue: preferencesStore.string(
-          .themeAccentPresetRawValue,
-          default: ThemeAccentPreset.blue.rawValue
-        )
-      )
-      ?? .blue
-    self.themeCustomAccentHex =
-      BarTaskerThemeColorCodec.normalizedHex(
-        preferencesStore.string(.themeCustomAccentHex, default: ThemeAccentPreset.blue.hex)
-      ) ?? ThemeAccentPreset.blue.hex
-    self.themeColorTokenHexOverrides =
-      Self.normalizedThemeColorTokenHexOverrides(
-        preferencesStore.stringDictionary(.themeColorTokenHexOverrides)
-      )
     self.mcpServerCommandPath = resolvedMCPIntegrationPlugin.serverCommandURL()?.path ?? ""
-    self.confirmBeforeDelete = preferencesStore.bool(.confirmBeforeDelete, default: true)
-    self.showTaskBreadcrumbContext = preferencesStore.bool(
-      .showTaskBreadcrumbContext, default: false)
     self.rootTaskView =
       RootTaskView(rawValue: preferencesStore.int(.rootTaskView, default: 1)) ?? .due
     self.selectedRootDueBucketRawValue = preferencesStore.int(
       .selectedRootDueBucketRawValue, default: -1)
     self.selectedRootTag = preferencesStore.string(.selectedRootTag)
-    self.launchAtLogin = preferencesStore.bool(.launchAtLogin, default: false)
-    #if DEBUG
-      self.ignoreKeychainInDebug =
-        preferencesStore.bool(
-          .ignoreKeychainInDebug,
-          default: true
-        )
-    #else
-      self.ignoreKeychainInDebug = true
-    #endif
-    self.globalHotkeyEnabled = preferencesStore.bool(.globalHotkeyEnabled, default: false)
-    self.globalHotkeyKeyCode = preferencesStore.int(.globalHotkeyKeyCode, default: CarbonKey.space)
-    self.globalHotkeyModifiers = preferencesStore.int(
-      .globalHotkeyModifiers, default: CarbonModifier.option)
-    self.quickAddHotkeyEnabled = preferencesStore.bool(.quickAddHotkeyEnabled, default: false)
-    self.quickAddHotkeyKeyCode = preferencesStore.int(.quickAddHotkeyKeyCode, default: CarbonKey.b)
-    self.quickAddHotkeyModifiers = preferencesStore.int(
-      .quickAddHotkeyModifiers, default: CarbonModifier.shiftOption)
-    self.quickAddLocationMode =
-      QuickAddLocationMode(
-        rawValue: preferencesStore.int(.quickAddLocationModeRawValue, default: 0))
-      ?? .defaultRoot
-    self.quickAddSpecificParentTaskId = preferencesStore.string(.quickAddSpecificParentTaskId)
-    let persistedShortcutOverrides = preferencesStore.stringDictionary(
-      .customizableShortcutsByAction)
-    self.customizableShortcutsByAction = persistedShortcutOverrides
-    let storedKanbanJson = preferencesStore.string(.kanbanColumns)
-    if !storedKanbanJson.isEmpty,
-      let data = storedKanbanJson.data(using: .utf8),
-      let decoded = try? JSONDecoder().decode([KanbanColumn].self, from: data),
-      !decoded.isEmpty
-    {
-      self.kanbanColumns = decoded
-    } else {
-      self.kanbanColumns = KanbanColumn.defaults
-    }
-    self.maxTitleWidth = preferencesStore.double(.maxTitleWidth, default: 150.0)
+    self.kanban = KanbanManager(preferencesStore: preferencesStore)
     if let storedOnboarding = storedOnboardingCompletedFlag {
       self.onboardingCompleted = storedOnboarding
     } else {
@@ -346,13 +255,7 @@ class BarTaskerManager: ObservableObject {
         preferencesStore.set(true, for: .pluginSelectionOnboardingCompleted)
       }
     }
-    self.timerBarLeading = preferencesStore.bool(.timerBarLeading, default: false)
-    self.timerMode = TimerMode(rawValue: preferencesStore.int(.timerMode, default: 0)) ?? .visible
-    self.timerByTaskId = Self.timerDictionaryFromDefaults(preferencesStore: preferencesStore)
-    self.namedTimeMorningHour = preferencesStore.int(.namedTimeMorningHour, default: 9)
-    self.namedTimeAfternoonHour = preferencesStore.int(.namedTimeAfternoonHour, default: 14)
-    self.namedTimeEveningHour = preferencesStore.int(.namedTimeEveningHour, default: 18)
-    self.namedTimeEodHour = preferencesStore.int(.namedTimeEodHour, default: 17)
+    self.timer = TimerManager(preferencesStore: preferencesStore)
     let storedStartDates = preferencesStore.stringDictionary(.taskStartDatesByTaskId)
     self.taskStartDatesByTaskId = Dictionary(
       uniqueKeysWithValues: storedStartDates.compactMap { key, value in
@@ -385,6 +288,16 @@ class BarTaskerManager: ObservableObject {
       useKeychainStorageAtInit: useKeychainStorageAtInit)
 
     setupBindings()
+    preferences.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+    timer.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+    kanban.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+    kanban.dataSource = self
     setupNetworkMonitor()
     Task { @MainActor [weak self] in
       self?.presentOnboardingDialogIfNeeded()
@@ -399,4 +312,32 @@ class BarTaskerManager: ObservableObject {
     reachabilityMonitor.stop()
   }
   // swiftlint:enable function_body_length
+}
+
+// MARK: - KanbanTaskDataSource conformance
+
+extension BarTaskerManager: KanbanTaskDataSource {}
+
+// MARK: - Kanban move orchestration (cross-cutting: kanban + task CRUD)
+
+extension BarTaskerManager {
+  @MainActor func moveCurrentTaskToKanbanColumn(direction: Int) async {
+    guard let outcome = kanban.computeMoveCurrentTask(direction: direction) else { return }
+    switch outcome {
+    case .error(let msg):
+      errorMessage = msg
+    case .update(let task, let newContent, let newDue):
+      await updateTask(task: task, content: newContent, due: newDue)
+    }
+  }
+
+  @MainActor func moveTask(id taskId: Int, toColumn targetColumn: KanbanColumn) async {
+    guard let outcome = kanban.computeMoveTask(id: taskId, toColumn: targetColumn) else { return }
+    switch outcome {
+    case .error(let msg):
+      errorMessage = msg
+    case .update(let task, let newContent, let newDue):
+      await updateTask(task: task, content: newContent, due: newDue)
+    }
+  }
 }

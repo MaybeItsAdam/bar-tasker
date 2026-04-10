@@ -27,11 +27,12 @@ extension BarTaskerManager {
       $selectedRootTag.map { _ in () }.eraseToAnyPublisher(),
       $quickEntryMode.map { _ in () }.eraseToAnyPublisher(),
       $priorityTaskIds.map { _ in () }.eraseToAnyPublisher(),
-      $timerByTaskId.map { _ in () }.eraseToAnyPublisher(),
-      $kanbanColumns.map { _ in () }.eraseToAnyPublisher(),
-      $kanbanFocusedColumnIndex.map { _ in () }.eraseToAnyPublisher(),
-      $kanbanFilterTag.map { _ in () }.eraseToAnyPublisher(),
-      $kanbanFilterSubtasks.map { _ in () }.eraseToAnyPublisher(),
+      timer.$timerByTaskId.map { _ in () }.eraseToAnyPublisher(),
+      kanban.$kanbanColumns.map { _ in () }.eraseToAnyPublisher(),
+      kanban.$kanbanFocusedColumnIndex.map { _ in () }.eraseToAnyPublisher(),
+      kanban.$kanbanFilterTag.map { _ in () }.eraseToAnyPublisher(),
+      kanban.$kanbanFilterSubtasks.map { _ in () }.eraseToAnyPublisher(),
+      kanban.$kanbanFilterParentId.map { _ in () }.eraseToAnyPublisher(),
       $taskStartDatesByTaskId.map { _ in () }.eraseToAnyPublisher()
     )
     .sink { [weak self] _ in
@@ -68,10 +69,6 @@ extension BarTaskerManager {
         self?.loadPendingObsidianSyncQueue(for: value)
         self?.refreshOnboardingDialogState()
       }.store(in: &cancellables)
-    $confirmBeforeDelete.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .confirmBeforeDelete)
-    }
-    .store(in: &cancellables)
     $obsidianIntegrationEnabled
       .sink { [weak self] value in
         self?.preferencesStore.set(value, for: .obsidianIntegrationEnabled)
@@ -90,53 +87,10 @@ extension BarTaskerManager {
         self?.refreshOnboardingDialogState()
       }
       .store(in: &cancellables)
-    $appTheme.sink { [weak self] in
-      self?.preferencesStore.set($0.rawValue, for: .appThemeRawValue)
-    }
-    .store(in: &cancellables)
-    $themeAccentPreset.sink { [weak self] in
-      self?.preferencesStore.set($0.rawValue, for: .themeAccentPresetRawValue)
-    }
-    .store(in: &cancellables)
-    $themeCustomAccentHex
-      .dropFirst()
-      .sink { [weak self] value in
-        guard let self else { return }
-        let normalized =
-          BarTaskerThemeColorCodec.normalizedHex(value) ?? ThemeAccentPreset.blue.hex
-        if normalized != value {
-          self.themeCustomAccentHex = normalized
-          return
-        }
-        self.preferencesStore.set(normalized, for: .themeCustomAccentHex)
-      }
-      .store(in: &cancellables)
-    $themeColorTokenHexOverrides
-      .dropFirst()
-      .sink { [weak self] value in
-        guard let self else { return }
-        let normalized = Self.normalizedThemeColorTokenHexOverrides(value)
-        if normalized != value {
-          self.themeColorTokenHexOverrides = normalized
-          return
-        }
-        self.preferencesStore.set(normalized, for: .themeColorTokenHexOverrides)
-      }
-      .store(in: &cancellables)
-    $showTaskBreadcrumbContext.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .showTaskBreadcrumbContext)
-    }
-    .store(in: &cancellables)
     $rootTaskView.sink { [weak self] in
       self?.preferencesStore.set($0.rawValue, for: .rootTaskView)
     }
     .store(in: &cancellables)
-    $kanbanColumns
-      .dropFirst()
-      .sink { [weak self] columns in
-        self?.saveKanbanColumns(columns)
-      }
-      .store(in: &cancellables)
     $selectedRootDueBucketRawValue.sink { [weak self] in
       self?.preferencesStore.set($0, for: .selectedRootDueBucketRawValue)
     }
@@ -145,10 +99,9 @@ extension BarTaskerManager {
       self?.preferencesStore.set($0, for: .selectedRootTag)
     }
     .store(in: &cancellables)
-    $launchAtLogin.sink { [weak self] newValue in
+    preferences.$launchAtLogin.sink { [weak self] newValue in
       guard let self else { return }
       if self.isApplyingLaunchAtLoginChange { return }
-      self.preferencesStore.set(newValue, for: .launchAtLogin)
       if #available(macOS 13.0, *) {
         do {
           if newValue {
@@ -168,97 +121,27 @@ extension BarTaskerManager {
           }
           if newValue {
             self.isApplyingLaunchAtLoginChange = true
-            self.launchAtLogin = false
-            self.preferencesStore.set(false, for: .launchAtLogin)
+            self.preferences.launchAtLogin = false
             self.isApplyingLaunchAtLoginChange = false
           }
         }
       }
     }.store(in: &cancellables)
     #if DEBUG
-      $ignoreKeychainInDebug
+      preferences.$ignoreKeychainInDebug
         .dropFirst()
-        .sink { [weak self] newValue in
+        .sink { [weak self] _ in
           guard let self else { return }
-          self.preferencesStore.set(
-            newValue, for: .ignoreKeychainInDebug)
           self.handleCredentialStorageModeChanged()
         }.store(in: &cancellables)
     #endif
-    $globalHotkeyEnabled.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .globalHotkeyEnabled)
-    }
-    .store(in: &cancellables)
-    $globalHotkeyKeyCode.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .globalHotkeyKeyCode)
-    }
-    .store(in: &cancellables)
-    $globalHotkeyModifiers.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .globalHotkeyModifiers)
-    }
-    .store(in: &cancellables)
-    $quickAddHotkeyEnabled.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .quickAddHotkeyEnabled)
-    }
-    .store(in: &cancellables)
-    $quickAddHotkeyKeyCode.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .quickAddHotkeyKeyCode)
-    }
-    .store(in: &cancellables)
-    $quickAddHotkeyModifiers.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .quickAddHotkeyModifiers)
-    }
-    .store(in: &cancellables)
-    $quickAddLocationMode.sink { [weak self] in
-      self?.preferencesStore.set($0.rawValue, for: .quickAddLocationModeRawValue)
-    }
-    .store(in: &cancellables)
-    $quickAddSpecificParentTaskId.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .quickAddSpecificParentTaskId)
-    }
-    .store(in: &cancellables)
-    $customizableShortcutsByAction.sink { [weak self] value in
-      self?.preferencesStore.set(value, for: .customizableShortcutsByAction)
-    }
-    .store(in: &cancellables)
-    $maxTitleWidth.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .maxTitleWidth)
-    }.store(
-      in: &cancellables)
     $onboardingCompleted
       .sink { [weak self] in
         self?.preferencesStore.set(
           $0, for: .onboardingCompleted)
       }
       .store(in: &cancellables)
-    $timerBarLeading.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .timerBarLeading)
-    }.store(
-      in: &cancellables)
-    $timerMode.sink { [weak self] mode in
-      self?.preferencesStore.set(mode.rawValue, for: .timerMode)
-      if mode == .disabled {
-        Task { @MainActor in
-          self?.stopTimer()
-        }
-      }
-    }.store(in: &cancellables)
-    $timerByTaskId.sink { timers in
-      let encoded = Dictionary(uniqueKeysWithValues: timers.map { (String($0.key), $0.value) })
-      self.preferencesStore.set(encoded, for: .timerByTaskId)
-    }.store(in: &cancellables)
-    $namedTimeMorningHour.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .namedTimeMorningHour)
-    }.store(in: &cancellables)
-    $namedTimeAfternoonHour.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .namedTimeAfternoonHour)
-    }.store(in: &cancellables)
-    $namedTimeEveningHour.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .namedTimeEveningHour)
-    }.store(in: &cancellables)
-    $namedTimeEodHour.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .namedTimeEodHour)
-    }.store(in: &cancellables)
+    // Timer persistence bindings are owned by TimerManager
     $recurrenceRulesByTaskId.sink { [weak self] rules in
       guard let self else { return }
       let encoded = Dictionary(uniqueKeysWithValues: rules.map { (String($0.key), $0.value) })
@@ -266,18 +149,6 @@ extension BarTaskerManager {
     }.store(in: &cancellables)
   }
   // swiftlint:enable function_body_length
-
-  static func timerDictionaryFromDefaults(
-    preferencesStore: BarTaskerPreferencesStore
-  ) -> [Int: TimeInterval] {
-    let raw = preferencesStore.timerDictionary()
-    guard !raw.isEmpty else { return [:] }
-    var result: [Int: TimeInterval] = [:]
-    for (key, value) in raw {
-      if let id = Int(key) { result[id] = value }
-    }
-    return result
-  }
 
   private static func normalizedTaskIdQueue(_ queue: [Int], maximumCount: Int? = nil) -> [Int] {
     var seen = Set<Int>()
@@ -332,11 +203,11 @@ extension BarTaskerManager {
       guard let self else { return }
       Task { @MainActor in
         self.isNetworkReachable = reachable
-        guard
-          reachable,
-          self.obsidianIntegrationEnabled,
-          !self.pendingObsidianSyncTaskIds.isEmpty
-        else { return }
+        guard reachable else { return }
+        await self.flushPendingTaskMutations()
+        guard self.obsidianIntegrationEnabled, !self.pendingObsidianSyncTaskIds.isEmpty else {
+          return
+        }
         await self.processPendingObsidianSyncQueue()
       }
     }
@@ -429,6 +300,12 @@ extension BarTaskerManager {
     }
   }
 
+  /// Explicitly load the remote key from the system keychain. Call only in response to a user action.
+  @MainActor func loadCredentialsFromKeychain() {
+    hasAttemptedRemoteKeyBootstrap = false
+    loadRemoteKeyFromKeychainIfNeeded()
+  }
+
   func loadRemoteKeyFromKeychainIfNeeded() {
     let currentState = RemoteKeyBootstrapState(
       remoteKey: remoteKey,
@@ -445,9 +322,9 @@ extension BarTaskerManager {
 
   @MainActor func toggleDebugKeychainStorageMode() {
     #if DEBUG
-      ignoreKeychainInDebug.toggle()
+      preferences.ignoreKeychainInDebug.toggle()
       errorMessage =
-        ignoreKeychainInDebug
+        preferences.ignoreKeychainInDebug
         ? "Dev mode: keychain disabled (no password prompts)."
         : "Dev mode: keychain enabled."
     #endif

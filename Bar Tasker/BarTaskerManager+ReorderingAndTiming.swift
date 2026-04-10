@@ -147,47 +147,7 @@ extension BarTaskerManager {
     }
   }
 
-  // MARK: - Timer Methods
-
-  @MainActor func toggleTimerForCurrentTask() {
-    guard timerIsEnabled else { return }
-    guard let task = currentTask else { return }
-    if timedTaskId == task.id {
-      timerRunning ? pauseTimer() : resumeTimer()
-    } else {
-      pauseTimer()
-      timedTaskId = task.id
-      if timerByTaskId[task.id] == nil {
-        timerByTaskId[task.id] = 0
-      }
-      resumeTimer()
-    }
-  }
-
-  @MainActor func pauseTimer() {
-    timerRunning = false
-    timerTask?.cancel()
-    timerTask = nil
-  }
-
-  @MainActor func resumeTimer() {
-    guard timerIsEnabled, let activeTaskId = timedTaskId, !timerRunning else { return }
-    timerRunning = true
-    timerTask = Task { [weak self] in
-      while !Task.isCancelled {
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        guard !Task.isCancelled else { break }
-        await MainActor.run {
-          self?.timerByTaskId[activeTaskId, default: 0] += 1
-        }
-      }
-    }
-  }
-
-  @MainActor func stopTimer() {
-    pauseTimer()
-    timedTaskId = nil
-  }
+  // Timer methods are now on TimerManager (accessed via `timer.*`)
 
   @MainActor func executeCommandInput(_ input: String) async {
     let parsed = BarTaskerCommandEngine.parse(input)
@@ -204,10 +164,10 @@ extension BarTaskerManager {
 
   func resolveDueDateWithConfig(_ input: String) -> String {
     let config = BarTaskerDateParsingConfig(
-      morningHour: namedTimeMorningHour,
-      afternoonHour: namedTimeAfternoonHour,
-      eveningHour: namedTimeEveningHour,
-      eodHour: namedTimeEodHour
+      morningHour: preferences.namedTimeMorningHour,
+      afternoonHour: preferences.namedTimeAfternoonHour,
+      eveningHour: preferences.namedTimeEveningHour,
+      eodHour: preferences.namedTimeEodHour
     )
     return BarTaskerCommandEngine.resolveDueDate(input, config: config)
   }

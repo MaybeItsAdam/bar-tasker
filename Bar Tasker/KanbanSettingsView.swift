@@ -17,8 +17,8 @@ struct KanbanSettingsView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .sheet(item: $editingColumn) { col in
       KanbanColumnEditorView(column: col) { updated in
-        if let idx = manager.kanbanColumns.firstIndex(where: { $0.id == updated.id }) {
-          manager.kanbanColumns[idx] = updated
+        if let idx = manager.kanban.kanbanColumns.firstIndex(where: { $0.id == updated.id }) {
+          manager.kanban.kanbanColumns[idx] = updated
         }
         editingColumn = nil
       } onCancel: {
@@ -28,7 +28,7 @@ struct KanbanSettingsView: View {
     .sheet(isPresented: $showingAddColumn) {
       let fresh = KanbanColumn(name: "New Column", conditions: [.catchAll])
       KanbanColumnEditorView(column: fresh) { created in
-        manager.kanbanColumns.append(created)
+        manager.kanban.kanbanColumns.append(created)
         showingAddColumn = false
       } onCancel: {
         showingAddColumn = false
@@ -60,15 +60,15 @@ struct KanbanSettingsView: View {
 
   private var columnList: some View {
     List {
-      ForEach(manager.kanbanColumns) { col in
+      ForEach(manager.kanban.kanbanColumns) { col in
         KanbanColumnRow(column: col) {
           editingColumn = col
         } onDelete: {
-          manager.kanbanColumns.removeAll { $0.id == col.id }
+          manager.kanban.kanbanColumns.removeAll { $0.id == col.id }
         }
       }
       .onMove { from, to in
-        manager.kanbanColumns.move(fromOffsets: from, toOffset: to)
+        manager.kanban.kanbanColumns.move(fromOffsets: from, toOffset: to)
       }
     }
     .listStyle(.inset)

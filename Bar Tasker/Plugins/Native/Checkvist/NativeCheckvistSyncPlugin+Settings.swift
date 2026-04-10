@@ -26,8 +26,13 @@ private struct CheckvistSyncPluginSettingsView: View {
             .autocorrectionDisabled()
 
           Text("Remote API Key")
-          SecureField("", text: $manager.remoteKey)
-            .textFieldStyle(.roundedBorder)
+          HStack {
+            SecureField("", text: $manager.remoteKey)
+              .textFieldStyle(.roundedBorder)
+            Button("Load from Keychain") {
+              manager.loadCredentialsFromKeychain()
+            }
+          }
 
           HStack(spacing: 8) {
             Button("Connect & Load Lists") {

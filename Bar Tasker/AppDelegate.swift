@@ -117,12 +117,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // Register global hotkeys, debouncing rapid changes into a single re-registration.
     registerGlobalHotkeys()
     Publishers.MergeMany(
-      checkvistManager.$globalHotkeyEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher(),
-      checkvistManager.$globalHotkeyKeyCode.dropFirst().map { _ in () }.eraseToAnyPublisher(),
-      checkvistManager.$globalHotkeyModifiers.dropFirst().map { _ in () }.eraseToAnyPublisher(),
-      checkvistManager.$quickAddHotkeyEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher(),
-      checkvistManager.$quickAddHotkeyKeyCode.dropFirst().map { _ in () }.eraseToAnyPublisher(),
-      checkvistManager.$quickAddHotkeyModifiers.dropFirst().map { _ in () }.eraseToAnyPublisher()
+      checkvistManager.preferences.$globalHotkeyEnabled.dropFirst().map { _ in () }
+        .eraseToAnyPublisher(),
+      checkvistManager.preferences.$globalHotkeyKeyCode.dropFirst().map { _ in () }
+        .eraseToAnyPublisher(),
+      checkvistManager.preferences.$globalHotkeyModifiers.dropFirst().map { _ in () }
+        .eraseToAnyPublisher(),
+      checkvistManager.preferences.$quickAddHotkeyEnabled.dropFirst().map { _ in () }
+        .eraseToAnyPublisher(),
+      checkvistManager.preferences.$quickAddHotkeyKeyCode.dropFirst().map { _ in () }
+        .eraseToAnyPublisher(),
+      checkvistManager.preferences.$quickAddHotkeyModifiers.dropFirst().map { _ in () }
+        .eraseToAnyPublisher()
     )
     .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
     .sink { [weak self] _ in
@@ -130,14 +136,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     .store(in: &cancellables)
 
-    checkvistManager.$maxTitleWidth
+    checkvistManager.preferences.$maxTitleWidth
       .dropFirst().receive(on: RunLoop.main)
       .sink { [weak self] _ in
         self?.updateTitle()
       }
       .store(in: &cancellables)
 
-    checkvistManager.$appTheme
+    checkvistManager.preferences.$appTheme
       .dropFirst()
       .receive(on: RunLoop.main)
       .sink { [weak self] _ in
@@ -183,7 +189,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   private func applyAppTheme() {
-    switch checkvistManager.appTheme {
+    switch checkvistManager.preferences.appTheme {
     case .system:
       NSApp.appearance = nil
     case .light:
@@ -208,18 +214,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private func registerGlobalHotkeys() {
     unregisterGlobalHotkeys()
 
-    if checkvistManager.globalHotkeyEnabled {
+    if checkvistManager.preferences.globalHotkeyEnabled {
       globalHotkeyRef = registerHotkey(
         id: .togglePopover,
-        keyCode: checkvistManager.globalHotkeyKeyCode,
-        modifiers: checkvistManager.globalHotkeyModifiers
+        keyCode: checkvistManager.preferences.globalHotkeyKeyCode,
+        modifiers: checkvistManager.preferences.globalHotkeyModifiers
       )
     }
-    if checkvistManager.quickAddHotkeyEnabled {
+    if checkvistManager.preferences.quickAddHotkeyEnabled {
       quickAddHotkeyRef = registerHotkey(
         id: .quickAdd,
-        keyCode: checkvistManager.quickAddHotkeyKeyCode,
-        modifiers: checkvistManager.quickAddHotkeyModifiers
+        keyCode: checkvistManager.preferences.quickAddHotkeyKeyCode,
+        modifiers: checkvistManager.preferences.quickAddHotkeyModifiers
       )
     }
   }
@@ -271,10 +277,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let menuBarFontSize = NSFont.menuBarFont(ofSize: 0).pointSize
     let font = BarTaskerTypography.taskNSFont(ofSize: menuBarFontSize)
     let horizontalPadding: CGFloat = 16
-    let timerStr = checkvistManager.timerBarString
+    let currentTaskId = checkvistManager.currentTask?.id
+    let elapsedForCurrentTask = currentTaskId.map { checkvistManager.totalElapsed(forTaskId: $0) } ?? 0
+    let timerStr = checkvistManager.timer.timerBarString(
+      currentTaskId: currentTaskId,
+      totalElapsedForCurrentTask: elapsedForCurrentTask
+    )
     let timerVisible = timerStr != nil
 
-    let requestedMaxWidth: CGFloat = CGFloat(checkvistManager.maxTitleWidth)
+    let requestedMaxWidth: CGFloat = CGFloat(checkvistManager.preferences.maxTitleWidth)
     let maxWidth: CGFloat
     if let timerStr {
       let timerOnlyWidth = NSAttributedString(
@@ -291,7 +302,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       taskText: taskText,
       timerText: timerStr,
       maxWidth: contentWidth,
-      timerLeading: checkvistManager.timerBarLeading
+      timerLeading: checkvistManager.timer.timerBarLeading
     )
     let text: String
     if let cached = cachedTitleInputs, let cachedResult = cachedTitleResult,
@@ -304,7 +315,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         timerStr: timerStr,
         maxContentWidth: contentWidth,
         font: font,
-        timerLeading: checkvistManager.timerBarLeading
+        timerLeading: checkvistManager.timer.timerBarLeading
       )
       cachedTitleInputs = titleInputs
       cachedTitleResult = text

@@ -6,16 +6,18 @@ struct KanbanBoardView: View {
   @EnvironmentObject var manager: BarTaskerManager
 
   private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
-    manager.themeColor(for: token)
+    manager.preferences.themeColor(for: token)
   }
 
   private var isFilterActive: Bool {
-    !manager.kanbanFilterTag.isEmpty || manager.kanbanFilterSubtasks
+    !manager.kanban.kanbanFilterTag.isEmpty || manager.kanban.kanbanFilterSubtasks
+      || manager.kanban.kanbanFilterParentId != nil
   }
 
   var body: some View {
-    let columns = manager.kanbanColumns
+    let columns = manager.kanban.kanbanColumns
     let childCounts = manager.childCountByTaskId()
+    let effectiveSelectedId = manager.kanban.currentKanbanTask?.id
     VStack(spacing: 0) {
       if isFilterActive {
         kanbanFilterBar
@@ -23,14 +25,15 @@ struct KanbanBoardView: View {
       }
       HStack(alignment: .top, spacing: 0) {
         ForEach(Array(columns.enumerated().reversed()), id: \.element.id) { colIndex, column in
-          let tasks = manager.tasksForKanbanColumn(column, allColumns: columns)
-          let isFocused = colIndex == manager.kanbanFocusedColumnIndex
+          let tasks = manager.kanban.tasksForKanbanColumn(column, allColumns: columns)
+          let isFocused = colIndex == manager.kanban.kanbanFocusedColumnIndex
           KanbanColumnView(
             column: column,
             tasks: tasks,
             columnIndex: colIndex,
             isFocused: isFocused,
-            childCounts: childCounts
+            childCounts: childCounts,
+            effectiveSelectedId: effectiveSelectedId
           )
           if colIndex > 0 {
             Divider()
@@ -47,20 +50,27 @@ struct KanbanBoardView: View {
         .font(.system(size: 11))
         .foregroundColor(themeColor(.link))
 
-      if manager.kanbanFilterSubtasks {
+      if let parentId = manager.kanban.kanbanFilterParentId,
+        let parentTask = manager.tasks.first(where: { $0.id == parentId })
+      {
+        filterChip("↳ \(parentTask.content.strippingTags)") {
+          manager.kanban.kanbanFilterParentId = nil
+        }
+      } else if manager.kanban.kanbanFilterSubtasks {
         filterChip("Subtasks of current") {
-          manager.kanbanFilterSubtasks = false
+          manager.kanban.kanbanFilterSubtasks = false
         }
       }
-      if !manager.kanbanFilterTag.isEmpty {
-        filterChip("#\(manager.kanbanFilterTag)") {
-          manager.kanbanFilterTag = ""
+      if !manager.kanban.kanbanFilterTag.isEmpty {
+        filterChip("#\(manager.kanban.kanbanFilterTag)") {
+          manager.kanban.kanbanFilterTag = ""
         }
       }
       Spacer()
       Button("Clear") {
-        manager.kanbanFilterTag = ""
-        manager.kanbanFilterSubtasks = false
+        manager.kanban.kanbanFilterTag = ""
+        manager.kanban.kanbanFilterSubtasks = false
+        manager.kanban.kanbanFilterParentId = nil
       }
       .font(.system(size: 10))
       .buttonStyle(.plain)
@@ -75,7 +85,9 @@ struct KanbanBoardView: View {
     HStack(spacing: 3) {
       Text(label)
         .font(.system(size: 10))
-      Button { onRemove() } label: {
+      Button {
+        onRemove()
+      } label: {
         Image(systemName: "xmark")
           .font(.system(size: 8, weight: .bold))
       }
@@ -98,9 +110,10 @@ private struct KanbanColumnView: View {
   let columnIndex: Int
   let isFocused: Bool
   let childCounts: [Int: Int]
+  let effectiveSelectedId: Int?
 
   private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
-    manager.themeColor(for: token)
+    manager.preferences.themeColor(for: token)
   }
 
   var body: some View {
@@ -150,25 +163,25 @@ private struct KanbanColumnView: View {
           ScrollView {
             VStack(spacing: 0) {
               ForEach(Array(tasks.enumerated()), id: \.element.id) { taskIndex, task in
-                let isSelected =
-                  isFocused && taskIndex == manager.currentSiblingIndex
+                let isSelected = task.id == effectiveSelectedId
                 KanbanTaskCard(
                   task: task,
                   isSelected: isSelected,
                   childCount: childCounts[task.id, default: 0]
                 )
                 .id(task.id)
-                .draggable(String(task.id))
                 .onTapGesture {
-                  manager.kanbanFocusedColumnIndex = columnIndex
-                  manager.rootScopeFocusLevel = 0
+                  manager.kanban.kanbanFocusedColumnIndex = columnIndex
+                  manager.kanban.kanbanSelectedTaskId = task.id
                   manager.currentSiblingIndex = taskIndex
+                  manager.rootScopeFocusLevel = 0
                 }
+                .draggable(String(task.id))
               }
             }
           }
           .onChange(of: manager.currentSiblingIndex) { _, _ in
-            guard isFocused, let task = manager.currentKanbanTask else { return }
+            guard isFocused, let task = manager.kanban.currentKanbanTask else { return }
             if tasks.contains(where: { $0.id == task.id }) {
               proxy.scrollTo(task.id, anchor: .center)
             }
@@ -196,7 +209,7 @@ private struct KanbanTaskCard: View {
   @State private var isHovered = false
 
   private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
-    manager.themeColor(for: token)
+    manager.preferences.themeColor(for: token)
   }
 
   private var isCompleting: Bool { manager.completingTaskId == task.id }
@@ -218,7 +231,9 @@ private struct KanbanTaskCard: View {
         VStack(alignment: .leading, spacing: 3) {
           Text(task.content.strippingTags)
             .font(.system(size: 12))
-            .foregroundColor(isSelected ? themeColor(.selectionForeground) : themeColor(.textPrimary))
+            .foregroundColor(
+              isSelected ? themeColor(.selectionForeground) : themeColor(.textPrimary)
+            )
             .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
 
@@ -226,13 +241,28 @@ private struct KanbanTaskCard: View {
         }
         Spacer(minLength: 0)
         if isHovered {
-          Button(action: showInAllView) {
-            Image(systemName: "arrow.forward.circle")
-              .font(.system(size: 11))
-              .foregroundColor(themeColor(.link))
+          HStack(spacing: 5) {
+            if childCount > 0 {
+              Button {
+                manager.kanban.kanbanFilterParentId = task.id
+                manager.kanban.kanbanFilterSubtasks = false
+                manager.kanban.kanbanFilterTag = ""
+              } label: {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                  .font(.system(size: 11))
+                  .foregroundColor(themeColor(.link))
+              }
+              .buttonStyle(.plain)
+              .help("Filter to subtasks")
+            }
+            Button(action: showInAllView) {
+              Image(systemName: "arrow.forward.circle")
+                .font(.system(size: 11))
+                .foregroundColor(themeColor(.link))
+            }
+            .buttonStyle(.plain)
+            .help("Show in All view")
           }
-          .buttonStyle(.plain)
-          .help("Show in All view")
         }
       }
       .padding(.horizontal, 10)
@@ -280,9 +310,11 @@ private struct KanbanTaskCard: View {
           Text(due == "asap" ? "ASAP" : shortDateString(due))
             .font(.system(size: 10, weight: .medium))
             .foregroundColor(
-              isOverdue ? themeColor(.danger)
-              : isToday ? themeColor(.warning)
-              : themeColor(.textSecondary)
+              isOverdue
+                ? themeColor(.danger)
+                : isToday
+                  ? themeColor(.warning)
+                  : themeColor(.textSecondary)
             )
         }
 
@@ -330,14 +362,14 @@ private struct KanbanTaskCard: View {
     }
     return due
   }
-  
+
   private func naturalDateString(from date: Date) -> String {
     let calendar = Calendar.current
     let now = Date()
     let today = calendar.startOfDay(for: now)
     let targetDay = calendar.startOfDay(for: date)
     let dayDiff = calendar.dateComponents([.day], from: today, to: targetDay).day ?? 0
-    
+
     switch dayDiff {
     case 0: return "Today"
     case 1: return "Tomorrow"
@@ -358,9 +390,9 @@ private struct KanbanTaskCard: View {
 
 // MARK: - String helper
 
-private extension String {
+extension String {
   /// Returns the content string with inline tags stripped for cleaner display.
-  var strippingTags: String {
+  fileprivate var strippingTags: String {
     let pattern = try? NSRegularExpression(pattern: "\\s*[#@][\\w-]+")
     let range = NSRange(startIndex..., in: self)
     return pattern?.stringByReplacingMatches(in: self, range: range, withTemplate: "") ?? self

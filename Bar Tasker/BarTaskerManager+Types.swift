@@ -74,12 +74,6 @@ extension BarTaskerManager {
     case specificParentTask
   }
 
-  enum TimerMode: Int, CaseIterable {
-    case visible
-    case hidden
-    case disabled
-  }
-
   enum AppTheme: Int, CaseIterable {
     case system
     case light

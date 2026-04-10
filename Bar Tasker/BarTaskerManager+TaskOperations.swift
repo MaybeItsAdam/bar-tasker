@@ -87,9 +87,9 @@ extension BarTaskerManager {
       currentSiblingIndex: currentSiblingIndex,
       priorityTaskIds: priorityTaskIds,
       pendingObsidianSyncTaskIds: pendingObsidianSyncTaskIds,
-      timerByTaskId: timerByTaskId,
-      timedTaskId: timedTaskId,
-      timerRunning: timerRunning
+      timerByTaskId: timer.timerByTaskId,
+      timedTaskId: timer.timedTaskId,
+      timerRunning: timer.timerRunning
     )
   }
 
@@ -107,7 +107,7 @@ extension BarTaskerManager {
     var childrenByParent: [Int: [(index: Int, task: CheckvistTask)]] = [:]
 
     for (index, task) in flatTasks.enumerated() {
-      let parentId = task.parentId.flatMap { taskById[$0] != nil ? $0 : nil } ?? 0
+      let parentId = task.parentId ?? 0
       childrenByParent[parentId, default: []].append((index: index, task: task))
     }
 
@@ -139,7 +139,13 @@ extension BarTaskerManager {
       }
     }
 
-    appendChildren(of: 0, level: 0)
+    let missingParentIds = Set(flatTasks.compactMap { $0.parentId }.filter { taskById[$0] == nil })
+    let rootParentIds = Set([0]).union(missingParentIds).sorted()
+
+    for rootId in rootParentIds {
+      appendChildren(of: rootId, level: 0)
+    }
+
     return normalized
   }
 
@@ -169,9 +175,7 @@ extension BarTaskerManager {
       currentParentId = 0
     }
 
-    if let activeTimerTaskId = timedTaskId, !openTaskIds.contains(activeTimerTaskId) {
-      stopTimer()
-    }
+    timer.stopTimerIfTaskRemoved(openTaskIds: openTaskIds)
 
     clampSelectionToVisibleRange()
   }
@@ -185,12 +189,12 @@ extension BarTaskerManager {
     currentSiblingIndex = snapshot.currentSiblingIndex
     savePriorityQueue(snapshot.priorityTaskIds)
     savePendingObsidianSyncQueue(snapshot.pendingObsidianSyncTaskIds)
-    timerByTaskId = snapshot.timerByTaskId
-    timedTaskId = snapshot.timedTaskId
-    if snapshot.timerRunning, timedTaskId != nil {
-      resumeTimer()
+    timer.timerByTaskId = snapshot.timerByTaskId
+    timer.timedTaskId = snapshot.timedTaskId
+    if snapshot.timerRunning, timer.timedTaskId != nil {
+      timer.resumeTimer()
     } else {
-      pauseTimer()
+      timer.pauseTimer()
     }
     persistOfflineTaskState()
   }
@@ -198,7 +202,6 @@ extension BarTaskerManager {
   // MARK: - API
 
   @MainActor func login() async -> Bool {
-    loadRemoteKeyFromKeychainIfNeeded()
     let credentials = activeCredentials
     guard !credentials.normalizedUsername.isEmpty, !credentials.normalizedRemoteKey.isEmpty else {
       errorMessage = "Username or Remote Key is missing."
@@ -237,9 +240,7 @@ extension BarTaskerManager {
       reconcilePriorityQueueWithOpenTasks()
       reconcilePendingObsidianSyncQueueWithOpenTasks()
       clampSelectionToVisibleRange()
-      if let activeTimerTaskId = timedTaskId, !Set(tasks.map(\.id)).contains(activeTimerTaskId) {
-        stopTimer()
-      }
+      timer.stopTimerIfTaskRemoved(openTaskIds: Set(tasks.map(\.id)))
       return
     }
 
@@ -259,18 +260,25 @@ extension BarTaskerManager {
         checkvistSyncPlugin.persistTaskCache(listId: listId, tasks: fetchedTasks)
         reconcilePriorityQueueWithOpenTasks()
         reconcilePendingObsidianSyncQueueWithOpenTasks()
-        if currentSiblingIndex >= fetchedTasks.count { currentSiblingIndex = 0 }
+        if rootTaskView == .kanban {
+          kanban.clampKanbanSelection()
+        } else if currentSiblingIndex >= fetchedTasks.count {
+          currentSiblingIndex = 0
+        }
         let latestOpenTaskIDs = Set(fetchedTasks.map(\.id))
         let previousTimerNodes = previousTasks.map {
           BarTaskerTimerNode(id: $0.id, parentId: $0.parentId)
         }
-        self.timerByTaskId = TimerElapsedReassignmentPolicy.remapElapsed(
+        self.timer.timerByTaskId = TimerElapsedReassignmentPolicy.remapElapsed(
           previousNodes: previousTimerNodes,
           latestOpenTaskIDs: latestOpenTaskIDs,
-          elapsedByTaskID: self.timerByTaskId
+          elapsedByTaskID: self.timer.timerByTaskId
         )
-        if let activeTimerTaskID = timedTaskId, !latestOpenTaskIDs.contains(activeTimerTaskID) {
-          stopTimer()
+        self.timer.stopTimerIfTaskRemoved(openTaskIds: latestOpenTaskIDs)
+        if let filterParentId = kanban.kanbanFilterParentId,
+          !latestOpenTaskIDs.contains(filterParentId)
+        {
+          kanban.kanbanFilterParentId = nil
         }
         if !listId.isEmpty && canAttemptLogin {
           onboardingCompleted = true
@@ -336,10 +344,14 @@ extension BarTaskerManager {
         )
         offlineArchivedTasksById[removedTask.id] = archivedTask
       }
-      timerByTaskId = timerByTaskId.filter { !removedTaskIds.contains($0.key) }
+      timer.timerByTaskId = timer.timerByTaskId.filter { !removedTaskIds.contains($0.key) }
       removeTasksFromPriorityQueue(removedTaskIds)
       savePendingObsidianSyncQueue(
         pendingObsidianSyncTaskIds.filter { !removedTaskIds.contains($0) })
+      pendingTaskMutations = pendingTaskMutations.filter { !removedTaskIds.contains($0.key) }
+      if let filterParentId = kanban.kanbanFilterParentId, removedTaskIds.contains(filterParentId) {
+        kanban.kanbanFilterParentId = nil
+      }
       persistOfflineTaskState()
       if !isUndo {
         lastUndo = .restoreOfflineState(snapshot: snapshot)
@@ -478,6 +490,9 @@ extension BarTaskerManager {
     listId = trimmedListId
     currentParentId = 0
     currentSiblingIndex = 0
+    pendingTaskMutations = [:]
+    kanban.kanbanFilterParentId = nil
+    kanban.kanbanSelectedTaskId = nil
     errorMessage = nil
     await fetchTopTask()
   }
@@ -722,11 +737,21 @@ extension BarTaskerManager {
         errorMessage = "Failed to update task."
       }
     } catch CheckvistSessionError.authenticationUnavailable {
-      tasks[index] = originalTask
-      setAuthenticationRequiredErrorIfNeeded()
+      if !isNetworkReachable {
+        pendingTaskMutations[task.id] = (content: content, due: due)
+        errorMessage = "Offline — will sync when connected."
+      } else {
+        tasks[index] = originalTask
+        setAuthenticationRequiredErrorIfNeeded()
+      }
     } catch {
-      tasks[index] = originalTask
-      errorMessage = "Error: \(error.localizedDescription)"
+      if !isNetworkReachable {
+        pendingTaskMutations[task.id] = (content: content, due: due)
+        errorMessage = "Offline — will sync when connected."
+      } else {
+        tasks[index] = originalTask
+        errorMessage = "Error: \(error.localizedDescription)"
+      }
     }
   }
 
@@ -928,7 +953,7 @@ extension BarTaskerManager {
   @MainActor
   func beginQuickAddEntry(preferSpecificLocation: Bool? = nil) -> Bool {
     let useSpecificLocation =
-      preferSpecificLocation ?? (quickAddLocationMode == .specificParentTask)
+      preferSpecificLocation ?? (preferences.quickAddLocationMode == .specificParentTask)
     if useSpecificLocation && quickAddSpecificParentTaskIdValue == nil {
       errorMessage = "Set a valid Quick Add parent task ID in Preferences first."
       return false
@@ -948,8 +973,8 @@ extension BarTaskerManager {
       errorMessage = "No task selected."
       return
     }
-    quickAddSpecificParentTaskId = String(currentTask.id)
-    quickAddLocationMode = .specificParentTask
+    preferences.quickAddSpecificParentTaskId = String(currentTask.id)
+    preferences.quickAddLocationMode = .specificParentTask
     errorMessage = nil
   }
 
@@ -1115,6 +1140,10 @@ extension BarTaskerManager {
   }
 
   @MainActor func clampSelectionToVisibleRange() {
+    if rootTaskView == .kanban {
+      kanban.clampKanbanSelection()
+      return
+    }
     let maxIndex = max(visibleTasks.count - 1, 0)
     if currentSiblingIndex > maxIndex {
       currentSiblingIndex = maxIndex
@@ -1136,7 +1165,7 @@ extension BarTaskerManager {
     let snapshot = OptimisticCompletionSnapshot(
       tasks: tasks,
       priorityTaskIds: priorityTaskIds,
-      timerByTaskId: timerByTaskId,
+      timerByTaskId: timer.timerByTaskId,
       pendingObsidianSyncTaskIds: pendingObsidianSyncTaskIds
     )
     tasks.removeSubrange(removingRange)
@@ -1148,7 +1177,7 @@ extension BarTaskerManager {
   @MainActor private func restoreTasksSnapshot(_ snapshot: OptimisticCompletionSnapshot) {
     tasks = snapshot.tasks
     savePriorityQueue(snapshot.priorityTaskIds)
-    timerByTaskId = snapshot.timerByTaskId
+    timer.timerByTaskId = snapshot.timerByTaskId
     savePendingObsidianSyncQueue(snapshot.pendingObsidianSyncTaskIds)
     clampSelectionToVisibleRange()
   }
@@ -1165,10 +1194,14 @@ extension BarTaskerManager {
       let snapshot = offlineStateSnapshot()
       let removedTaskIds = Set(tasks[removingRange].map(\.id))
       tasks.removeSubrange(removingRange)
-      timerByTaskId = timerByTaskId.filter { !removedTaskIds.contains($0.key) }
+      timer.timerByTaskId = timer.timerByTaskId.filter { !removedTaskIds.contains($0.key) }
       removeTasksFromPriorityQueue(removedTaskIds)
       savePendingObsidianSyncQueue(
         pendingObsidianSyncTaskIds.filter { !removedTaskIds.contains($0) })
+      pendingTaskMutations = pendingTaskMutations.filter { !removedTaskIds.contains($0.key) }
+      if let filterParentId = kanban.kanbanFilterParentId, removedTaskIds.contains(filterParentId) {
+        kanban.kanbanFilterParentId = nil
+      }
       persistOfflineTaskState()
       if !isUndo {
         lastUndo = .restoreOfflineState(snapshot: snapshot)
@@ -1209,6 +1242,18 @@ extension BarTaskerManager {
   @MainActor func invalidateCurrentTask() async {
     guard let task = currentTask else { return }
     await taskAction(task, endpoint: "invalidate")
+  }
+
+  // MARK: - Offline Mutation Queue
+
+  @MainActor func flushPendingTaskMutations() async {
+    guard !pendingTaskMutations.isEmpty else { return }
+    let mutations = pendingTaskMutations
+    pendingTaskMutations = [:]
+    for (taskId, mutation) in mutations {
+      guard let task = tasks.first(where: { $0.id == taskId }) else { continue }
+      await updateTask(task: task, content: mutation.content, due: mutation.due)
+    }
   }
 
   // MARK: - Undo Execution

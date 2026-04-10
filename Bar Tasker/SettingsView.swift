@@ -179,19 +179,32 @@ struct SettingsView: View {
   @State private var mergeDestinationListId = ""
   @State private var shortcutSearchText = ""
 
+  private var preferences: PreferencesManager {
+    checkvistManager.preferences
+  }
+
+  private func preferenceBinding<T>(_ keyPath: ReferenceWritableKeyPath<PreferencesManager, T>)
+    -> Binding<T>
+  {
+    Binding(
+      get: { preferences[keyPath: keyPath] },
+      set: { preferences[keyPath: keyPath] = $0 }
+    )
+  }
+
   private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
-    checkvistManager.themeColor(for: token)
+    preferences.themeColor(for: token)
   }
 
   var body: some View {
     paneContent {
       selectedPaneContent
     }
-    .tint(checkvistManager.themeAccentColor)
+    .tint(preferences.themeAccentColor)
     .task {
       syncSelectedPluginCardIfNeeded()
       if themeJSONDraft.isEmpty {
-        themeJSONDraft = checkvistManager.exportThemeJSON(prettyPrinted: true)
+        themeJSONDraft = preferences.exportThemeJSON(prettyPrinted: true)
       }
       await autoloadCheckvistListsIfNeeded()
     }
@@ -536,35 +549,47 @@ struct SettingsView: View {
       }
 
       Section(header: Text("Preferences")) {
-        Toggle("Confirm before deleting tasks", isOn: $checkvistManager.confirmBeforeDelete)
+        Toggle("Confirm before deleting tasks", isOn: preferenceBinding(\.confirmBeforeDelete))
         if #available(macOS 13.0, *) {
-          Toggle("Launch at login", isOn: $checkvistManager.launchAtLogin)
+          Toggle("Launch at login", isOn: preferenceBinding(\.launchAtLogin))
         }
 
         VStack(alignment: .leading) {
-          Text("Max Menu Bar Width: \(Int(checkvistManager.maxTitleWidth))px")
-          Slider(value: $checkvistManager.maxTitleWidth, in: 50...800, step: 10)
+          Text("Max Menu Bar Width: \(Int(preferences.maxTitleWidth))px")
+          Slider(value: preferenceBinding(\.maxTitleWidth), in: 50...800, step: 10)
         }
         .padding(.top, 4)
 
         VStack(alignment: .leading, spacing: 6) {
           Text("Timer position in menu bar")
-          Picker("", selection: $checkvistManager.timerBarLeading) {
+          Picker(
+            "",
+            selection: Binding(
+              get: { checkvistManager.timer.timerBarLeading },
+              set: { checkvistManager.timer.timerBarLeading = $0 }
+            )
+          ) {
             Text("After task").tag(false)
             Text("Before task").tag(true)
           }
           .labelsHidden()
           .pickerStyle(.segmented)
-          .disabled(checkvistManager.timerMode != .visible)
+          .disabled(checkvistManager.timer.timerMode != .visible)
         }
         .padding(.top, 4)
 
         VStack(alignment: .leading, spacing: 6) {
           Text("Timer mode")
-          Picker("", selection: $checkvistManager.timerMode) {
-            Text("Visible").tag(BarTaskerManager.TimerMode.visible)
-            Text("Hidden").tag(BarTaskerManager.TimerMode.hidden)
-            Text("Disabled").tag(BarTaskerManager.TimerMode.disabled)
+          Picker(
+            "",
+            selection: Binding(
+              get: { checkvistManager.timer.timerMode },
+              set: { checkvistManager.timer.timerMode = $0 }
+            )
+          ) {
+            Text("Visible").tag(TimerMode.visible)
+            Text("Hidden").tag(TimerMode.hidden)
+            Text("Disabled").tag(TimerMode.disabled)
           }
           .labelsHidden()
           .pickerStyle(.segmented)
@@ -591,19 +616,19 @@ struct SettingsView: View {
 
           NamedTimePickerRow(
             label: "Morning",
-            hour: $checkvistManager.namedTimeMorningHour
+            hour: preferenceBinding(\.namedTimeMorningHour)
           )
           NamedTimePickerRow(
             label: "Afternoon",
-            hour: $checkvistManager.namedTimeAfternoonHour
+            hour: preferenceBinding(\.namedTimeAfternoonHour)
           )
           NamedTimePickerRow(
             label: "Evening",
-            hour: $checkvistManager.namedTimeEveningHour
+            hour: preferenceBinding(\.namedTimeEveningHour)
           )
           NamedTimePickerRow(
             label: "EOD / COB",
-            hour: $checkvistManager.namedTimeEodHour
+            hour: preferenceBinding(\.namedTimeEodHour)
           )
         }
         .padding(.top, 4)
@@ -729,17 +754,17 @@ struct SettingsView: View {
           title: "Global hotkey",
           description: "Shows or hides the task popover from anywhere.",
           defaultDisplay: HotkeyRecorderField.displayString(keyCode: 49, modifiers: 0x0800),
-          enabled: $checkvistManager.globalHotkeyEnabled,
-          keyCode: $checkvistManager.globalHotkeyKeyCode,
-          modifiers: $checkvistManager.globalHotkeyModifiers
+          enabled: preferenceBinding(\.globalHotkeyEnabled),
+          keyCode: preferenceBinding(\.globalHotkeyKeyCode),
+          modifiers: preferenceBinding(\.globalHotkeyModifiers)
         )
         hotkeyCard(
           title: "Quick Add hotkey",
           description: "Opens Quick Add at your configured target.",
           defaultDisplay: HotkeyRecorderField.displayString(keyCode: 11, modifiers: 0x0A00),
-          enabled: $checkvistManager.quickAddHotkeyEnabled,
-          keyCode: $checkvistManager.quickAddHotkeyKeyCode,
-          modifiers: $checkvistManager.quickAddHotkeyModifiers
+          enabled: preferenceBinding(\.quickAddHotkeyEnabled),
+          keyCode: preferenceBinding(\.quickAddHotkeyKeyCode),
+          modifiers: preferenceBinding(\.quickAddHotkeyModifiers)
         )
 
         if hotkeyConflictDetected {
@@ -765,10 +790,10 @@ struct SettingsView: View {
             .foregroundColor(themeColor(.textSecondary))
           Spacer(minLength: 0)
           Button("Reset hotkeys to defaults") {
-            checkvistManager.globalHotkeyKeyCode = 49  // Space
-            checkvistManager.globalHotkeyModifiers = 0x0800  // Option
-            checkvistManager.quickAddHotkeyKeyCode = 11  // B
-            checkvistManager.quickAddHotkeyModifiers = 0x0A00  // Shift + Option
+            preferences.globalHotkeyKeyCode = 49  // Space
+            preferences.globalHotkeyModifiers = 0x0800  // Option
+            preferences.quickAddHotkeyKeyCode = 11  // B
+            preferences.quickAddHotkeyModifiers = 0x0A00  // Shift + Option
           }
         }
       }
@@ -776,16 +801,16 @@ struct SettingsView: View {
       Section(header: Text("Quick Add Target")) {
         VStack(alignment: .leading, spacing: 6) {
           Text("Quick Add location")
-          Picker("", selection: $checkvistManager.quickAddLocationMode) {
+          Picker("", selection: preferenceBinding(\.quickAddLocationMode)) {
             Text("Default (List root)").tag(BarTaskerManager.QuickAddLocationMode.defaultRoot)
             Text("Specific task ID").tag(BarTaskerManager.QuickAddLocationMode.specificParentTask)
           }
           .labelsHidden()
           .pickerStyle(.segmented)
 
-          if checkvistManager.quickAddLocationMode == .specificParentTask {
+          if preferences.quickAddLocationMode == .specificParentTask {
             HStack {
-              TextField("Parent task ID", text: $checkvistManager.quickAddSpecificParentTaskId)
+              TextField("Parent task ID", text: preferenceBinding(\.quickAddSpecificParentTaskId))
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 180)
               Button("Use selected task") {
@@ -850,7 +875,7 @@ struct SettingsView: View {
         HStack {
           Spacer(minLength: 0)
           Button("Reset all in-app shortcuts to defaults") {
-            checkvistManager.resetConfigurableShortcutBindings()
+            preferences.resetConfigurableShortcutBindings()
           }
         }
       }
@@ -891,7 +916,7 @@ struct SettingsView: View {
     Section(header: Text("Theme")) {
       VStack(alignment: .leading, spacing: 6) {
         Text("Appearance")
-        Picker("", selection: $checkvistManager.appTheme) {
+        Picker("", selection: preferenceBinding(\.appTheme)) {
           Text("System").tag(BarTaskerManager.AppTheme.system)
           Text("Light").tag(BarTaskerManager.AppTheme.light)
           Text("Dark").tag(BarTaskerManager.AppTheme.dark)
@@ -910,7 +935,7 @@ struct SettingsView: View {
 
       VStack(alignment: .leading, spacing: 8) {
         Text("Accent color")
-        Picker("", selection: $checkvistManager.themeAccentPreset) {
+        Picker("", selection: preferenceBinding(\.themeAccentPreset)) {
           ForEach(BarTaskerManager.ThemeAccentPreset.allCases) { preset in
             Text(preset.title).tag(preset)
           }
@@ -921,14 +946,14 @@ struct SettingsView: View {
         HStack(spacing: 8) {
           ForEach(BarTaskerManager.ThemeAccentPreset.allCases.filter { $0 != .custom }) { preset in
             Button {
-              checkvistManager.themeAccentPreset = preset
+              preferences.themeAccentPreset = preset
             } label: {
               Circle()
                 .fill(BarTaskerThemeColorCodec.color(from: preset.hex) ?? .accentColor)
                 .frame(width: 18, height: 18)
                 .overlay(
                   Circle().stroke(
-                    checkvistManager.themeAccentPreset == preset
+                    preferences.themeAccentPreset == preset
                       ? themeColor(.textPrimary).opacity(0.55) : Color.clear,
                     lineWidth: 1.5
                   )
@@ -938,11 +963,11 @@ struct SettingsView: View {
           }
           Spacer(minLength: 0)
           Button("Reset") {
-            checkvistManager.resetThemeCustomization()
+            preferences.resetThemeCustomization()
           }
           .disabled(
-            checkvistManager.themeAccentPreset == .blue
-              && checkvistManager.themeCustomAccentHex
+            preferences.themeAccentPreset == .blue
+              && preferences.themeCustomAccentHex
                 == BarTaskerManager.ThemeAccentPreset.blue.hex
           )
         }
@@ -950,18 +975,18 @@ struct SettingsView: View {
         ColorPicker(
           "Custom Accent",
           selection: Binding(
-            get: { checkvistManager.themeAccentColor },
-            set: { checkvistManager.setCustomThemeAccentColor($0) }
+            get: { preferences.themeAccentColor },
+            set: { preferences.setCustomThemeAccentColor($0) }
           ),
           supportsOpacity: false
         )
 
-        if checkvistManager.themeAccentPreset == .custom {
-          TextField("#RRGGBB", text: $checkvistManager.themeCustomAccentHex)
+        if preferences.themeAccentPreset == .custom {
+          TextField("#RRGGBB", text: preferenceBinding(\.themeCustomAccentHex))
             .textFieldStyle(.roundedBorder)
             .font(.system(size: 12, design: .monospaced))
         } else {
-          Text("Using \(checkvistManager.themeAccentPreset.title) accent")
+          Text("Using \(preferences.themeAccentPreset.title) accent")
             .font(.caption)
             .foregroundColor(themeColor(.textSecondary))
         }
@@ -976,36 +1001,36 @@ struct SettingsView: View {
           .font(.caption)
           .foregroundColor(themeColor(.textSecondary))
 
-        ForEach(checkvistManager.configurableThemeColorTokens) { token in
+        ForEach(preferences.configurableThemeColorTokens) { token in
           HStack(spacing: 10) {
             Text(token.title)
               .frame(maxWidth: .infinity, alignment: .leading)
-            Text(checkvistManager.themeColorHex(for: token))
+            Text(preferences.themeColorHex(for: token))
               .font(.system(size: 11, weight: .medium, design: .monospaced))
               .foregroundColor(themeColor(.textSecondary))
               .frame(width: 88, alignment: .trailing)
             ColorPicker(
               "",
               selection: Binding(
-                get: { checkvistManager.themeColor(for: token) },
-                set: { checkvistManager.setThemeColor(token, color: $0) }
+                get: { preferences.themeColor(for: token) },
+                set: { preferences.setThemeColor(token, color: $0) }
               ),
               supportsOpacity: false
             )
             .labelsHidden()
             .frame(width: 72)
             Button("Reset") {
-              checkvistManager.resetThemeColorOverride(token)
+              preferences.resetThemeColorOverride(token)
             }
-            .disabled(checkvistManager.themeColorTokenHexOverrides[token.rawValue] == nil)
+            .disabled(preferences.themeColorTokenHexOverrides[token.rawValue] == nil)
           }
         }
 
         HStack {
           Button("Reset all semantic overrides") {
-            checkvistManager.resetAllThemeColorOverrides()
+            preferences.resetAllThemeColorOverrides()
           }
-          .disabled(!checkvistManager.hasThemeColorOverrides)
+          .disabled(!preferences.hasThemeColorOverrides)
           Spacer(minLength: 0)
         }
       }
@@ -1031,14 +1056,14 @@ struct SettingsView: View {
 
         HStack(spacing: 8) {
           Button("Load current") {
-            themeJSONDraft = checkvistManager.exportThemeJSON(prettyPrinted: true)
+            themeJSONDraft = preferences.exportThemeJSON(prettyPrinted: true)
             themeJSONStatusMessage = ""
             themeJSONStatusIsError = false
           }
           Button("Import JSON") {
             do {
-              try checkvistManager.importThemeJSON(themeJSONDraft)
-              themeJSONDraft = checkvistManager.exportThemeJSON(prettyPrinted: true)
+              try preferences.importThemeJSON(themeJSONDraft)
+              themeJSONDraft = preferences.exportThemeJSON(prettyPrinted: true)
               themeJSONStatusMessage = "Theme imported."
               themeJSONStatusIsError = false
             } catch {
@@ -1049,7 +1074,7 @@ struct SettingsView: View {
             }
           }
           Button("Copy current JSON") {
-            let payload = checkvistManager.exportThemeJSON(prettyPrinted: true)
+            let payload = preferences.exportThemeJSON(prettyPrinted: true)
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(payload, forType: .string)
@@ -1114,16 +1139,16 @@ struct SettingsView: View {
   }
 
   private var hotkeyConflictDetected: Bool {
-    guard checkvistManager.globalHotkeyEnabled, checkvistManager.quickAddHotkeyEnabled else {
+    guard preferences.globalHotkeyEnabled, preferences.quickAddHotkeyEnabled else {
       return false
     }
     return
-      checkvistManager.globalHotkeyKeyCode == checkvistManager.quickAddHotkeyKeyCode
-      && checkvistManager.globalHotkeyModifiers == checkvistManager.quickAddHotkeyModifiers
+      preferences.globalHotkeyKeyCode == preferences.quickAddHotkeyKeyCode
+      && preferences.globalHotkeyModifiers == preferences.quickAddHotkeyModifiers
   }
 
   private var configurableShortcutCategories: [ShortcutCategoryDescriptor] {
-    let grouped = Dictionary(grouping: checkvistManager.configurableShortcutActions, by: \.category)
+    let grouped = Dictionary(grouping: preferences.configurableShortcutActions, by: \.category)
     let order = ["Navigation", "Task Actions", "Entry & Commands", "Integrations & Timer"]
     return order.compactMap { category in
       guard let actions = grouped[category] else { return nil }
@@ -1161,8 +1186,8 @@ struct SettingsView: View {
     -> Binding<String>
   {
     Binding(
-      get: { checkvistManager.shortcutBinding(for: action) },
-      set: { checkvistManager.setShortcutBinding($0, for: action) }
+      get: { preferences.shortcutBinding(for: action) },
+      set: { preferences.setShortcutBinding($0, for: action) }
     )
   }
 
@@ -1235,7 +1260,7 @@ struct SettingsView: View {
           .textFieldStyle(.roundedBorder)
           .font(.system(size: 12, design: .monospaced))
         Button("Reset") {
-          checkvistManager.setShortcutBinding(action.defaultBinding, for: action)
+          preferences.setShortcutBinding(action.defaultBinding, for: action)
         }
         .disabled(!isCustomized)
       }
@@ -1285,7 +1310,7 @@ struct SettingsView: View {
   private func isShortcutBindingCustomized(_ action: BarTaskerManager.ConfigurableShortcutAction)
     -> Bool
   {
-    let current = checkvistManager.shortcutBinding(for: action)
+    let current = preferences.shortcutBinding(for: action)
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .lowercased()
     let defaultValue = action.defaultBinding
@@ -1302,7 +1327,7 @@ struct SettingsView: View {
     return action.title.lowercased().contains(normalizedQuery)
       || action.category.lowercased().contains(normalizedQuery)
       || action.defaultBinding.lowercased().contains(normalizedQuery)
-      || checkvistManager.shortcutBinding(for: action).lowercased().contains(normalizedQuery)
+      || preferences.shortcutBinding(for: action).lowercased().contains(normalizedQuery)
   }
 
   private func shortcutReferenceItemMatchesSearch(_ item: ShortcutReferenceItem, query: String)
