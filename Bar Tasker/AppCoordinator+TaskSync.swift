@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-extension BarTaskerCoordinator {
+extension AppCoordinator {
   // MARK: - Authentication & Fetch
 
   @MainActor func login() async -> Bool {
@@ -9,38 +9,20 @@ extension BarTaskerCoordinator {
   }
 
   @MainActor func fetchTopTask() async {
-    if isUsingOfflineStore {
-      errorMessage = nil
-      let payload = repository.localTaskStore.load()
-      tasks = normalizeOfflineTasks(payload.openTasks)
-      repository.offlineArchivedTasksById = Dictionary(
-        uniqueKeysWithValues: payload.archivedTasks.map { ($0.id, $0) })
-      let maxKnownTaskId = max(
-        tasks.map(\.id).max() ?? 0,
-        payload.archivedTasks.map(\.id).max() ?? 0
-      )
-      repository.nextOfflineTaskIdValue = max(payload.nextTaskId, maxKnownTaskId + 1, 1)
-      reconcilePriorityQueueWithOpenTasks()
-      reconcilePendingObsidianSyncQueueWithOpenTasks()
-      clampSelectionToVisibleRange()
-      timer.stopTimerIfTaskRemoved(openTaskIds: Set(tasks.map(\.id)))
-      return
-    }
-
-    guard !listId.isEmpty else { return }
+    if !isUsingOfflineStore && listId.isEmpty { return }
 
     errorMessage = nil
 
     do {
       try await withLoadingState {
         let previousTasks = self.tasks
-        let fetchedTasks = try await self.repository.checkvistSyncPlugin.fetchOpenTasks(
+        let fetchedTasks = try await self.repository.activeSyncPlugin.fetchOpenTasks(
           listId: self.listId,
           credentials: self.activeCredentials
         )
 
         self.tasks = fetchedTasks
-        self.repository.checkvistSyncPlugin.persistTaskCache(listId: self.listId, tasks: fetchedTasks)
+        self.repository.activeSyncPlugin.persistTaskCache(listId: self.listId, tasks: fetchedTasks)
         self.reconcilePriorityQueueWithOpenTasks()
         self.reconcilePendingObsidianSyncQueueWithOpenTasks()
         if self.rootTaskView == .kanban {
@@ -50,7 +32,7 @@ extension BarTaskerCoordinator {
         }
         let latestOpenTaskIDs = Set(fetchedTasks.map(\.id))
         let previousTimerNodes = previousTasks.map {
-          BarTaskerTimerNode(id: $0.id, parentId: $0.parentId)
+          TimerNode(id: $0.id, parentId: $0.parentId)
         }
         self.timer.timerByTaskId = TimerElapsedReassignmentPolicy.remapElapsed(
           previousNodes: previousTimerNodes,
@@ -111,7 +93,7 @@ extension BarTaskerCoordinator {
 
     do {
       guard
-        let createdList = try await repository.checkvistSyncPlugin.createList(
+        let createdList = try await repository.activeSyncPlugin.createList(
           name: trimmedName,
           credentials: activeCredentials
         )
@@ -153,7 +135,7 @@ extension BarTaskerCoordinator {
     defer { endLoading() }
 
     do {
-      let sourceTasks = try await repository.checkvistSyncPlugin.fetchOpenTasks(
+      let sourceTasks = try await repository.activeSyncPlugin.fetchOpenTasks(
         listId: source,
         credentials: activeCredentials
       )
@@ -205,7 +187,7 @@ extension BarTaskerCoordinator {
       return false
     }
 
-    let offlineTasks = normalizeOfflineTasks(repository.localTaskStore.load().openTasks)
+    let offlineTasks = (try? await repository.offlineSyncPlugin.fetchOpenTasks(listId: "", credentials: activeCredentials)) ?? []
     guard !offlineTasks.isEmpty else {
       errorMessage = "No offline tasks are available to upload."
       return false

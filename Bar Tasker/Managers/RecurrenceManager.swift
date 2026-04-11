@@ -5,7 +5,7 @@ import OSLog
 @MainActor
 @Observable class RecurrenceManager {
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "recurrence")
-  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
+  @ObservationIgnored private let preferencesStore: PreferencesStore
 
   /// Maps task ID → raw recurrence rule string (e.g. "daily", "every 3 days").
   var recurrenceRulesByTaskId: [Int: String] = [:] {
@@ -15,7 +15,7 @@ import OSLog
     }
   }
 
-  init(preferencesStore: BarTaskerPreferencesStore) {
+  init(preferencesStore: PreferencesStore) {
     self.preferencesStore = preferencesStore
     let storedRules = preferencesStore.stringDictionary(.recurrenceRulesByTaskId)
     self.recurrenceRulesByTaskId = Dictionary(
@@ -29,15 +29,15 @@ import OSLog
   // MARK: - Recurrence rule storage
 
   /// Returns the recurrence rule for a task, or nil if none is set.
-  func recurrenceRule(for task: CheckvistTask) -> BarTaskerRecurrenceRule? {
+  func recurrenceRule(for task: CheckvistTask) -> RecurrenceRule? {
     guard let raw = recurrenceRulesByTaskId[task.id], !raw.isEmpty else { return nil }
-    return BarTaskerRecurrenceRule(raw: raw)
+    return RecurrenceRule(raw: raw)
   }
 
   /// Sets the recurrence rule for a task from a raw string.
   /// Returns an error message if the rule is unrecognised, nil on success.
   func setRecurrenceRule(_ raw: String, for task: CheckvistTask) -> String? {
-    guard let rule = BarTaskerRecurrenceRule.from(raw) else {
+    guard let rule = RecurrenceRule.from(raw) else {
       return "Unrecognised repeat rule: \"\(raw)\". Try: daily, weekdays, weekly, every 3 days, every monday."
     }
     recurrenceRulesByTaskId[task.id] = rule.raw

@@ -166,7 +166,7 @@ struct SettingsView: View {
     let source: Source
   }
 
-  @Environment(BarTaskerCoordinator.self) var checkvistManager
+  @Environment(AppCoordinator.self) var checkvistManager
   @Environment(SettingsNavState.self) var navState
   @State private var selectedPluginCardID: String?
   @State private var themeJSONDraft: String = ""
@@ -191,7 +191,7 @@ struct SettingsView: View {
     )
   }
 
-  private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
+  private func themeColor(_ token: AppThemeColorToken) -> Color {
     preferences.themeColor(for: token)
   }
 
@@ -948,7 +948,7 @@ struct SettingsView: View {
               preferences.themeAccentPreset = preset
             } label: {
               Circle()
-                .fill(BarTaskerThemeColorCodec.color(from: preset.hex) ?? .accentColor)
+                .fill(AppThemeColorCodec.color(from: preset.hex) ?? .accentColor)
                 .frame(width: 18, height: 18)
                 .overlay(
                   Circle().stroke(
@@ -1397,7 +1397,7 @@ struct SettingsView: View {
 // swiftlint:enable type_body_length
 
 private struct ModeOrderList: View {
-  var manager: BarTaskerCoordinator
+  var manager: AppCoordinator
   @State private var orderedModes: [RootTaskView] = []
 
   var body: some View {

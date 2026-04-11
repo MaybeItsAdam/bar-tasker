@@ -21,7 +21,7 @@ import Observation
   @ObservationIgnored var integrationFlagsProvider: (() -> (obsidian: Bool, googleCalendar: Bool, mcp: Bool))?
 
   static let commandSuggestions: [CommandSuggestion] =
-    BarTaskerCommandEngine.suggestions.map {
+    CommandEngine.suggestions.map {
       .init(
         label: $0.label,
         command: $0.command,
@@ -39,7 +39,7 @@ import Observation
     googleCalendarEnabled: Bool,
     mcpEnabled: Bool
   ) -> [CommandSuggestion] {
-    let filtered = BarTaskerCommandEngine.filteredSuggestions(query: query).filter { suggestion in
+    let filtered = CommandEngine.filteredSuggestions(query: query).filter { suggestion in
       switch suggestion.command {
       case "sync obsidian", "open obsidian new window", "choose obsidian inbox",
         "clear obsidian inbox", "link obsidian folder", "create obsidian folder",

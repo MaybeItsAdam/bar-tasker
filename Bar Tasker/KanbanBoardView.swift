@@ -3,9 +3,9 @@ import SwiftUI
 // MARK: - KanbanBoardView
 
 struct KanbanBoardView: View {
-  @Environment(BarTaskerCoordinator.self) var manager
+  @Environment(AppCoordinator.self) var manager
 
-  private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
+  private func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
   }
 
@@ -104,7 +104,7 @@ struct KanbanBoardView: View {
 // MARK: - KanbanColumnView
 
 private struct KanbanColumnView: View {
-  @Environment(BarTaskerCoordinator.self) var manager
+  @Environment(AppCoordinator.self) var manager
   let column: KanbanColumn
   let tasks: [CheckvistTask]
   let columnIndex: Int
@@ -112,7 +112,7 @@ private struct KanbanColumnView: View {
   let childCounts: [Int: Int]
   let effectiveSelectedId: Int?
 
-  private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
+  private func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
   }
 
@@ -201,14 +201,14 @@ private struct KanbanColumnView: View {
 // MARK: - KanbanTaskCard
 
 private struct KanbanTaskCard: View {
-  @Environment(BarTaskerCoordinator.self) var manager
+  @Environment(AppCoordinator.self) var manager
   let task: CheckvistTask
   let isSelected: Bool
   let childCount: Int
 
   @State private var isHovered = false
 
-  private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
+  private func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
   }
 

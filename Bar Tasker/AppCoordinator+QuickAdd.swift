@@ -1,6 +1,6 @@
 import Foundation
 
-extension BarTaskerCoordinator {
+extension AppCoordinator {
   // MARK: - Quick Add
 
   @MainActor
@@ -47,43 +47,6 @@ extension BarTaskerCoordinator {
       parentTaskId = nil
     }
 
-    if isUsingOfflineStore {
-      if let parentTaskId, !tasks.contains(where: { $0.id == parentTaskId }) {
-        errorMessage = "Quick Add parent task not found."
-        return
-      }
-
-      let snapshot = offlineStateSnapshot()
-      let newTask = CheckvistTask(
-        id: nextOfflineTaskId(),
-        content: normalizedContent,
-        status: 0,
-        due: nil,
-        position: nil,
-        parentId: parentTaskId,
-        level: nil
-      )
-
-      var updatedTasks = tasks
-      if let parentTaskId,
-        let parentRawIndex = updatedTasks.firstIndex(where: { $0.id == parentTaskId })
-      {
-        updatedTasks.insert(newTask, at: parentRawIndex + 1)
-      } else {
-        let firstRootIndex =
-          updatedTasks.firstIndex(where: { ($0.parentId ?? 0) == 0 }) ?? updatedTasks.endIndex
-        updatedTasks.insert(newTask, at: firstRootIndex)
-      }
-
-      tasks = updatedTasks
-      persistOfflineTaskState()
-      lastUndo = .restoreOfflineState(snapshot: snapshot)
-      quickEntry.quickEntryMode = .search
-      quickEntry.quickEntryText = ""
-      quickEntry.isQuickEntryFocused = false
-      errorMessage = nil
-      return
-    }
 
     guard !listId.isEmpty else {
       errorMessage = "Choose a Checkvist list in Preferences to add tasks."
@@ -96,7 +59,7 @@ extension BarTaskerCoordinator {
     errorMessage = nil
 
     do {
-      let createdTask = try await repository.checkvistSyncPlugin.createTask(
+      let createdTask = try await repository.activeSyncPlugin.createTask(
         listId: listId,
         content: normalizedContent,
         parentId: parentTaskId,

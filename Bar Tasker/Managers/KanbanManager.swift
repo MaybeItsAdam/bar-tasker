@@ -10,7 +10,7 @@ protocol KanbanTaskDataSource: AnyObject {
   var currentParentId: Int { get }
   var currentSiblingIndex: Int { get set }
   var rootTaskView: RootTaskView { get }
-  var cache: BarTaskerCacheState { get }
+  var cache: CacheState { get }
   func ensureVisibleTasksCacheValid()
   func rootDueBucket(for task: CheckvistTask) -> RootDueBucket
   func priorityRank(for task: CheckvistTask) -> Int?
@@ -25,7 +25,7 @@ enum KanbanMoveOutcome {
 @MainActor
 @Observable class KanbanManager {
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "kanban")
-  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
+  @ObservationIgnored private let preferencesStore: PreferencesStore
   @ObservationIgnored weak var dataSource: KanbanTaskDataSource?
 
   var kanbanColumns: [KanbanColumn] {
@@ -55,7 +55,7 @@ enum KanbanMoveOutcome {
 
   @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
 
-  init(preferencesStore: BarTaskerPreferencesStore) {
+  init(preferencesStore: PreferencesStore) {
     self.preferencesStore = preferencesStore
     let storedKanbanJson = preferencesStore.string(.kanbanColumns)
     if !storedKanbanJson.isEmpty,

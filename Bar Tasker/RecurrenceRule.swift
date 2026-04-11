@@ -8,15 +8,15 @@ import Foundation
 ///   "every 3 days"           – every N days
 ///   "every 2 weeks"          – every N weeks
 ///   "every monday"           – every specific weekday
-struct BarTaskerRecurrenceRule: Equatable {
+struct RecurrenceRule: Equatable {
   let raw: String
 
   // MARK: - Parsing
 
-  static func from(_ raw: String) -> BarTaskerRecurrenceRule? {
+  static func from(_ raw: String) -> RecurrenceRule? {
     let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !normalized.isEmpty else { return nil }
-    let rule = BarTaskerRecurrenceRule(raw: normalized)
+    let rule = RecurrenceRule(raw: normalized)
     // Validate by attempting to compute next due date from a sample date
     let sample = Date()
     guard rule.nextDueDate(from: sample) != nil else { return nil }

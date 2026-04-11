@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - KanbanSettingsView
 
 struct KanbanSettingsView: View {
-  @Environment(BarTaskerCoordinator.self) var manager
+  @Environment(AppCoordinator.self) var manager
 
   @State private var editingColumn: KanbanColumn? = nil
   @State private var showingAddColumn = false

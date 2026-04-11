@@ -4,7 +4,7 @@ import SwiftUI
 extension NativeGoogleCalendarIntegrationPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "calendar" }
 
-  func makeSettingsView(manager: BarTaskerCoordinator) -> AnyView {
+  func makeSettingsView(manager: AppCoordinator) -> AnyView {
     AnyView(
       GoogleCalendarIntegrationPluginSettingsView(
         manager: manager,
@@ -15,7 +15,7 @@ extension NativeGoogleCalendarIntegrationPlugin: PluginSettingsPageProviding {
 }
 
 private struct GoogleCalendarIntegrationPluginSettingsView: View {
-  var manager: BarTaskerCoordinator
+  var manager: AppCoordinator
   var plugin: NativeGoogleCalendarIntegrationPlugin
   @State private var pluginActionError: String?
 

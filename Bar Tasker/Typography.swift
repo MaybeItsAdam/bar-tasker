@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-enum BarTaskerTypography {
+enum Typography {
   private static let lilexCandidates = [
     "Lilex",
     "LilexNerdFont",

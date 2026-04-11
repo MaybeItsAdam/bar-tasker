@@ -1,6 +1,6 @@
 import Foundation
 
-extension BarTaskerCoordinator {
+extension AppCoordinator {
   // MARK: - Navigation
 
   @MainActor func nextTask() {

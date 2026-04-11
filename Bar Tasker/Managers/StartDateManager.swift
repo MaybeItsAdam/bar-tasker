@@ -5,7 +5,7 @@ import OSLog
 @MainActor
 @Observable class StartDateManager {
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "startdate")
-  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
+  @ObservationIgnored private let preferencesStore: PreferencesStore
 
   /// Maps task ID → start date string (same format as `due`).
   var taskStartDatesByTaskId: [Int: String] = [:] {
@@ -19,7 +19,7 @@ import OSLog
   @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
   @ObservationIgnored var dateResolver: ((String) -> String)?
 
-  init(preferencesStore: BarTaskerPreferencesStore) {
+  init(preferencesStore: PreferencesStore) {
     self.preferencesStore = preferencesStore
     let storedStartDates = preferencesStore.stringDictionary(.taskStartDatesByTaskId)
     self.taskStartDatesByTaskId = Dictionary(

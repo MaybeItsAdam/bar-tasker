@@ -1,6 +1,6 @@
 import Foundation
 
-extension BarTaskerCoordinator {
+extension AppCoordinator {
   // MARK: - Undo Execution
 
   @MainActor func undoLastAction() async {
@@ -8,8 +8,6 @@ extension BarTaskerCoordinator {
     lastUndo = nil
 
     switch action {
-    case .restoreOfflineState(let snapshot):
-      restoreOfflineState(snapshot)
     case .add(let taskId):
       let mockTask = CheckvistTask(
         id: taskId, content: "", status: 0, due: nil, position: nil, parentId: nil, level: nil)

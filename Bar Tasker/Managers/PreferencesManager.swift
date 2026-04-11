@@ -5,7 +5,7 @@ import SwiftUI
 
 @MainActor
 @Observable final class PreferencesManager {
-  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
+  @ObservationIgnored private let preferencesStore: PreferencesStore
 
   @ObservationIgnored var onLaunchAtLoginChanged: ((Bool) -> Void)?
   @ObservationIgnored var onIgnoreKeychainInDebugChanged: (() -> Void)?
@@ -36,7 +36,7 @@ import SwiftUI
   var themeCustomAccentHex: String {
     didSet {
       let normalized =
-        BarTaskerThemeColorCodec.normalizedHex(themeCustomAccentHex) ?? ThemeAccentPreset.blue.hex
+        AppThemeColorCodec.normalizedHex(themeCustomAccentHex) ?? ThemeAccentPreset.blue.hex
       if normalized != themeCustomAccentHex {
         themeCustomAccentHex = normalized
         return
@@ -104,7 +104,7 @@ import SwiftUI
     didSet { preferencesStore.set(namedTimeEodHour, for: .namedTimeEodHour) }
   }
 
-  init(preferencesStore: BarTaskerPreferencesStore) {
+  init(preferencesStore: PreferencesStore) {
     self.preferencesStore = preferencesStore
     self.confirmBeforeDelete = preferencesStore.bool(.confirmBeforeDelete, default: true)
     self.launchAtLogin = preferencesStore.bool(.launchAtLogin, default: false)
@@ -122,7 +122,7 @@ import SwiftUI
         )
       ) ?? .blue
     self.themeCustomAccentHex =
-      BarTaskerThemeColorCodec.normalizedHex(
+      AppThemeColorCodec.normalizedHex(
         preferencesStore.string(.themeCustomAccentHex, default: ThemeAccentPreset.blue.hex)
       ) ?? ThemeAccentPreset.blue.hex
     self.themeColorTokenHexOverrides = Self.normalizedThemeColorTokenHexOverrides(
@@ -131,20 +131,20 @@ import SwiftUI
     self.globalHotkeyEnabled = preferencesStore.bool(.globalHotkeyEnabled, default: false)
     self.globalHotkeyKeyCode = preferencesStore.int(
       .globalHotkeyKeyCode,
-      default: BarTaskerCoordinator.CarbonKey.space
+      default: AppCoordinator.CarbonKey.space
     )
     self.globalHotkeyModifiers = preferencesStore.int(
       .globalHotkeyModifiers,
-      default: BarTaskerCoordinator.CarbonModifier.option
+      default: AppCoordinator.CarbonModifier.option
     )
     self.quickAddHotkeyEnabled = preferencesStore.bool(.quickAddHotkeyEnabled, default: false)
     self.quickAddHotkeyKeyCode = preferencesStore.int(
       .quickAddHotkeyKeyCode,
-      default: BarTaskerCoordinator.CarbonKey.b
+      default: AppCoordinator.CarbonKey.b
     )
     self.quickAddHotkeyModifiers = preferencesStore.int(
       .quickAddHotkeyModifiers,
-      default: BarTaskerCoordinator.CarbonModifier.shiftOption
+      default: AppCoordinator.CarbonModifier.shiftOption
     )
     self.quickAddLocationMode =
       QuickAddLocationMode(
@@ -211,66 +211,66 @@ import SwiftUI
   }
 
   var themeAccentColor: Color {
-    let defaultAccent = BarTaskerThemeColorCodec.color(from: ThemeAccentPreset.blue.hex) ?? .blue
+    let defaultAccent = AppThemeColorCodec.color(from: ThemeAccentPreset.blue.hex) ?? .blue
     switch themeAccentPreset {
     case .custom:
-      if let resolved = BarTaskerThemeColorCodec.color(from: themeCustomAccentHex) {
+      if let resolved = AppThemeColorCodec.color(from: themeCustomAccentHex) {
         return resolved
       }
       return defaultAccent
     default:
-      return BarTaskerThemeColorCodec.color(from: themeAccentPreset.hex) ?? defaultAccent
+      return AppThemeColorCodec.color(from: themeAccentPreset.hex) ?? defaultAccent
     }
   }
 
   func setCustomThemeAccentColor(_ color: Color) {
-    guard let hex = BarTaskerThemeColorCodec.hex(from: color),
-      let normalized = BarTaskerThemeColorCodec.normalizedHex(hex)
+    guard let hex = AppThemeColorCodec.hex(from: color),
+      let normalized = AppThemeColorCodec.normalizedHex(hex)
     else { return }
     themeCustomAccentHex = normalized
     themeAccentPreset = .custom
   }
 
-  var configurableThemeColorTokens: [BarTaskerThemeColorToken] {
-    BarTaskerThemeColorToken.allCases
+  var configurableThemeColorTokens: [AppThemeColorToken] {
+    AppThemeColorToken.allCases
   }
 
-  func themeColor(for token: BarTaskerThemeColorToken) -> Color {
+  func themeColor(for token: AppThemeColorToken) -> Color {
     if let storedHex = themeColorTokenHexOverrides[token.rawValue],
-      let resolved = BarTaskerThemeColorCodec.color(from: storedHex)
+      let resolved = AppThemeColorCodec.color(from: storedHex)
     {
       return resolved
     }
     return defaultThemeColor(for: token)
   }
 
-  func themeColorHex(for token: BarTaskerThemeColorToken) -> String {
+  func themeColorHex(for token: AppThemeColorToken) -> String {
     if let storedHex = themeColorTokenHexOverrides[token.rawValue],
-      let normalized = BarTaskerThemeColorCodec.normalizedHex(storedHex)
+      let normalized = AppThemeColorCodec.normalizedHex(storedHex)
     {
       return normalized
     }
-    return BarTaskerThemeColorCodec.hex(from: defaultThemeColor(for: token)) ?? ""
+    return AppThemeColorCodec.hex(from: defaultThemeColor(for: token)) ?? ""
   }
 
-  func setThemeColor(_ token: BarTaskerThemeColorToken, color: Color) {
-    guard let hex = BarTaskerThemeColorCodec.hex(from: color),
-      let normalized = BarTaskerThemeColorCodec.normalizedHex(hex)
+  func setThemeColor(_ token: AppThemeColorToken, color: Color) {
+    guard let hex = AppThemeColorCodec.hex(from: color),
+      let normalized = AppThemeColorCodec.normalizedHex(hex)
     else { return }
     themeColorTokenHexOverrides[token.rawValue] = normalized
   }
 
-  func setThemeColorHex(_ token: BarTaskerThemeColorToken, hex: String) {
+  func setThemeColorHex(_ token: AppThemeColorToken, hex: String) {
     let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       themeColorTokenHexOverrides.removeValue(forKey: token.rawValue)
       return
     }
-    guard let normalized = BarTaskerThemeColorCodec.normalizedHex(trimmed) else { return }
+    guard let normalized = AppThemeColorCodec.normalizedHex(trimmed) else { return }
     themeColorTokenHexOverrides[token.rawValue] = normalized
   }
 
-  func resetThemeColorOverride(_ token: BarTaskerThemeColorToken) {
+  func resetThemeColorOverride(_ token: AppThemeColorToken) {
     themeColorTokenHexOverrides.removeValue(forKey: token.rawValue)
   }
 
@@ -283,7 +283,7 @@ import SwiftUI
   }
 
   func exportThemeJSON(prettyPrinted: Bool = true) -> String {
-    let document = BarTaskerThemeDocument(
+    let document = AppThemeDocument(
       version: 1,
       appearance: themeAppearanceIdentifier(appTheme),
       accentPreset: themeAccentPreset.rawValue,
@@ -307,9 +307,9 @@ import SwiftUI
       throw ThemeImportError.invalidJSON
     }
     let decoder = JSONDecoder()
-    let document: BarTaskerThemeDocument
+    let document: AppThemeDocument
     do {
-      document = try decoder.decode(BarTaskerThemeDocument.self, from: data)
+      document = try decoder.decode(AppThemeDocument.self, from: data)
     } catch {
       throw ThemeImportError.invalidJSON
     }
@@ -320,7 +320,7 @@ import SwiftUI
     guard let resolvedPreset = ThemeAccentPreset(rawValue: document.accentPreset) else {
       throw ThemeImportError.invalidAccentPreset
     }
-    guard let normalizedAccentHex = BarTaskerThemeColorCodec.normalizedHex(document.customAccentHex)
+    guard let normalizedAccentHex = AppThemeColorCodec.normalizedHex(document.customAccentHex)
     else {
       throw ThemeImportError.invalidCustomAccentHex
     }
@@ -339,7 +339,7 @@ import SwiftUI
     themeColorTokenHexOverrides = [:]
   }
 
-  private func defaultThemeColor(for token: BarTaskerThemeColorToken) -> Color {
+  private func defaultThemeColor(for token: AppThemeColorToken) -> Color {
     switch token {
     case .panelBackground:
       return Color(NSColor.windowBackgroundColor)
@@ -412,9 +412,9 @@ import SwiftUI
   static func normalizedThemeColorTokenHexOverrides(_ raw: [String: String]) -> [String: String] {
     guard !raw.isEmpty else { return [:] }
     var normalized: [String: String] = [:]
-    for token in BarTaskerThemeColorToken.allCases {
+    for token in AppThemeColorToken.allCases {
       guard let value = raw[token.rawValue] else { continue }
-      guard let hex = BarTaskerThemeColorCodec.normalizedHex(value) else { continue }
+      guard let hex = AppThemeColorCodec.normalizedHex(value) else { continue }
       normalized[token.rawValue] = hex
     }
     return normalized

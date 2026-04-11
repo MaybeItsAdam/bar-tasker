@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-enum BarTaskerThemeColorCodec {
+enum AppThemeColorCodec {
   static func normalizedHex(_ raw: String) -> String? {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
@@ -52,7 +52,7 @@ enum BarTaskerThemeColorCodec {
   }
 }
 
-enum BarTaskerThemeColorToken: String, CaseIterable, Identifiable {
+enum AppThemeColorToken: String, CaseIterable, Identifiable {
   case panelBackground
   case panelDivider
   case panelSurface
@@ -90,7 +90,7 @@ enum BarTaskerThemeColorToken: String, CaseIterable, Identifiable {
   }
 }
 
-struct BarTaskerThemeDocument: Codable {
+struct AppThemeDocument: Codable {
   var version: Int
   var appearance: String
   var accentPreset: String

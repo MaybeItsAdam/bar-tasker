@@ -1,6 +1,6 @@
 import Foundation
 
-extension BarTaskerCoordinator {
+extension AppCoordinator {
   var hasCredentials: Bool {
     !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && !remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -21,7 +21,8 @@ extension BarTaskerCoordinator {
   }
 
   var quickAddSpecificParentTaskIdValue: Int? {
-    let raw = preferences.quickAddSpecificParentTaskId.trimmingCharacters(in: .whitespacesAndNewlines)
+    let raw = preferences.quickAddSpecificParentTaskId.trimmingCharacters(
+      in: .whitespacesAndNewlines)
     guard !raw.isEmpty, let value = Int(raw), value > 0 else { return nil }
     return value
   }
@@ -40,10 +41,10 @@ extension BarTaskerCoordinator {
 
   var activePluginSettingsPages: [any PluginSettingsPageProviding] {
     [
-      repository.checkvistSyncPlugin as any BarTaskerPlugin,
-      integrations.obsidianPlugin as any BarTaskerPlugin,
-      integrations.googleCalendarPlugin as any BarTaskerPlugin,
-      integrations.mcpIntegrationPlugin as any BarTaskerPlugin,
+      repository.checkvistSyncPlugin as any Plugin,
+      integrations.obsidianPlugin as any Plugin,
+      integrations.googleCalendarPlugin as any Plugin,
+      integrations.mcpIntegrationPlugin as any Plugin,
     ].compactMap { $0 as? any PluginSettingsPageProviding }
   }
 
@@ -69,11 +70,11 @@ extension BarTaskerCoordinator {
 
   /// Breadcrumb chain from root down to (but not including) current task
   var breadcrumbs: [CheckvistTask] {
-    ensureVisibleTasksCacheValid()
+    taskListViewModel.ensureVisibleTasksCacheValid()
     var result: [CheckvistTask] = []
     var parentId = currentParentId
     while parentId != 0 {
-      if let parent = cache.taskById[parentId] {
+      if let parent = taskListViewModel.cache.taskById[parentId] {
         result.append(parent)
         parentId = parent.parentId ?? 0
       } else {
@@ -93,52 +94,8 @@ extension BarTaskerCoordinator {
   /// Visible tasks: searches recursively through subtasks when filter active.
   /// Cached and recomputed only when inputs change (via `objectWillChange`).
   var visibleTasks: [CheckvistTask] {
-    ensureVisibleTasksCacheValid()
-    return cache.visibleTasks
-  }
-
-  private func computeVisibleTasks() -> [CheckvistTask] {
-    BarTaskerTaskVisibilityEngine.computeVisibleTasks(
-      in: .init(
-        tasks: tasks,
-        currentLevelTasks: currentLevelTasks,
-        currentParentId: currentParentId,
-        isSearchFilterActive: isSearchFilterActive,
-        searchText: quickEntry.searchText,
-        hideFuture: hideFuture,
-        shouldShowRootScopeSection: shouldShowRootScopeSection,
-        isRootLevel: isRootLevel,
-        rootTaskView: rootTaskView,
-        selectedRootDueBucket: selectedRootDueBucket,
-        selectedRootTag: selectedRootTag,
-        taskById: cache.taskById,
-        isDescendant: { [weak self] task, rootId in
-          guard let self else { return false }
-          return TaskFilterEngine.isDescendant(task, of: rootId, taskById: cache.taskById)
-        },
-        taskMatchesActiveRootScope: { [weak self] task in
-          self?.taskMatchesActiveRootScope(task) ?? false
-        },
-        compareByPriorityThenPosition: { [weak self] lhs, rhs in
-          guard let self else { return false }
-          return TaskFilterEngine.compareByPriorityThenPosition(
-            lhs, rhs, priorityRankById: cache.priorityRank)
-        },
-        compareByRootDueBucket: { [weak self] lhs, rhs in
-          guard let self else { return false }
-          return TaskFilterEngine.compareByRootDueBucket(
-            lhs, rhs, rootDueBucketById: cache.rootDueBucket)
-        },
-        hasAnyTag: { [weak self] task in
-          self?.hasAnyTag(task) ?? false
-        },
-        hasTag: { [weak self] task, tag in
-          self?.hasTag(task, tag: tag) ?? false
-        },
-        rootDueBucket: { [weak self] task in
-          self?.rootDueBucket(for: task) ?? .noDueDate
-        }
-      ))
+    taskListViewModel.ensureVisibleTasksCacheValid()
+    return taskListViewModel.cache.visibleTasks
   }
 
   var isRootLevel: Bool { currentParentId == 0 }
@@ -191,30 +148,13 @@ extension BarTaskerCoordinator {
   }
 
   func rootLevelTagNames(limit: Int = 8) -> [String] {
-    ensureVisibleTasksCacheValid()
-    return Array(cache.rootLevelTagNames.prefix(limit))
-  }
-
-  private func computeRootLevelTagNames(limit: Int) -> [String] {
-    var counts: [String: Int] = [:]
-    for tags in cache.tagsByTaskId.values {
-      for tag in tags {
-        counts[tag, default: 0] += 1
-      }
-    }
-    return
-      counts
-      .sorted { lhs, rhs in
-        if lhs.value != rhs.value { return lhs.value > rhs.value }
-        return lhs.key < rhs.key
-      }
-      .prefix(limit)
-      .map(\.key)
+    taskListViewModel.ensureVisibleTasksCacheValid()
+    return Array(taskListViewModel.cache.rootLevelTagNames.prefix(limit))
   }
 
   func priorityRank(for task: CheckvistTask) -> Int? {
-    ensureVisibleTasksCacheValid()
-    return cache.priorityRank[task.id]
+    taskListViewModel.ensureVisibleTasksCacheValid()
+    return taskListViewModel.cache.priorityRank[task.id]
   }
 
   var isSearchFilterActive: Bool { quickEntry.isSearchFilterActive }
@@ -225,11 +165,11 @@ extension BarTaskerCoordinator {
   }
 
   private func hasAnyTag(_ task: CheckvistTask) -> Bool {
-    cache.tagsByTaskId[task.id] != nil
+    taskListViewModel.cache.tagsByTaskId[task.id] != nil
   }
 
   private func hasTag(_ task: CheckvistTask, tag: String) -> Bool {
-    guard let tags = cache.tagsByTaskId[task.id] else { return false }
+    guard let tags = taskListViewModel.cache.tagsByTaskId[task.id] else { return false }
     let normalized: String
     if tag.hasPrefix("#") || tag.hasPrefix("@") {
       normalized = tag.lowercased()
@@ -261,7 +201,7 @@ extension BarTaskerCoordinator {
   }
 
   func rootDueBucket(for task: CheckvistTask) -> RootDueBucket {
-    if let cached = cache.rootDueBucket[task.id] { return cached }
+    if let cached = taskListViewModel.cache.rootDueBucket[task.id] { return cached }
     return TaskFilterEngine.classifyDueBucket(task: task)
   }
 
@@ -343,7 +283,10 @@ extension BarTaskerCoordinator {
       }
       let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
       kanban.kanbanFilterTag = options[nextIndex]
-      if !kanban.kanbanFilterTag.isEmpty { kanban.kanbanFilterSubtasks = false; kanban.kanbanFilterParentId = nil }
+      if !kanban.kanbanFilterTag.isEmpty {
+        kanban.kanbanFilterSubtasks = false
+        kanban.kanbanFilterParentId = nil
+      }
       currentSiblingIndex = 0
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
@@ -380,7 +323,10 @@ extension BarTaskerCoordinator {
       let options = [""] + tags
       guard options.indices.contains(index) else { return }
       kanban.kanbanFilterTag = options[index]
-      if !kanban.kanbanFilterTag.isEmpty { kanban.kanbanFilterSubtasks = false; kanban.kanbanFilterParentId = nil }
+      if !kanban.kanbanFilterTag.isEmpty {
+        kanban.kanbanFilterSubtasks = false
+        kanban.kanbanFilterParentId = nil
+      }
       currentSiblingIndex = 0
       rootScopeFocusLevel = 2
     case .due:
@@ -399,7 +345,9 @@ extension BarTaskerCoordinator {
   }
 
   @MainActor func setPriorityForCurrentTask(_ rank: Int) {
-    guard (1...TaskRepository.maxPriorityRank).contains(rank), let task = currentTask else { return }
+    guard (1...TaskRepository.maxPriorityRank).contains(rank), let task = currentTask else {
+      return
+    }
 
     var updated = repository.priorityTaskIds
     updated.removeAll { $0 == task.id }
@@ -452,29 +400,14 @@ extension BarTaskerCoordinator {
 
   /// Returns true if task is a descendant of the given parentId (or IS at that level)
   func isDescendant(_ task: CheckvistTask, of rootId: Int) -> Bool {
-    TaskFilterEngine.isDescendant(task, of: rootId, taskById: cache.taskById)
+    TaskFilterEngine.isDescendant(task, of: rootId, taskById: taskListViewModel.cache.taskById)
   }
 
   func invalidateCaches() {
-    cache.invalidate()
+    taskListViewModel.invalidateCaches()
   }
 
   func ensureVisibleTasksCacheValid() {
-    guard cache.dirty, !cache.isRebuilding else { return }
-    cache.isRebuilding = true
-    defer { cache.isRebuilding = false }
-    cache.taskById = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
-    cache.tagsByTaskId = TaskFilterEngine.extractTagsByTaskId(tasks: tasks)
-    cache.rootDueBucket = TaskFilterEngine.computeRootDueBuckets(tasks: tasks)
-    cache.priorityRank = Dictionary(
-      uniqueKeysWithValues: repository.priorityTaskIds.enumerated().map { ($1, $0 + 1) })
-    cache.dirty = false
-    cache.visibleTasks = computeVisibleTasks()
-    let nodes = tasks.map { BarTaskerTimerNode(id: $0.id, parentId: $0.parentId) }
-    cache.childCount = BarTaskerTimerStore.childCountByTaskId(nodes: nodes)
-    cache.rolledUpElapsed = BarTaskerTimerStore.rolledUpElapsedByTaskId(
-      nodes: nodes, ownElapsed: timer.timerByTaskId)
-    cache.rootLevelTagNames = computeRootLevelTagNames(limit: 30)
+    taskListViewModel.ensureVisibleTasksCacheValid()
   }
-
 }

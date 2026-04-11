@@ -1,12 +1,12 @@
 import Foundation
 
-protocol BarTaskerPlugin {
+protocol Plugin {
   var pluginIdentifier: String { get }
   var displayName: String { get }
   var pluginDescription: String { get }
 }
 
-extension BarTaskerPlugin {
+extension Plugin {
   var pluginDescription: String { "" }
 }
 
@@ -30,7 +30,7 @@ enum CheckvistTaskAction: String, Sendable {
 }
 
 @MainActor
-protocol CheckvistSyncPlugin: BarTaskerPlugin {
+protocol CheckvistSyncPlugin: Plugin {
   func startupRemoteKey(useKeychainStorageAtInit: Bool) -> String
   func persistRemoteKey(_ value: String, useKeychainStorage: Bool)
   func persistRemoteKeyForDebugStorageMode(_ value: String)
@@ -100,7 +100,7 @@ extension CheckvistSyncPlugin {
 }
 
 @MainActor
-protocol ObsidianIntegrationPlugin: BarTaskerPlugin {
+protocol ObsidianIntegrationPlugin: Plugin {
   var inboxPath: String { get }
   func chooseInboxFolder() throws -> String?
   func clearInboxFolder()
@@ -119,7 +119,7 @@ protocol ObsidianIntegrationPlugin: BarTaskerPlugin {
 }
 
 @MainActor
-protocol GoogleCalendarIntegrationPlugin: BarTaskerPlugin {
+protocol GoogleCalendarIntegrationPlugin: Plugin {
   func makeCreateEventURL(task: CheckvistTask, listId: String, now: Date) -> URL?
   func createEvent(task: CheckvistTask, listId: String, now: Date) async throws
     -> GoogleCalendarEventCreationOutcome
@@ -162,7 +162,7 @@ extension GoogleCalendarIntegrationPlugin {
 }
 
 @MainActor
-protocol MCPIntegrationPlugin: BarTaskerPlugin {
+protocol MCPIntegrationPlugin: Plugin {
   func serverCommandURL() -> URL?
   func guideURL() -> URL?
   func makeClientConfigurationJSON(

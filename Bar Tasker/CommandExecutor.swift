@@ -1,15 +1,15 @@
 import Foundation
 
 @MainActor
-final class BarTaskerCommandExecutor {
-  private unowned let manager: BarTaskerCoordinator
+final class CommandExecutor {
+  private unowned let manager: AppCoordinator
 
-  init(manager: BarTaskerCoordinator) {
+  init(manager: AppCoordinator) {
     self.manager = manager
   }
 
   // swiftlint:disable:next cyclomatic_complexity function_body_length
-  func execute(parsed: BarTaskerCommand) async {
+  func execute(parsed: Command) async {
     // Commands that do not require a current task
     switch parsed {
     case .openPreferences:

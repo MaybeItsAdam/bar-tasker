@@ -1,7 +1,7 @@
 import Foundation
 import ServiceManagement
 
-extension BarTaskerCoordinator {
+extension AppCoordinator {
   private var shouldSuppressLaunchAtLoginAvailabilityError: Bool {
     #if DEBUG
       let env = ProcessInfo.processInfo.environment
@@ -230,8 +230,8 @@ extension BarTaskerCoordinator {
           listId: repository.listId,
           availableListsCount: repository.availableLists.count,
           tasksCount: repository.tasks.count,
-          currentParentId: repository.currentParentId,
-          currentSiblingIndex: repository.currentSiblingIndex
+          currentParentId: currentParentId,
+          currentSiblingIndex: currentSiblingIndex
         ))
 
       onboardingCompleted = resetState.onboardingCompleted
@@ -239,8 +239,8 @@ extension BarTaskerCoordinator {
       repository.listId = resetState.listId
       repository.availableLists = []
       repository.tasks = []
-      repository.currentParentId = resetState.currentParentId
-      repository.currentSiblingIndex = resetState.currentSiblingIndex
+      currentParentId = resetState.currentParentId
+      currentSiblingIndex = resetState.currentSiblingIndex
 
       preferencesStore.remove(.checkvistUsername)
       preferencesStore.remove(.checkvistListId)

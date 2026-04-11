@@ -4,13 +4,13 @@ import SwiftUI
 extension NativeCheckvistSyncPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "checkmark.circle" }
 
-  func makeSettingsView(manager: BarTaskerCoordinator) -> AnyView {
+  func makeSettingsView(manager: AppCoordinator) -> AnyView {
     AnyView(CheckvistSyncPluginSettingsView(manager: manager))
   }
 }
 
 private struct CheckvistSyncPluginSettingsView: View {
-  var manager: BarTaskerCoordinator
+  var manager: AppCoordinator
   @State private var isLoadingLists = false
   @State private var didAutoloadLists = false
   @State private var uploadDestinationListId = ""

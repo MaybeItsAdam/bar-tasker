@@ -2,7 +2,7 @@ import AppKit
 import OSLog
 import SwiftUI
 
-extension BarTaskerCoordinator {
+extension AppCoordinator {
   // MARK: - Mark Done / Reopen / Invalidate
 
   @MainActor func markCurrentTaskDone() async {
@@ -15,7 +15,9 @@ extension BarTaskerCoordinator {
       try await Task.sleep(nanoseconds: 60_000_000)
       NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
       // Spring the checkmark in.
-      withAnimation(.spring(response: 0.28, dampingFraction: 0.45)) { quickEntry.completingTaskId = task.id }
+      withAnimation(.spring(response: 0.28, dampingFraction: 0.45)) {
+        quickEntry.completingTaskId = task.id
+      }
       // Confirmation tap.
       try await Task.sleep(nanoseconds: 120_000_000)
       NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -45,43 +47,6 @@ extension BarTaskerCoordinator {
   @MainActor func taskAction(_ task: CheckvistTask, endpoint: String, isUndo: Bool = false)
     async
   {
-    if isUsingOfflineStore {
-      guard endpoint == "close" || endpoint == "invalidate" else { return }
-      guard let removingRange = subtreeBlockRange(for: task.id, in: tasks) else { return }
-
-      let removedTasks = Array(tasks[removingRange])
-      let removedTaskIds = Set(removedTasks.map(\.id))
-      let snapshot = offlineStateSnapshot()
-      let archivedStatus = endpoint == "invalidate" ? -1 : 1
-
-      tasks.removeSubrange(removingRange)
-      for removedTask in removedTasks {
-        let archivedTask = rebuiltTask(
-          removedTask,
-          content: removedTask.content,
-          status: archivedStatus,
-          due: removedTask.due,
-          position: removedTask.position,
-          parentId: removedTask.parentId,
-          level: removedTask.level
-        )
-        repository.offlineArchivedTasksById[removedTask.id] = archivedTask
-      }
-      timer.timerByTaskId = timer.timerByTaskId.filter { !removedTaskIds.contains($0.key) }
-      removeTasksFromPriorityQueue(removedTaskIds)
-      integrations.savePendingObsidianSyncQueue(
-        integrations.pendingObsidianSyncTaskIds.filter { !removedTaskIds.contains($0) }, listId: listId)
-      repository.pendingTaskMutations = repository.pendingTaskMutations.filter { !removedTaskIds.contains($0.key) }
-      if let filterParentId = kanban.kanbanFilterParentId, removedTaskIds.contains(filterParentId) {
-        kanban.kanbanFilterParentId = nil
-      }
-      persistOfflineTaskState()
-      if !isUndo {
-        lastUndo = .restoreOfflineState(snapshot: snapshot)
-      }
-      errorMessage = nil
-      return
-    }
 
     if !isUndo {
       if endpoint == "close" {
@@ -100,7 +65,7 @@ extension BarTaskerCoordinator {
       ? applyOptimisticCompletion(for: task.id) : nil
 
     do {
-      let success = try await repository.checkvistSyncPlugin.performTaskAction(
+      let success = try await repository.activeSyncPlugin.performTaskAction(
         listId: listId,
         taskId: task.id,
         action: action,
@@ -137,30 +102,6 @@ extension BarTaskerCoordinator {
   @MainActor func updateTask(
     task: CheckvistTask, content: String? = nil, due: String? = nil, isUndo: Bool = false
   ) async {
-    if isUsingOfflineStore {
-      guard let index = tasks.firstIndex(where: { $0.id == task.id }) else {
-        errorMessage = "Task not found."
-        return
-      }
-
-      let existingTask = tasks[index]
-      let snapshot = offlineStateSnapshot()
-      tasks[index] = rebuiltTask(
-        existingTask,
-        content: content ?? existingTask.content,
-        status: existingTask.status,
-        due: due ?? existingTask.due,
-        position: existingTask.position,
-        parentId: existingTask.parentId,
-        level: existingTask.level
-      )
-      persistOfflineTaskState()
-      if !isUndo {
-        lastUndo = .restoreOfflineState(snapshot: snapshot)
-      }
-      errorMessage = nil
-      return
-    }
 
     if !isUndo {
       lastUndo = .update(taskId: task.id, oldContent: task.content, oldDue: task.due)
@@ -172,18 +113,20 @@ extension BarTaskerCoordinator {
       return
     }
     let originalTask = tasks[index]
-    tasks[index] = rebuiltTask(
-      originalTask,
+    tasks[index] = CheckvistTask(
+      id: originalTask.id,
       content: content ?? originalTask.content,
       status: originalTask.status,
       due: due ?? originalTask.due,
       position: originalTask.position,
       parentId: originalTask.parentId,
-      level: originalTask.level
+      level: originalTask.level,
+      notes: originalTask.notes,
+      updatedAt: originalTask.updatedAt
     )
 
     do {
-      let success = try await repository.checkvistSyncPlugin.updateTask(
+      let success = try await repository.activeSyncPlugin.updateTask(
         listId: listId,
         taskId: task.id,
         content: content,
@@ -229,52 +172,6 @@ extension BarTaskerCoordinator {
       return
     }
 
-    if isUsingOfflineStore {
-      let snapshot = offlineStateSnapshot()
-      let newTask = CheckvistTask(
-        id: nextOfflineTaskId(),
-        content: trimmedContent,
-        status: 0,
-        due: nil,
-        position: nil,
-        parentId: currentParentId == 0 ? nil : currentParentId,
-        level: nil
-      )
-
-      var updatedTasks = tasks
-      var insertIndex = updatedTasks.endIndex
-
-      if insertAtTopOfCurrentLevel {
-        if currentParentId == 0 {
-          insertIndex =
-            updatedTasks.firstIndex(where: { ($0.parentId ?? 0) == 0 }) ?? updatedTasks.endIndex
-        } else if let parentRawIndex = updatedTasks.firstIndex(where: { $0.id == currentParentId })
-        {
-          insertIndex = parentRawIndex + 1
-        }
-      } else if let target = insertAfterTask ?? currentTask,
-        let rawIndex = updatedTasks.firstIndex(where: { $0.id == target.id })
-      {
-        var endIndex = rawIndex + 1
-        while endIndex < updatedTasks.count && isDescendant(updatedTasks[endIndex], of: target.id) {
-          endIndex += 1
-        }
-        insertIndex = endIndex
-      }
-
-      updatedTasks.insert(newTask, at: min(max(insertIndex, 0), updatedTasks.count))
-      tasks = updatedTasks
-      persistOfflineTaskState()
-      if let insertedIndex = currentLevelTasks.firstIndex(where: { $0.id == newTask.id }) {
-        currentSiblingIndex = insertedIndex
-      } else {
-        clampSelectionToVisibleRange()
-      }
-      lastUndo = .restoreOfflineState(snapshot: snapshot)
-      errorMessage = nil
-      return
-    }
-
     guard !listId.isEmpty else {
       errorMessage = "Choose a Checkvist list in Preferences to add tasks."
       presentOnboardingDialogIfNeeded()
@@ -314,7 +211,7 @@ extension BarTaskerCoordinator {
     let positionForCreate: Int? = apiPosition > 0 ? apiPosition : nil
 
     do {
-      let newTask = try await repository.checkvistSyncPlugin.createTask(
+      let newTask = try await repository.activeSyncPlugin.createTask(
         listId: listId,
         content: trimmedContent,
         parentId: parentIdForCreate,
@@ -344,38 +241,6 @@ extension BarTaskerCoordinator {
       return
     }
 
-    if isUsingOfflineStore {
-      guard let parentRawIndex = tasks.firstIndex(where: { $0.id == parentId }) else {
-        errorMessage = "Parent task not found."
-        return
-      }
-
-      let snapshot = offlineStateSnapshot()
-      let selectedTaskId = currentTask?.id
-      let newTask = CheckvistTask(
-        id: nextOfflineTaskId(),
-        content: trimmedContent,
-        status: 0,
-        due: nil,
-        position: nil,
-        parentId: parentId,
-        level: nil
-      )
-
-      tasks.insert(newTask, at: parentRawIndex + 1)
-      persistOfflineTaskState()
-      if let selectedTaskId,
-        let visibleIndex = visibleTasks.firstIndex(where: { $0.id == selectedTaskId })
-      {
-        currentSiblingIndex = visibleIndex
-      } else {
-        clampSelectionToVisibleRange()
-      }
-      lastUndo = .restoreOfflineState(snapshot: snapshot)
-      errorMessage = nil
-      return
-    }
-
     guard !listId.isEmpty else {
       errorMessage = "Choose a Checkvist list in Preferences to add tasks."
       presentOnboardingDialogIfNeeded()
@@ -389,7 +254,7 @@ extension BarTaskerCoordinator {
     errorMessage = nil
 
     do {
-      let newTask = try await repository.checkvistSyncPlugin.createTask(
+      let newTask = try await repository.activeSyncPlugin.createTask(
         listId: listId,
         content: trimmedContent,
         parentId: parentId,
@@ -415,26 +280,6 @@ extension BarTaskerCoordinator {
   // MARK: - Delete
 
   @MainActor func deleteTask(_ task: CheckvistTask, isUndo: Bool = false) async {
-    if isUsingOfflineStore {
-      guard let removingRange = subtreeBlockRange(for: task.id, in: tasks) else { return }
-      let snapshot = offlineStateSnapshot()
-      let removedTaskIds = Set(tasks[removingRange].map(\.id))
-      tasks.removeSubrange(removingRange)
-      timer.timerByTaskId = timer.timerByTaskId.filter { !removedTaskIds.contains($0.key) }
-      removeTasksFromPriorityQueue(removedTaskIds)
-      integrations.savePendingObsidianSyncQueue(
-        integrations.pendingObsidianSyncTaskIds.filter { !removedTaskIds.contains($0) }, listId: listId)
-      repository.pendingTaskMutations = repository.pendingTaskMutations.filter { !removedTaskIds.contains($0.key) }
-      if let filterParentId = kanban.kanbanFilterParentId, removedTaskIds.contains(filterParentId) {
-        kanban.kanbanFilterParentId = nil
-      }
-      persistOfflineTaskState()
-      if !isUndo {
-        lastUndo = .restoreOfflineState(snapshot: snapshot)
-      }
-      errorMessage = nil
-      return
-    }
 
     if !isUndo {
       lastUndo = nil  // Clear undo history since we don't support recovering hard-deleted tasks yet
@@ -446,7 +291,7 @@ extension BarTaskerCoordinator {
     await runBooleanMutation(
       failureMessage: "Failed to delete task.",
       action: {
-        try await self.repository.checkvistSyncPlugin.deleteTask(
+        try await self.repository.activeSyncPlugin.deleteTask(
           listId: self.listId,
           taskId: task.id,
           credentials: self.activeCredentials
@@ -566,8 +411,9 @@ extension BarTaskerCoordinator {
   }
 
   private func nextOptimisticTaskId() -> Int {
-    repository.nextOptimisticTaskId()
+    -Int.random(in: 1...1_000_000)
   }
+
 
   // MARK: - Ancestor Helpers
 
@@ -597,7 +443,7 @@ extension BarTaskerCoordinator {
     var reopenedAny = false
     for ancestorID in missingAncestorIDs {
       do {
-        let success = try await repository.checkvistSyncPlugin.performTaskAction(
+        let success = try await repository.activeSyncPlugin.performTaskAction(
           listId: listId,
           taskId: ancestorID,
           action: .reopen,
@@ -624,10 +470,12 @@ extension BarTaskerCoordinator {
   /// Call this after a recurring task is closed. Adds a sibling task with the next due date
   /// and transfers the recurrence rule to the new task.
   @MainActor func createNextOccurrence(for completedTask: CheckvistTask) async {
-    guard let result = recurrence.computeNextOccurrence(
-      for: completedTask,
-      parseDueDateString: RecurrenceManager.parseDueDateString
-    ) else {
+    guard
+      let result = recurrence.computeNextOccurrence(
+        for: completedTask,
+        parseDueDateString: RecurrenceManager.parseDueDateString
+      )
+    else {
       if recurrence.recurrenceRule(for: completedTask) != nil {
         errorMessage = "Could not calculate next occurrence for recurring task."
       }
@@ -660,7 +508,7 @@ extension BarTaskerCoordinator {
 
   // MARK: - Recurrence Convenience Accessors
 
-  func recurrenceRule(for task: CheckvistTask) -> BarTaskerRecurrenceRule? {
+  func recurrenceRule(for task: CheckvistTask) -> RecurrenceRule? {
     recurrence.recurrenceRule(for: task)
   }
 

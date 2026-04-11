@@ -3,8 +3,8 @@ import Foundation
 /// Holds the pre-computed caches that drive visible-task filtering,
 /// tag lookups, due-date bucketing, and timer roll-ups.
 ///
-/// Owned by `BarTaskerCoordinator`; rebuilt when the dirty flag is set.
-struct BarTaskerCacheState {
+/// Owned by `AppCoordinator`; rebuilt when the dirty flag is set.
+struct CacheState {
   /// Dirty flag set by `invalidateCaches()`; cleared after recomputation.
   var dirty = true
   /// Prevents recursive cache rebuilds when visibility sorting reads cached helpers.

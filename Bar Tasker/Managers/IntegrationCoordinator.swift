@@ -16,7 +16,7 @@ protocol IntegrationDataSource: AnyObject {
 @Observable class IntegrationCoordinator {
   @ObservationIgnored private let logger = Logger(
     subsystem: "uk.co.maybeitsadam.bar-tasker", category: "integrations")
-  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
+  @ObservationIgnored private let preferencesStore: PreferencesStore
 
   @ObservationIgnored weak var dataSource: IntegrationDataSource?
 
@@ -85,7 +85,7 @@ protocol IntegrationDataSource: AnyObject {
   // MARK: - Init
 
   init(
-    preferencesStore: BarTaskerPreferencesStore,
+    preferencesStore: PreferencesStore,
     obsidianPlugin: any ObsidianIntegrationPlugin,
     googleCalendarPlugin: any GoogleCalendarIntegrationPlugin,
     mcpIntegrationPlugin: any MCPIntegrationPlugin,

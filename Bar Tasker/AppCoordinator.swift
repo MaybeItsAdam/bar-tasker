@@ -1,31 +1,38 @@
 import AppKit
 import Foundation
-import Observation
 import OSLog
+import Observation
 import ServiceManagement
 import SwiftUI
 
 @MainActor
-@Observable class BarTaskerCoordinator {
-  @ObservationIgnored let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "manager")
-
-  // MARK: - Task Repository
+@Observable class AppCoordinator {
+  @ObservationIgnored let logger = Logger(
+    subsystem: "uk.co.maybeitsadam.bar-tasker", category: "manager")
 
   let repository: TaskRepository
+  let feedbackService: FeedbackService
 
-  // MARK: - Forwarding properties (heavily used across extensions + views)
+  let navigationState: NavigationState
 
   var tasks: [CheckvistTask] {
     get { repository.tasks }
     set { repository.tasks = newValue }
   }
   var currentParentId: Int {
-    get { repository.currentParentId }
-    set { repository.currentParentId = newValue }
+    get { navigationState.currentParentId }
+    set {
+      navigationState.currentParentId = newValue
+      invalidateCaches()
+    }
   }
   var currentSiblingIndex: Int {
-    get { repository.currentSiblingIndex }
-    set { repository.currentSiblingIndex = newValue }
+    get { navigationState.currentSiblingIndex }
+    set { navigationState.currentSiblingIndex = newValue }
+  }
+  var rootScopeFocusLevel: Int {
+    get { navigationState.rootScopeFocusLevel }
+    set { navigationState.rootScopeFocusLevel = newValue }
   }
   var listId: String {
     get { repository.listId }
@@ -40,34 +47,35 @@ import SwiftUI
     set { repository.lastUndo = newValue }
   }
 
-  // MARK: - View / Filter State
-
-  var hideFuture: Bool = false {
-    didSet { invalidateCaches() }
+  var hideFuture: Bool {
+    get { taskListViewModel.hideFuture }
+    set { taskListViewModel.hideFuture = newValue }
   }
   var rootTaskView: RootTaskView {
-    didSet {
-      preferencesStore.set(rootTaskView.rawValue, for: .rootTaskView)
-      invalidateCaches()
+    get { taskListViewModel.rootTaskView }
+    set {
+      taskListViewModel.rootTaskView = newValue
+      preferencesStore.set(newValue.rawValue, for: .rootTaskView)
     }
   }
   var selectedRootDueBucketRawValue: Int {
-    didSet {
-      preferencesStore.set(selectedRootDueBucketRawValue, for: .selectedRootDueBucketRawValue)
-      invalidateCaches()
+    get { taskListViewModel.selectedRootDueBucketRawValue }
+    set {
+      taskListViewModel.selectedRootDueBucketRawValue = newValue
+      preferencesStore.set(newValue, for: .selectedRootDueBucketRawValue)
     }
   }
   var selectedRootTag: String {
-    didSet {
-      preferencesStore.set(selectedRootTag, for: .selectedRootTag)
-      invalidateCaches()
+    get { taskListViewModel.selectedRootTag }
+    set {
+      taskListViewModel.selectedRootTag = newValue
+      preferencesStore.set(newValue, for: .selectedRootTag)
     }
   }
-  /// 0 = task list, 1 = root tabs (All/Due/Tags), 2 = root filter row (due buckets/tags)
-  var rootScopeFocusLevel: Int = 0
   var orderedRootTaskViews: [RootTaskView] {
     if let data = UserDefaults.standard.data(forKey: "rootTaskViewOrder"),
-       let rawValues = try? JSONDecoder().decode([Int].self, from: data) {
+      let rawValues = try? JSONDecoder().decode([Int].self, from: data)
+    {
       let views = rawValues.compactMap { RootTaskView(rawValue: $0) }
       // Ensure all cases are present
       let allCases = RootTaskView.allCases
@@ -85,7 +93,6 @@ import SwiftUI
     }
   }
 
-  // MARK: - Carbon hotkey constants
   enum CarbonKey {
     static let space = 49
     static let b = 11
@@ -95,22 +102,17 @@ import SwiftUI
     static let shiftOption = 0x0A00
   }
 
-  // MARK: - Start Dates
   let startDates: StartDateManager
 
-  // MARK: - Recurrence
   let recurrence: RecurrenceManager
 
-  // MARK: - Timer
   let timer: TimerManager
+  let taskListViewModel: TaskListViewModel
 
-  // MARK: - Integrations
   var integrations: IntegrationCoordinator
 
-  // MARK: - Quick Entry
   var quickEntry: QuickEntryManager
 
-  // MARK: - Kanban
   let kanban: KanbanManager
 
   let preferences: PreferencesManager
@@ -121,14 +123,14 @@ import SwiftUI
 
   @ObservationIgnored var dismissedOnboardingDialogs: Set<OnboardingDialog>
 
-  // MARK: - Computed property caches
-
-  @ObservationIgnored var cache = BarTaskerCacheState()
+  var cache: CacheState {
+    taskListViewModel.cache
+  }
 
   @ObservationIgnored var isApplyingLaunchAtLoginChange = false
-  @ObservationIgnored let preferencesStore = BarTaskerPreferencesStore()
+  @ObservationIgnored let preferencesStore = PreferencesStore()
   let userPluginManager: UserPluginManager
-  @ObservationIgnored lazy var commandExecutor = BarTaskerCommandExecutor(manager: self)
+  @ObservationIgnored lazy var commandExecutor = CommandExecutor(manager: self)
   @ObservationIgnored let reachabilityMonitor = NetworkReachabilityMonitor()
   var usesKeychainStorage: Bool {
     #if DEBUG
@@ -160,7 +162,8 @@ import SwiftUI
   }
 
   // swiftlint:disable function_body_length
-  init(pluginRegistry: BarTaskerPluginRegistry) {
+  init(pluginRegistry: PluginRegistry, feedbackService: FeedbackService? = nil) {
+    self.feedbackService = feedbackService ?? DefaultFeedbackService()
     let resolvedLocalTaskStore = LocalTaskStore()
     let resolvedCheckvistSyncPlugin =
       pluginRegistry.activeCheckvistSyncPlugin ?? NativeCheckvistSyncPlugin()
@@ -196,13 +199,17 @@ import SwiftUI
     let initialRemoteKey = resolvedCheckvistSyncPlugin.startupRemoteKey(
       useKeychainStorageAtInit: useKeychainStorageAtInit)
 
+    let navigationState = NavigationState()
+    self.navigationState = navigationState
+
     // Create task repository with all task-related state
-    self.repository = TaskRepository(
+    let repository = TaskRepository(
       preferencesStore: preferencesStore,
       checkvistSyncPlugin: resolvedCheckvistSyncPlugin,
       localTaskStore: resolvedLocalTaskStore,
       initialRemoteKey: initialRemoteKey
     )
+    self.repository = repository
 
     let storedListId = preferencesStore.string(.checkvistListId)
     let storedUsername = preferencesStore.string(.checkvistUsername)
@@ -210,11 +217,6 @@ import SwiftUI
     let storedPluginSelectionOnboardingCompletedFlag = preferencesStore.optionalBool(
       .pluginSelectionOnboardingCompleted)
 
-    self.rootTaskView =
-      RootTaskView(rawValue: preferencesStore.int(.rootTaskView, default: 1)) ?? .due
-    self.selectedRootDueBucketRawValue = preferencesStore.int(
-      .selectedRootDueBucketRawValue, default: -1)
-    self.selectedRootTag = preferencesStore.string(.selectedRootTag)
     self.kanban = KanbanManager(preferencesStore: preferencesStore)
     if let storedOnboarding = storedOnboardingCompletedFlag {
       self.onboardingCompleted = storedOnboarding
@@ -239,10 +241,12 @@ import SwiftUI
         preferencesStore.set(true, for: .pluginSelectionOnboardingCompleted)
       }
     }
-    self.timer = TimerManager(preferencesStore: preferencesStore)
+    let timer = TimerManager(preferencesStore: preferencesStore)
+    self.timer = timer
     self.startDates = StartDateManager(preferencesStore: preferencesStore)
     self.recurrence = RecurrenceManager(preferencesStore: preferencesStore)
-    self.quickEntry = QuickEntryManager()
+    let quickEntry = QuickEntryManager()
+    self.quickEntry = quickEntry
     self.integrations = IntegrationCoordinator(
       preferencesStore: preferencesStore,
       obsidianPlugin: resolvedObsidianPlugin,
@@ -256,6 +260,18 @@ import SwiftUI
       persistedDismissedDialogs.compactMap(OnboardingDialog.init(rawValue:))
     )
 
+    self.taskListViewModel = TaskListViewModel(
+      repository: repository,
+      navigationState: navigationState,
+      timer: timer,
+      quickEntry: quickEntry
+    )
+
+    self.rootTaskView =
+      RootTaskView(rawValue: preferencesStore.int(.rootTaskView, default: 1)) ?? .due
+    self.selectedRootDueBucketRawValue = preferencesStore.int(
+      .selectedRootDueBucketRawValue, default: -1)
+    self.selectedRootTag = preferencesStore.string(.selectedRootTag)
     setupBindings()
     setupChildCallbacks()
     kanban.dataSource = self
@@ -279,17 +295,11 @@ import SwiftUI
   // swiftlint:enable function_body_length
 }
 
-// MARK: - KanbanTaskDataSource conformance
+extension AppCoordinator: KanbanTaskDataSource {}
 
-extension BarTaskerCoordinator: KanbanTaskDataSource {}
+extension AppCoordinator: IntegrationDataSource {}
 
-// MARK: - IntegrationDataSource conformance
-
-extension BarTaskerCoordinator: IntegrationDataSource {}
-
-// MARK: - Kanban move orchestration (cross-cutting: kanban + task CRUD)
-
-extension BarTaskerCoordinator {
+extension AppCoordinator {
   @MainActor func moveCurrentTaskToKanbanColumn(direction: Int) async {
     guard let outcome = kanban.computeMoveCurrentTask(direction: direction) else { return }
     switch outcome {

@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-extension BarTaskerCoordinator {
+extension AppCoordinator {
   // MARK: - Reorder
 
   @MainActor func moveTask(_ task: CheckvistTask, direction: Int) async {
@@ -14,7 +14,6 @@ extension BarTaskerCoordinator {
     let neighbour = siblings[newIdx]
     let targetPosition = newIdx + 1
     let movingOriginalPosition = task.position
-    let snapshot = isUsingOfflineStore ? offlineStateSnapshot() : nil
 
     // Optimistic UI update: move the task block immediately so the list responds instantly.
     if let movingRange = subtreeBlockRange(for: task.id, in: tasks),
@@ -49,13 +48,6 @@ extension BarTaskerCoordinator {
       } else {
         currentSiblingIndex = min(newIdx, max(0, visibleTasks.count - 1))
       }
-    }
-
-    if let snapshot {
-      persistOfflineTaskState()
-      lastUndo = .restoreOfflineState(snapshot: snapshot)
-      errorMessage = nil
-      return
     }
 
     enqueueReorderRequest(taskId: task.id, position: targetPosition)
@@ -101,7 +93,7 @@ extension BarTaskerCoordinator {
       var hadFailure = false
 
       while true {
-        let nextRequest: BarTaskerReorderQueue.Request? = await MainActor.run {
+        let nextRequest: ReorderQueue.Request? = await MainActor.run {
           self.repository.reorderQueue.dequeueNext()
         }
 
@@ -124,7 +116,7 @@ extension BarTaskerCoordinator {
 
   private func commitReorderRequest(taskId: Int, position: Int) async -> Bool {
     do {
-      let success = try await repository.checkvistSyncPlugin.moveTask(
+      let success = try await repository.activeSyncPlugin.moveTask(
         listId: listId,
         taskId: taskId,
         position: position,
@@ -150,7 +142,7 @@ extension BarTaskerCoordinator {
   // Timer methods are now on TimerManager (accessed via `timer.*`)
 
   @MainActor func executeCommandInput(_ input: String) async {
-    let parsed = BarTaskerCommandEngine.parse(input)
+    let parsed = CommandEngine.parse(input)
     logger.log("Executing command: \(input, privacy: .public)")
     await commandExecutor.execute(parsed: parsed)
     if case .unknown(let raw) = parsed {
@@ -159,7 +151,7 @@ extension BarTaskerCoordinator {
   }
 
   static func resolveDueDate(_ input: String) -> String {
-    BarTaskerCommandEngine.resolveDueDate(input)
+    CommandEngine.resolveDueDate(input)
   }
 
   func resolveDueDateWithConfig(_ input: String) -> String {
@@ -169,7 +161,7 @@ extension BarTaskerCoordinator {
       eveningHour: preferences.namedTimeEveningHour,
       eodHour: preferences.namedTimeEodHour
     )
-    return BarTaskerCommandEngine.resolveDueDate(input, config: config)
+    return CommandEngine.resolveDueDate(input, config: config)
   }
 
   func totalElapsed(forTaskId taskId: Int) -> TimeInterval {
@@ -209,52 +201,11 @@ extension BarTaskerCoordinator {
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }), idx > 0 else { return }
     let newParent = siblings[idx - 1]
 
-    if isUsingOfflineStore {
-      guard let movingRange = subtreeBlockRange(for: task.id, in: tasks) else { return }
-      let snapshot = offlineStateSnapshot()
-      let selectedTaskId = task.id
-
-      var updatedTasks = tasks
-      let movingBlock = Array(updatedTasks[movingRange])
-      updatedTasks.removeSubrange(movingRange)
-
-      guard let newParentRange = subtreeBlockRange(for: newParent.id, in: updatedTasks) else {
-        return
-      }
-
-      var adjustedBlock = movingBlock
-      if let rootTask = adjustedBlock.first {
-        adjustedBlock[0] = rebuiltTask(
-          rootTask,
-          content: rootTask.content,
-          status: rootTask.status,
-          due: rootTask.due,
-          position: rootTask.position,
-          parentId: newParent.id,
-          level: rootTask.level
-        )
-      }
-
-      updatedTasks.insert(contentsOf: adjustedBlock, at: newParentRange.upperBound)
-      tasks = updatedTasks
-      persistOfflineTaskState()
-
-      if let visibleIndex = visibleTasks.firstIndex(where: { $0.id == selectedTaskId }) {
-        currentSiblingIndex = visibleIndex
-      } else {
-        clampSelectionToVisibleRange()
-      }
-
-      lastUndo = .restoreOfflineState(snapshot: snapshot)
-      errorMessage = nil
-      return
-    }
-
     await runBooleanMutation(
       failureMessage: "Failed to indent task.",
       errorMessageBuilder: { "Error indenting task: \($0.localizedDescription)" },
       action: {
-        try await repository.checkvistSyncPlugin.reparentTask(
+        try await repository.activeSyncPlugin.reparentTask(
           listId: listId,
           taskId: task.id,
           parentId: newParent.id,
@@ -272,55 +223,11 @@ extension BarTaskerCoordinator {
     guard let parent = tasks.first(where: { $0.id == parentId }) else { return }
     let newParentId = parent.parentId ?? 0
 
-    if isUsingOfflineStore {
-      guard let movingRange = subtreeBlockRange(for: task.id, in: tasks) else { return }
-      let snapshot = offlineStateSnapshot()
-      let selectedTaskId = task.id
-
-      var updatedTasks = tasks
-      let movingBlock = Array(updatedTasks[movingRange])
-      updatedTasks.removeSubrange(movingRange)
-
-      let insertIndex: Int
-      if let parentRange = subtreeBlockRange(for: parent.id, in: updatedTasks) {
-        insertIndex = parentRange.upperBound
-      } else {
-        insertIndex = updatedTasks.endIndex
-      }
-
-      var adjustedBlock = movingBlock
-      if let rootTask = adjustedBlock.first {
-        adjustedBlock[0] = rebuiltTask(
-          rootTask,
-          content: rootTask.content,
-          status: rootTask.status,
-          due: rootTask.due,
-          position: rootTask.position,
-          parentId: newParentId == 0 ? nil : newParentId,
-          level: rootTask.level
-        )
-      }
-
-      updatedTasks.insert(contentsOf: adjustedBlock, at: min(insertIndex, updatedTasks.endIndex))
-      tasks = updatedTasks
-      persistOfflineTaskState()
-
-      if let visibleIndex = visibleTasks.firstIndex(where: { $0.id == selectedTaskId }) {
-        currentSiblingIndex = visibleIndex
-      } else {
-        clampSelectionToVisibleRange()
-      }
-
-      lastUndo = .restoreOfflineState(snapshot: snapshot)
-      errorMessage = nil
-      return
-    }
-
     await runBooleanMutation(
       failureMessage: "Failed to unindent task.",
       errorMessageBuilder: { "Error unindenting task: \($0.localizedDescription)" },
       action: {
-        try await repository.checkvistSyncPlugin.reparentTask(
+        try await repository.activeSyncPlugin.reparentTask(
           listId: listId,
           taskId: task.id,
           parentId: newParentId == 0 ? nil : newParentId,

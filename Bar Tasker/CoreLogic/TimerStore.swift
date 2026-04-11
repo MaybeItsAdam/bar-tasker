@@ -1,11 +1,11 @@
 import Foundation
 
-struct BarTaskerTimerNode: Equatable, Sendable {
+struct TimerNode: Equatable, Sendable {
   let id: Int
   let parentId: Int?
 }
 
-enum BarTaskerTimerStore {
+enum TimerStore {
   static func formatted(_ elapsed: TimeInterval) -> String {
     if elapsed < 60 {
       return "\(Int(elapsed))s"
@@ -18,7 +18,7 @@ enum BarTaskerTimerStore {
     }
   }
 
-  static func childCountByTaskId(nodes: [BarTaskerTimerNode]) -> [Int: Int] {
+  static func childCountByTaskId(nodes: [TimerNode]) -> [Int: Int] {
     var counts: [Int: Int] = [:]
     for node in nodes {
       let parentId = node.parentId ?? 0
@@ -28,10 +28,10 @@ enum BarTaskerTimerStore {
     return counts
   }
 
-  static func rolledUpElapsedByTaskId(nodes: [BarTaskerTimerNode], ownElapsed: [Int: TimeInterval])
+  static func rolledUpElapsedByTaskId(nodes: [TimerNode], ownElapsed: [Int: TimeInterval])
     -> [Int: TimeInterval]
   {
-    var childrenByParent: [Int: [BarTaskerTimerNode]] = [:]
+    var childrenByParent: [Int: [TimerNode]] = [:]
     for node in nodes {
       childrenByParent[node.parentId ?? 0, default: []].append(node)
     }

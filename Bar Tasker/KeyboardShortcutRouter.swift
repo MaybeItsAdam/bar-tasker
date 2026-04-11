@@ -4,7 +4,7 @@ import OSLog
 @MainActor
 // swiftlint:disable type_body_length function_body_length cyclomatic_complexity
 struct KeyboardShortcutRouter {
-  let manager: BarTaskerCoordinator
+  let manager: AppCoordinator
   let logger: Logger
   let updateTitle: () -> Void
   let closeWindow: () -> Void

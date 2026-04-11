@@ -27,7 +27,7 @@ private struct BarTaskerMCPJsonRpcError: Error {
   }
 }
 
-private struct BarTaskerMCPCheckvistError: Error {
+private struct MCPCheckvistError: Error {
   let message: String
   let status: Int?
   let body: Any?
@@ -78,7 +78,7 @@ private final class BarTaskerMCPCheckvistClient {
     let listId = explicitListId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     let resolved = listId.isEmpty ? config.defaultListId : listId
     guard !resolved.isEmpty else {
-      throw BarTaskerMCPCheckvistError(
+      throw MCPCheckvistError(
         message: "Missing list ID. Set CHECKVIST_LIST_ID or pass list_id.")
     }
     return resolved
@@ -87,7 +87,7 @@ private final class BarTaskerMCPCheckvistClient {
   func listLists() async throws -> [[String: Any]] {
     let response = try await request(method: "GET", path: "/checklists.json", requireAuth: true)
     guard let lists = response as? [[String: Any]] else {
-      throw BarTaskerMCPCheckvistError(
+      throw MCPCheckvistError(
         message: "Unexpected response while listing checklists.",
         body: response
       )
@@ -107,7 +107,7 @@ private final class BarTaskerMCPCheckvistClient {
       requireAuth: true
     )
     guard let tasks = response as? [[String: Any]] else {
-      throw BarTaskerMCPCheckvistError(
+      throw MCPCheckvistError(
         message: "Unexpected response while fetching tasks.",
         body: response
       )
@@ -161,7 +161,7 @@ private final class BarTaskerMCPCheckvistClient {
       taskPayload["due"] = due
     }
     guard !taskPayload.isEmpty else {
-      throw BarTaskerMCPCheckvistError(message: "No updates provided. Pass content and/or due.")
+      throw MCPCheckvistError(message: "No updates provided. Pass content and/or due.")
     }
 
     let response = try await request(
@@ -232,11 +232,11 @@ private final class BarTaskerMCPCheckvistClient {
     do {
       (data, response) = try await session.data(for: urlRequest)
     } catch {
-      throw BarTaskerMCPCheckvistError(message: "Network error: \(error.localizedDescription)")
+      throw MCPCheckvistError(message: "Network error: \(error.localizedDescription)")
     }
 
     guard let http = response as? HTTPURLResponse else {
-      throw BarTaskerMCPCheckvistError(message: "Invalid HTTP response.")
+      throw MCPCheckvistError(message: "Invalid HTTP response.")
     }
 
     let parsedBody = parseResponseBody(data)
@@ -267,7 +267,7 @@ private final class BarTaskerMCPCheckvistClient {
     }
 
     guard (200...299).contains(http.statusCode) else {
-      throw BarTaskerMCPCheckvistError(
+      throw MCPCheckvistError(
         message: "Checkvist API request failed with status \(http.statusCode).",
         status: http.statusCode,
         body: parsedBody
@@ -283,14 +283,14 @@ private final class BarTaskerMCPCheckvistClient {
     }
     try await login()
     guard let token, !token.isEmpty else {
-      throw BarTaskerMCPCheckvistError(message: "Authentication failed.")
+      throw MCPCheckvistError(message: "Authentication failed.")
     }
     return token
   }
 
   private func login() async throws {
     guard !config.username.isEmpty, !config.remoteKey.isEmpty else {
-      throw BarTaskerMCPCheckvistError(
+      throw MCPCheckvistError(
         message: "Missing credentials. Set CHECKVIST_USERNAME and CHECKVIST_REMOTE_KEY.")
     }
 
@@ -314,7 +314,7 @@ private final class BarTaskerMCPCheckvistClient {
       }
     }
 
-    throw BarTaskerMCPCheckvistError(
+    throw MCPCheckvistError(
       message: "Authentication response did not include a token.",
       body: response
     )
@@ -330,7 +330,7 @@ private final class BarTaskerMCPCheckvistClient {
       components?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
     }
     guard let url = components?.url else {
-      throw BarTaskerMCPCheckvistError(message: "Invalid request URL for path \(path).")
+      throw MCPCheckvistError(message: "Invalid request URL for path \(path).")
     }
     return url
   }
@@ -506,7 +506,7 @@ private final class BarTaskerMCPMessageWriter {
 }
 
 // swiftlint:disable type_body_length
-final class BarTaskerMCPServer {
+final class MCPServer {
   private let reader = BarTaskerMCPMessageReader()
   private let writer = BarTaskerMCPMessageWriter()
   private let client = BarTaskerMCPCheckvistClient(config: .fromEnvironment())
@@ -719,7 +719,7 @@ final class BarTaskerMCPServer {
         let content = try Self.requiredString(arguments, key: "content")
         let location = Self.asString(arguments["location"]) ?? "default"
         guard location == "default" || location == "specific" else {
-          throw BarTaskerMCPCheckvistError(message: "location must be 'default' or 'specific'.")
+          throw MCPCheckvistError(message: "location must be 'default' or 'specific'.")
         }
 
         let listID = try client.resolveListId(explicitListId: Self.asString(arguments["list_id"]))
@@ -787,7 +787,7 @@ final class BarTaskerMCPServer {
         title: "Error: \(error.message)",
         payload: payload
       )
-    } catch let error as BarTaskerMCPCheckvistError {
+    } catch let error as MCPCheckvistError {
       var payload: [String: Any] = [:]
       if let status = error.status {
         payload["status"] = status
@@ -989,13 +989,13 @@ final class BarTaskerMCPServer {
         break
       }
     }
-    throw BarTaskerMCPCheckvistError(message: "Expected boolean value.")
+    throw MCPCheckvistError(message: "Expected boolean value.")
   }
 
   private static func asOptionalInt(_ value: Any?) throws -> Int? {
     guard let value else { return nil }
     if value is Bool {
-      throw BarTaskerMCPCheckvistError(message: "Boolean value is not a valid integer.")
+      throw MCPCheckvistError(message: "Boolean value is not a valid integer.")
     }
     if let intValue = value as? Int {
       return intValue
@@ -1006,14 +1006,14 @@ final class BarTaskerMCPServer {
         return nil
       }
       guard let intValue = Int(trimmed) else {
-        throw BarTaskerMCPCheckvistError(message: "Invalid integer value: \(stringValue)")
+        throw MCPCheckvistError(message: "Invalid integer value: \(stringValue)")
       }
       return intValue
     }
     if let number = value as? NSNumber {
       return number.intValue
     }
-    throw BarTaskerMCPCheckvistError(message: "Expected integer value.")
+    throw MCPCheckvistError(message: "Expected integer value.")
   }
 
   private static let maxStringInputLength = 10_000
@@ -1022,10 +1022,10 @@ final class BarTaskerMCPServer {
     guard let value = asString(arguments[key])?.trimmingCharacters(in: .whitespacesAndNewlines),
       !value.isEmpty
     else {
-      throw BarTaskerMCPCheckvistError(message: "Missing required argument: \(key)")
+      throw MCPCheckvistError(message: "Missing required argument: \(key)")
     }
     guard value.count <= maxStringInputLength else {
-      throw BarTaskerMCPCheckvistError(
+      throw MCPCheckvistError(
         message: "Argument '\(key)' exceeds maximum length of \(maxStringInputLength) characters.")
     }
     return value
@@ -1033,7 +1033,7 @@ final class BarTaskerMCPServer {
 
   private static func requiredInt(_ arguments: [String: Any], key: String) throws -> Int {
     guard let value = try asOptionalInt(arguments[key]) else {
-      throw BarTaskerMCPCheckvistError(message: "Missing required argument: \(key)")
+      throw MCPCheckvistError(message: "Missing required argument: \(key)")
     }
     return value
   }

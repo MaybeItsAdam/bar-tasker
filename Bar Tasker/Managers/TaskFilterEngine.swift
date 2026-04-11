@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure, stateless filter and sort functions for task visibility computation.
-/// Extracted from `BarTaskerCoordinator+TaskScoping` so the algorithms can be
+/// Extracted from `AppCoordinator+TaskScoping` so the algorithms can be
 /// reasoned about and tested without coordinator state.
 struct TaskFilterEngine {
 

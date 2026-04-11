@@ -1,6 +1,6 @@
 import Foundation
 
-struct BarTaskerTaskVisibilityEngine {
+struct TaskVisibilityEngine {
   struct Context {
     let tasks: [CheckvistTask]
     let currentLevelTasks: [CheckvistTask]

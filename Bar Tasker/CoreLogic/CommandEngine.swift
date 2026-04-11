@@ -10,7 +10,7 @@ struct BarTaskerDateParsingConfig: Equatable {
   var eodHour: Int = 17
 }
 
-struct BarTaskerCommandSuggestion: Equatable, Sendable {
+struct CommandPaletteSuggestion: Equatable, Sendable {
   let label: String
   let command: String
   let preview: String
@@ -18,7 +18,7 @@ struct BarTaskerCommandSuggestion: Equatable, Sendable {
   let submitImmediately: Bool
 }
 
-enum BarTaskerCommand: Equatable, Sendable {
+enum Command: Equatable, Sendable {
   case done
   case undone
   case invalidate
@@ -66,8 +66,8 @@ enum BarTaskerCommand: Equatable, Sendable {
 }
 
 // swiftlint:disable type_body_length
-enum BarTaskerCommandEngine {
-  static let suggestions: [BarTaskerCommandSuggestion] = [
+enum CommandEngine {
+  static let suggestions: [CommandPaletteSuggestion] = [
     .init(
       label: "Mark done", command: "done", preview: "Close selected task", keybind: "Space",
       submitImmediately: true),
@@ -254,7 +254,7 @@ enum BarTaskerCommandEngine {
       keybind: "h / ←", submitImmediately: true),
   ]
 
-  static func filteredSuggestions(query: String, limit: Int? = nil) -> [BarTaskerCommandSuggestion]
+  static func filteredSuggestions(query: String, limit: Int? = nil) -> [CommandPaletteSuggestion]
   {
     let queryText = query.lowercased().trimmingCharacters(in: .whitespaces)
     let candidates = suggestions.filter { suggestion in
@@ -269,7 +269,7 @@ enum BarTaskerCommandEngine {
   }
 
   // swiftlint:disable:next cyclomatic_complexity
-  static func parse(_ input: String) -> BarTaskerCommand {
+  static func parse(_ input: String) -> Command {
     let cmd = input.lowercased().trimmingCharacters(in: .whitespaces)
     if cmd == "done" { return .done }
     if cmd == "undone" { return .undone }

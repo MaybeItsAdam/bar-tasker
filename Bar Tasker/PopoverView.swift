@@ -9,7 +9,7 @@ enum PopoverLayout {
   static let maxHeight: CGFloat = 520
 
   @MainActor
-  static func preferredWidth(for manager: BarTaskerCoordinator) -> CGFloat {
+  static func preferredWidth(for manager: AppCoordinator) -> CGFloat {
     guard manager.rootTaskView == .kanban else { return width }
     let count = max(1, manager.kanban.kanbanColumns.count)
     return CGFloat(count) * kanbanColumnWidth
@@ -25,7 +25,7 @@ enum PopoverLayout {
   static let inlineEntryVerticalPadding: CGFloat = 7
 
   @MainActor
-  static func preferredHeight(for manager: BarTaskerCoordinator) -> CGFloat {
+  static func preferredHeight(for manager: AppCoordinator) -> CGFloat {
     if manager.needsInitialSetup {
       return 430
     }
@@ -238,7 +238,7 @@ struct QuickEntryField: NSViewRepresentable {
   @Binding var text: String
   @Binding var isFocused: Bool
   var cursorAtEnd: Bool = true  // true = append (cursor at end), false = insert (cursor at start)
-  var font: NSFont = BarTaskerTypography.interfaceNSFont(ofSize: 13)
+  var font: NSFont = Typography.interfaceNSFont(ofSize: 13)
   var placeholder: String
   var onSubmit: () -> Void  // Enter
   var onTab: () -> Void  // Tab → add as child
@@ -350,9 +350,9 @@ struct QuickEntryField: NSViewRepresentable {
 
 // swiftlint:disable type_body_length function_body_length
 struct PopoverView: View {
-  @Environment(BarTaskerCoordinator.self) var manager
+  @Environment(AppCoordinator.self) var manager
 
-  private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
+  private func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
   }
 
@@ -750,7 +750,7 @@ struct PopoverView: View {
               themeColor(.textSecondary))
             Button(crumb.content) { manager.navigateTo(task: crumb) }
               .buttonStyle(PlainButtonStyle())
-              .font(BarTaskerTypography.taskFont(size: 11))
+              .font(Typography.taskFont(size: 11))
               .foregroundColor(themeColor(.link))
               .lineLimit(1)
           }
@@ -1175,7 +1175,7 @@ struct PopoverView: View {
         QuickEntryField(
           text: Bindable(manager).quickEntry.quickEntryText,
           isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
-          font: BarTaskerTypography.taskNSFont(ofSize: 13),
+          font: Typography.taskNSFont(ofSize: 13),
           placeholder: "Add first task",
           onSubmit: { submitEmptyStateAdd() },
           onTab: { submitEmptyStateAdd() },
@@ -1397,7 +1397,7 @@ struct PopoverView: View {
             text: Bindable(manager).quickEntry.quickEntryText,
             isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
             cursorAtEnd: manager.quickEntry.editCursorAtEnd,
-            font: BarTaskerTypography.taskNSFont(ofSize: 13),
+            font: Typography.taskNSFont(ofSize: 13),
             placeholder: "Edit task…",
             onSubmit: { submitAction() },
             onTab: {},
@@ -1546,9 +1546,9 @@ struct PopoverView: View {
   var quickEntryNSFont: NSFont {
     switch manager.quickEntry.quickEntryMode {
     case .addSibling, .addChild, .editTask, .quickAddDefault, .quickAddSpecific:
-      return BarTaskerTypography.taskNSFont(ofSize: 13)
+      return Typography.taskNSFont(ofSize: 13)
     case .search, .command:
-      return BarTaskerTypography.interfaceNSFont(ofSize: 13)
+      return Typography.interfaceNSFont(ofSize: 13)
     }
   }
 
@@ -1821,7 +1821,7 @@ struct PopoverView: View {
   }
 
   @ViewBuilder
-  func recurrenceBadge(rule: BarTaskerRecurrenceRule) -> some View {
+  func recurrenceBadge(rule: RecurrenceRule) -> some View {
     HStack(spacing: 3) {
       Image(systemName: "repeat")
         .font(.system(size: 8))
@@ -1908,13 +1908,13 @@ struct PopoverView: View {
   func formatTaskContent(_ text: String) -> Text {
     let pattern = "([@#][a-zA-Z0-9_\\-]+)"
     guard let regex = try? NSRegularExpression(pattern: pattern) else {
-      return Text(text).font(BarTaskerTypography.taskFont(size: 13)).foregroundColor(
+      return Text(text).font(Typography.taskFont(size: 13)).foregroundColor(
         themeColor(.textPrimary))
     }
 
     let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
     guard !matches.isEmpty else {
-      return Text(text).font(BarTaskerTypography.taskFont(size: 13)).foregroundColor(
+      return Text(text).font(Typography.taskFont(size: 13)).foregroundColor(
         themeColor(.textPrimary))
     }
 
@@ -1929,7 +1929,7 @@ struct PopoverView: View {
         let preceding = String(text[lastEnd..<matchRange.lowerBound])
         resultText =
           resultText
-          + Text(preceding).font(BarTaskerTypography.taskFont(size: 13))
+          + Text(preceding).font(Typography.taskFont(size: 13))
           .foregroundColor(themeColor(.textPrimary))
       }
 
@@ -1939,7 +1939,7 @@ struct PopoverView: View {
       // Markdown trick: We can't actually nest complex View backgrounds inside a concatenated Text in standard SwiftUI without iOS 15 AttributedString APIs,
       // but we CAN use basic inline styling like bolding and foreground colors.
       let tagText = Text(tagStr)
-        .font(BarTaskerTypography.taskFont(size: 12, weight: .bold))
+        .font(Typography.taskFont(size: 12, weight: .bold))
         .foregroundColor(themeColor(.link))
 
       resultText = resultText + tagText
@@ -1951,7 +1951,7 @@ struct PopoverView: View {
       let trailing = String(text[lastEnd..<text.endIndex])
       resultText =
         resultText
-        + Text(trailing).font(BarTaskerTypography.taskFont(size: 13))
+        + Text(trailing).font(Typography.taskFont(size: 13))
         .foregroundColor(themeColor(.textPrimary))
     }
 

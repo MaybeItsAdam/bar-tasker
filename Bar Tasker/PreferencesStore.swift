@@ -1,6 +1,6 @@
 import Foundation
 
-final class BarTaskerPreferencesStore {
+final class PreferencesStore {
   enum Key: String {
     case checkvistUsername
     case checkvistListId

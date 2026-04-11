@@ -1,6 +1,6 @@
 import Foundation
-import Observation
 import OSLog
+import Observation
 
 @MainActor
 @Observable class TaskRepository {
@@ -9,11 +9,12 @@ import OSLog
 
   // MARK: - Dependencies
 
-  @ObservationIgnored let preferencesStore: BarTaskerPreferencesStore
+  @ObservationIgnored let preferencesStore: PreferencesStore
   @ObservationIgnored let localTaskStore: LocalTaskStore
   @ObservationIgnored let checkvistSyncPlugin: any CheckvistSyncPlugin
+  @ObservationIgnored let offlineSyncPlugin: OfflineTaskSyncPlugin
   @ObservationIgnored let navigationCoordinator = TaskNavigationCoordinator()
-  @ObservationIgnored let reorderQueue = BarTaskerReorderQueue()
+  @ObservationIgnored let reorderQueue = ReorderQueue()
   @ObservationIgnored let priorityQueueStore: ListScopedTaskIDStore
 
   // MARK: - Callbacks
@@ -34,13 +35,6 @@ import OSLog
     didSet { onCacheRelevantChange?() }
   }
   var availableLists: [CheckvistList] = []
-
-  // MARK: - Navigation State
-
-  var currentParentId: Int = 0 {
-    didSet { onCacheRelevantChange?() }
-  }
-  var currentSiblingIndex: Int = 0
 
   // MARK: - Auth / Connection
 
@@ -83,8 +77,6 @@ import OSLog
   // MARK: - Offline State
 
   @ObservationIgnored var pendingTaskMutations: [Int: (content: String?, due: String?)] = [:]
-  @ObservationIgnored var offlineArchivedTasksById: [Int: CheckvistTask]
-  @ObservationIgnored var nextOfflineTaskIdValue: Int
   @ObservationIgnored var loadingOperationCount: Int = 0
   @ObservationIgnored var hasAttemptedRemoteKeyBootstrap: Bool = false
 
@@ -103,15 +95,15 @@ import OSLog
   var activeCredentials: CheckvistCredentials {
     CheckvistCredentials(username: username, remoteKey: remoteKey)
   }
-  var currentLevelTasks: [CheckvistTask] {
-    tasks.filter { ($0.parentId ?? 0) == currentParentId }
+  var activeSyncPlugin: any CheckvistSyncPlugin {
+    isUsingOfflineStore ? offlineSyncPlugin : checkvistSyncPlugin
   }
 
   // MARK: - Init
 
   // swiftlint:disable function_body_length
   init(
-    preferencesStore: BarTaskerPreferencesStore,
+    preferencesStore: PreferencesStore,
     checkvistSyncPlugin: any CheckvistSyncPlugin,
     localTaskStore: LocalTaskStore,
     initialRemoteKey: String
@@ -119,6 +111,7 @@ import OSLog
     self.preferencesStore = preferencesStore
     self.checkvistSyncPlugin = checkvistSyncPlugin
     self.localTaskStore = localTaskStore
+    self.offlineSyncPlugin = OfflineTaskSyncPlugin(localStore: localTaskStore)
     self.priorityQueueStore = ListScopedTaskIDStore(
       defaultsKey: Self.priorityQueuesDefaultsKey,
       maximumCount: Self.maxPriorityRank
@@ -134,9 +127,6 @@ import OSLog
     self.tasks =
       storedListId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? offlinePayload.openTasks : []
-    self.offlineArchivedTasksById = Dictionary(
-      uniqueKeysWithValues: offlinePayload.archivedTasks.map { ($0.id, $0) })
-    self.nextOfflineTaskIdValue = max(offlinePayload.nextTaskId, 1)
     self.priorityTaskIds = priorityQueueStore.load(for: storedListId)
   }
   // swiftlint:enable function_body_length
@@ -228,98 +218,6 @@ extension TaskRepository {
     if filtered != priorityTaskIds {
       savePriorityQueue(filtered)
     }
-  }
-}
-
-// MARK: - Offline Helpers
-
-extension TaskRepository {
-  func rebuiltTask(
-    _ task: CheckvistTask,
-    content: String,
-    status: Int,
-    due: String?,
-    position: Int?,
-    parentId: Int?,
-    level: Int?
-  ) -> CheckvistTask {
-    CheckvistTask(
-      id: task.id,
-      content: content,
-      status: status,
-      due: due,
-      position: position,
-      parentId: parentId,
-      level: level,
-      notes: task.notes,
-      updatedAt: task.updatedAt
-    )
-  }
-
-  func archivedOfflineTasks() -> [CheckvistTask] {
-    offlineArchivedTasksById.values.sorted { lhs, rhs in
-      if lhs.id != rhs.id { return lhs.id < rhs.id }
-      return lhs.content < rhs.content
-    }
-  }
-
-  func normalizeOfflineTasks(_ flatTasks: [CheckvistTask]) -> [CheckvistTask] {
-    guard !flatTasks.isEmpty else { return [] }
-
-    let taskById = Dictionary(uniqueKeysWithValues: flatTasks.map { ($0.id, $0) })
-    var childrenByParent: [Int: [(index: Int, task: CheckvistTask)]] = [:]
-
-    for (index, task) in flatTasks.enumerated() {
-      let parentId = task.parentId ?? 0
-      childrenByParent[parentId, default: []].append((index: index, task: task))
-    }
-
-    func orderedChildren(for parentId: Int) -> [(index: Int, task: CheckvistTask)] {
-      childrenByParent[parentId, default: []].sorted { lhs, rhs in
-        let lhsPosition = lhs.task.position ?? Int.max
-        let rhsPosition = rhs.task.position ?? Int.max
-        if lhsPosition != rhsPosition { return lhsPosition < rhsPosition }
-        return lhs.index < rhs.index
-      }
-    }
-
-    var normalized: [CheckvistTask] = []
-
-    func appendChildren(of parentId: Int, level: Int) {
-      let children = orderedChildren(for: parentId)
-      for (offset, entry) in children.enumerated() {
-        let task = rebuiltTask(
-          entry.task,
-          content: entry.task.content,
-          status: entry.task.status,
-          due: entry.task.due,
-          position: offset + 1,
-          parentId: parentId == 0 ? nil : parentId,
-          level: level
-        )
-        normalized.append(task)
-        appendChildren(of: task.id, level: level + 1)
-      }
-    }
-
-    let missingParentIds = Set(flatTasks.compactMap { $0.parentId }.filter { taskById[$0] == nil })
-    let rootParentIds = Set([0]).union(missingParentIds).sorted()
-
-    for rootId in rootParentIds {
-      appendChildren(of: rootId, level: 0)
-    }
-
-    return normalized
-  }
-
-  @MainActor func nextOfflineTaskId() -> Int {
-    let nextId = max(nextOfflineTaskIdValue, 1)
-    nextOfflineTaskIdValue = nextId + 1
-    return nextId
-  }
-
-  func nextOptimisticTaskId() -> Int {
-    -Int.random(in: 1...1_000_000)
   }
 }
 

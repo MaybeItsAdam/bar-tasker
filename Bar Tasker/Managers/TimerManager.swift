@@ -5,7 +5,7 @@ import OSLog
 @MainActor
 @Observable class TimerManager {
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "timer")
-  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
+  @ObservationIgnored private let preferencesStore: PreferencesStore
 
   var timedTaskId: Int? = nil
   var timerByTaskId: [Int: TimeInterval] = [:] {
@@ -32,7 +32,7 @@ import OSLog
 
   @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
 
-  init(preferencesStore: BarTaskerPreferencesStore) {
+  init(preferencesStore: PreferencesStore) {
     self.preferencesStore = preferencesStore
     self.timerBarLeading = preferencesStore.bool(.timerBarLeading, default: false)
     self.timerMode = TimerMode(rawValue: preferencesStore.int(.timerMode, default: 0)) ?? .visible
@@ -90,7 +90,7 @@ import OSLog
   // MARK: - Display
 
   static func formattedTimer(_ elapsed: TimeInterval) -> String {
-    BarTaskerTimerStore.formatted(elapsed)
+    TimerStore.formatted(elapsed)
   }
 
   func timerBarString(currentTaskId: Int?, totalElapsedForCurrentTask: TimeInterval) -> String? {
@@ -104,7 +104,7 @@ import OSLog
   // MARK: - Persistence Helpers
 
   static func timerDictionaryFromDefaults(
-    preferencesStore: BarTaskerPreferencesStore
+    preferencesStore: PreferencesStore
   ) -> [Int: TimeInterval] {
     let raw = preferencesStore.timerDictionary()
     guard !raw.isEmpty else { return [:] }
@@ -116,7 +116,7 @@ import OSLog
   }
 }
 
-// MARK: - TimerMode (moved from BarTaskerCoordinator+Types)
+// MARK: - TimerMode (moved from AppCoordinator+Types)
 
 enum TimerMode: Int, CaseIterable {
   case visible

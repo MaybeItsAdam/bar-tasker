@@ -1,8 +1,8 @@
 import SwiftUI
 
 @main
-struct BarTaskerApp: App {
-  // AppDelegate owns the single BarTaskerCoordinator instance
+struct MainApp: App {
+  // AppDelegate owns the single AppCoordinator instance
   @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
   var body: some Scene {
