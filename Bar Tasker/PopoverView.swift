@@ -9,7 +9,7 @@ enum PopoverLayout {
   static let maxHeight: CGFloat = 520
 
   @MainActor
-  static func preferredWidth(for manager: BarTaskerManager) -> CGFloat {
+  static func preferredWidth(for manager: BarTaskerCoordinator) -> CGFloat {
     guard manager.rootTaskView == .kanban else { return width }
     let count = max(1, manager.kanban.kanbanColumns.count)
     return CGFloat(count) * kanbanColumnWidth
@@ -25,7 +25,7 @@ enum PopoverLayout {
   static let inlineEntryVerticalPadding: CGFloat = 7
 
   @MainActor
-  static func preferredHeight(for manager: BarTaskerManager) -> CGFloat {
+  static func preferredHeight(for manager: BarTaskerCoordinator) -> CGFloat {
     if manager.needsInitialSetup {
       return 430
     }
@@ -350,7 +350,7 @@ struct QuickEntryField: NSViewRepresentable {
 
 // swiftlint:disable type_body_length function_body_length
 struct PopoverView: View {
-  @EnvironmentObject var manager: BarTaskerManager
+  @Environment(BarTaskerCoordinator.self) var manager
 
   private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
@@ -506,9 +506,9 @@ struct PopoverView: View {
   private var activePromptTextBinding: Binding<String> {
     switch manager.quickEntry.quickEntryMode {
     case .search:
-      return $manager.quickEntry.searchText
+      return Bindable(manager).quickEntry.searchText
     case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
-      return $manager.quickEntry.quickEntryText
+      return Bindable(manager).quickEntry.quickEntryText
     }
   }
 
@@ -605,20 +605,20 @@ struct PopoverView: View {
         )
         pluginToggleRow(
           label: "Obsidian",
-          isOn: $manager.integrations.obsidianIntegrationEnabled,
+          isOn: Bindable(manager).integrations.obsidianIntegrationEnabled,
           prompt: manager.integrations.obsidianIntegrationEnabled && manager.integrations.obsidianInboxPath.isEmpty
             ? "Choose inbox folder" : nil,
-          onPromptTap: { _ = manager.chooseObsidianInboxFolder() }
+          onPromptTap: { _ = manager.integrations.chooseObsidianInboxFolder() }
         )
         pluginToggleRow(
           label: "Google Calendar",
-          isOn: $manager.integrations.googleCalendarIntegrationEnabled,
+          isOn: Bindable(manager).integrations.googleCalendarIntegrationEnabled,
           prompt: nil,
           onPromptTap: {}
         )
         pluginToggleRow(
           label: "MCP",
-          isOn: $manager.integrations.mcpIntegrationEnabled,
+          isOn: Bindable(manager).integrations.mcpIntegrationEnabled,
           prompt: nil,
           onPromptTap: {}
         )
@@ -667,7 +667,7 @@ struct PopoverView: View {
   }
 
   // swiftlint:disable:next large_tuple
-  private func onboardingInlineContent(for dialog: BarTaskerManager.OnboardingDialog) -> (
+  private func onboardingInlineContent(for dialog: OnboardingDialog) -> (
     title: String, message: String, actionTitle: String, action: () -> Void
   ) {
     switch dialog {
@@ -697,7 +697,7 @@ struct PopoverView: View {
         "Obsidian integration is enabled. Pick an inbox folder to finish setup.",
         "Choose Folder",
         {
-          _ = manager.chooseObsidianInboxFolder()
+          _ = manager.integrations.chooseObsidianInboxFolder()
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
@@ -718,7 +718,7 @@ struct PopoverView: View {
         "Enable",
         {
           manager.integrations.mcpIntegrationEnabled = true
-          manager.refreshMCPServerCommandPath()
+          manager.integrations.refreshMCPServerCommandPath()
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
@@ -804,7 +804,7 @@ struct PopoverView: View {
       }
 
       if manager.rootTaskView == .due {
-        let dueBuckets = BarTaskerManager.RootDueBucket.allCases.filter { $0 != .noDueDate }
+        let dueBuckets = RootDueBucket.allCases.filter { $0 != .noDueDate }
         ScrollViewReader { proxy in
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
@@ -995,7 +995,7 @@ struct PopoverView: View {
   }
 
   @ViewBuilder
-  func rootScopeTabButton(_ scope: BarTaskerManager.RootTaskView) -> some View {
+  func rootScopeTabButton(_ scope: RootTaskView) -> some View {
     let selected = manager.rootTaskView == scope
     Button {
       manager.setRootTaskView(scope)
@@ -1173,8 +1173,8 @@ struct PopoverView: View {
           .frame(width: PopoverLayout.rowIconWidth, height: 20, alignment: .center)
 
         QuickEntryField(
-          text: $manager.quickEntry.quickEntryText,
-          isFocused: $manager.quickEntry.isQuickEntryFocused,
+          text: Bindable(manager).quickEntry.quickEntryText,
+          isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
           font: BarTaskerTypography.taskNSFont(ofSize: 13),
           placeholder: "Add first task",
           onSubmit: { submitEmptyStateAdd() },
@@ -1238,7 +1238,7 @@ struct PopoverView: View {
 
         QuickEntryField(
           text: activePromptTextBinding,
-          isFocused: $manager.quickEntry.isQuickEntryFocused,
+          isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
           font: quickEntryNSFont,
           placeholder: placeholderText,
           onSubmit: { submitAction() },
@@ -1372,8 +1372,8 @@ struct PopoverView: View {
     let showsSelectedStyling = isSelected && !showsInlineComposer && listFocusIsActive
     let showsInactiveSelection = isSelected && !showsInlineComposer && !listFocusIsActive
     let isCompleting = manager.quickEntry.completingTaskId == task.id
-    let hasObsidianNoteLink = manager.hasObsidianSyncedNote(task: task)
-    let hasGoogleCalendarLink = manager.hasGoogleCalendarEventLink(taskId: task.id)
+    let hasObsidianNoteLink = manager.integrations.hasObsidianSyncedNote(task: task, tasks: manager.tasks)
+    let hasGoogleCalendarLink = manager.integrations.hasGoogleCalendarEventLink(taskId: task.id, listId: manager.listId)
 
     HStack(alignment: .top, spacing: PopoverLayout.rowContentSpacing) {
       VStack(alignment: .leading, spacing: 3) {
@@ -1394,8 +1394,8 @@ struct PopoverView: View {
         // Inline edit: replace text with editable field when editing this task
         if isSelected && manager.quickEntry.quickEntryMode == .editTask && manager.quickEntry.isQuickEntryFocused {
           QuickEntryField(
-            text: $manager.quickEntry.quickEntryText,
-            isFocused: $manager.quickEntry.isQuickEntryFocused,
+            text: Bindable(manager).quickEntry.quickEntryText,
+            isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
             cursorAtEnd: manager.quickEntry.editCursorAtEnd,
             font: BarTaskerTypography.taskNSFont(ofSize: 13),
             placeholder: "Edit task…",
@@ -1421,9 +1421,9 @@ struct PopoverView: View {
                 manager.currentSiblingIndex = index
                 Task {
                   if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
-                    await manager.openCurrentTaskInNewObsidianWindow(taskId: task.id)
+                    await manager.integrations.syncTaskToObsidian(taskId: task.id, openMode: .newWindow)
                   } else {
-                    await manager.syncCurrentTaskToObsidian(taskId: task.id)
+                    await manager.integrations.syncTaskToObsidian(taskId: task.id, openMode: .standard)
                   }
                 }
               } label: {
@@ -1442,7 +1442,7 @@ struct PopoverView: View {
               Button {
                 manager.rootScopeFocusLevel = 0
                 manager.currentSiblingIndex = index
-                manager.openSavedGoogleCalendarEventLink(taskId: task.id)
+                manager.integrations.openSavedGoogleCalendarEventLink(taskId: task.id)
               } label: {
                 Image(systemName: "calendar.badge.checkmark")
                   .font(.system(size: 10, weight: .semibold))
@@ -1552,8 +1552,8 @@ struct PopoverView: View {
     }
   }
 
-  var filteredCommandSuggestions: [BarTaskerManager.CommandSuggestion] {
-    manager.filteredCommandSuggestions(query: manager.quickEntry.quickEntryText)
+  var filteredCommandSuggestions: [CommandSuggestion] {
+    manager.quickEntry.filteredCommandSuggestions(query: manager.quickEntry.quickEntryText)
   }
 
   func submitAction() {
@@ -1753,7 +1753,7 @@ struct PopoverView: View {
   @ViewBuilder
   func taskInlineMetadata(task: CheckvistTask, elapsed: TimeInterval) -> some View {
     let metadataTokens = taskMetadataTokens(task.content)
-    let startLabel = manager.startDateLabel(for: task)
+    let startLabel = manager.startDates.startDateLabel(for: task)
     let recurrenceRule = manager.recurrenceRule(for: task)
     if !metadataTokens.isEmpty
       || manager.priorityRank(for: task) != nil
@@ -1776,7 +1776,7 @@ struct PopoverView: View {
           )
         }
         if let label = startLabel {
-          startBadge(label: label, isFuture: manager.startDateIsInFuture(for: task))
+          startBadge(label: label, isFuture: manager.startDates.startDateIsInFuture(for: task))
         }
         if let due = task.due {
           dueBadge(due: due, overdue: task.isOverdue, today: task.isDueToday)

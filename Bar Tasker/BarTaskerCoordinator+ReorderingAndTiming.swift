@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-extension BarTaskerManager {
+extension BarTaskerCoordinator {
   // MARK: - Reorder
 
   @MainActor func moveTask(_ task: CheckvistTask, direction: Int) async {
@@ -89,12 +89,12 @@ extension BarTaskerManager {
   }
 
   @MainActor private func enqueueReorderRequest(taskId: Int, position: Int) {
-    reorderQueue.enqueue(taskId: taskId, position: position)
+    repository.reorderQueue.enqueue(taskId: taskId, position: position)
     startReorderSyncIfNeeded()
   }
 
   @MainActor private func startReorderSyncIfNeeded() {
-    guard !reorderQueue.isSyncing else { return }
+    guard !repository.reorderQueue.isSyncing else { return }
 
     let task = Task { [weak self] in
       guard let self else { return }
@@ -102,7 +102,7 @@ extension BarTaskerManager {
 
       while true {
         let nextRequest: BarTaskerReorderQueue.Request? = await MainActor.run {
-          self.reorderQueue.dequeueNext()
+          self.repository.reorderQueue.dequeueNext()
         }
 
         guard let nextRequest else { break }
@@ -112,19 +112,19 @@ extension BarTaskerManager {
       }
 
       await MainActor.run {
-        self.reorderQueue.setSyncTask(nil)
+        self.repository.reorderQueue.setSyncTask(nil)
         if hadFailure { self.scheduleReorderResync() }
-        if !self.reorderQueue.pending.isEmpty {
+        if !self.repository.reorderQueue.pending.isEmpty {
           self.startReorderSyncIfNeeded()
         }
       }
     }
-    reorderQueue.setSyncTask(task)
+    repository.reorderQueue.setSyncTask(task)
   }
 
   private func commitReorderRequest(taskId: Int, position: Int) async -> Bool {
     do {
-      let success = try await checkvistSyncPlugin.moveTask(
+      let success = try await repository.checkvistSyncPlugin.moveTask(
         listId: listId,
         taskId: taskId,
         position: position,
@@ -196,10 +196,10 @@ extension BarTaskerManager {
       guard let self else { return }
       await self.fetchTopTask()
       await MainActor.run {
-        self.reorderQueue.setResyncTask(nil)
+        self.repository.reorderQueue.setResyncTask(nil)
       }
     }
-    reorderQueue.setResyncTask(task)
+    repository.reorderQueue.setResyncTask(task)
   }
 
   // MARK: - Indent / Unindent
@@ -254,7 +254,7 @@ extension BarTaskerManager {
       failureMessage: "Failed to indent task.",
       errorMessageBuilder: { "Error indenting task: \($0.localizedDescription)" },
       action: {
-        try await checkvistSyncPlugin.reparentTask(
+        try await repository.checkvistSyncPlugin.reparentTask(
           listId: listId,
           taskId: task.id,
           parentId: newParent.id,
@@ -320,7 +320,7 @@ extension BarTaskerManager {
       failureMessage: "Failed to unindent task.",
       errorMessageBuilder: { "Error unindenting task: \($0.localizedDescription)" },
       action: {
-        try await checkvistSyncPlugin.reparentTask(
+        try await repository.checkvistSyncPlugin.reparentTask(
           listId: listId,
           taskId: task.id,
           parentId: newParentId == 0 ? nil : newParentId,

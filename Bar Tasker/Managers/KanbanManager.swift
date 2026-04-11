@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 import OSLog
 
 /// Provides read-only access to task data that KanbanManager needs for filtering and sorting.
@@ -9,10 +9,10 @@ protocol KanbanTaskDataSource: AnyObject {
   var tasks: [CheckvistTask] { get }
   var currentParentId: Int { get }
   var currentSiblingIndex: Int { get set }
-  var rootTaskView: BarTaskerManager.RootTaskView { get }
+  var rootTaskView: RootTaskView { get }
   var cache: BarTaskerCacheState { get }
   func ensureVisibleTasksCacheValid()
-  func rootDueBucket(for task: CheckvistTask) -> BarTaskerManager.RootDueBucket
+  func rootDueBucket(for task: CheckvistTask) -> RootDueBucket
   func priorityRank(for task: CheckvistTask) -> Int?
 }
 
@@ -23,23 +23,37 @@ enum KanbanMoveOutcome {
 }
 
 @MainActor
-class KanbanManager: ObservableObject {
-  private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "kanban")
-  private let preferencesStore: BarTaskerPreferencesStore
-  private var cancellables = Set<AnyCancellable>()
-  weak var dataSource: KanbanTaskDataSource?
+@Observable class KanbanManager {
+  @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "kanban")
+  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
+  @ObservationIgnored weak var dataSource: KanbanTaskDataSource?
 
-  @Published var kanbanColumns: [KanbanColumn]
-  @Published var kanbanFocusedColumnIndex: Int = 0
+  var kanbanColumns: [KanbanColumn] {
+    didSet {
+      saveKanbanColumns(kanbanColumns)
+      onCacheRelevantChange?()
+    }
+  }
+  var kanbanFocusedColumnIndex: Int = 0 {
+    didSet { onCacheRelevantChange?() }
+  }
   /// Task ID of the selected card in kanban view. Decoupled from currentSiblingIndex
   /// so selection survives task-list refreshes and view switches.
-  @Published var kanbanSelectedTaskId: Int? = nil
+  var kanbanSelectedTaskId: Int? = nil
   /// Active tag filter in kanban view (empty = no filter)
-  @Published var kanbanFilterTag: String = ""
+  var kanbanFilterTag: String = "" {
+    didSet { onCacheRelevantChange?() }
+  }
   /// When true, kanban shows only subtasks of `currentParentId`
-  @Published var kanbanFilterSubtasks: Bool = false
+  var kanbanFilterSubtasks: Bool = false {
+    didSet { onCacheRelevantChange?() }
+  }
   /// When set, kanban shows only direct children of this task ID (overrides kanbanFilterSubtasks)
-  @Published var kanbanFilterParentId: Int? = nil
+  var kanbanFilterParentId: Int? = nil {
+    didSet { onCacheRelevantChange?() }
+  }
+
+  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
 
   init(preferencesStore: BarTaskerPreferencesStore) {
     self.preferencesStore = preferencesStore
@@ -53,16 +67,6 @@ class KanbanManager: ObservableObject {
     } else {
       self.kanbanColumns = KanbanColumn.defaults
     }
-    setupBindings()
-  }
-
-  private func setupBindings() {
-    $kanbanColumns
-      .dropFirst()
-      .sink { [weak self] columns in
-        self?.saveKanbanColumns(columns)
-      }
-      .store(in: &cancellables)
   }
 
   // MARK: - Task filtering for kanban columns
@@ -115,7 +119,7 @@ class KanbanManager: ObservableObject {
     case .tag(let name):
       return hasTag(task, tag: name)
     case .dueBucket(let raw):
-      guard let bucket = BarTaskerManager.RootDueBucket(rawValue: raw) else { return false }
+      guard let bucket = RootDueBucket(rawValue: raw) else { return false }
       return ds.rootDueBucket(for: task) == bucket
     case .catchAll:
       return true
@@ -337,7 +341,7 @@ class KanbanManager: ObservableObject {
       }
 
     case .dueBucket(let raw):
-      guard let bucket = BarTaskerManager.RootDueBucket(rawValue: raw) else { return nil }
+      guard let bucket = RootDueBucket(rawValue: raw) else { return nil }
       let calendar = Calendar.current
       let today = calendar.startOfDay(for: Date())
       let formatter: DateFormatter = {

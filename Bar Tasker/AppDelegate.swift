@@ -1,5 +1,6 @@
 import Carbon.HIToolbox
 import Combine
+import Observation
 import OSLog
 import SwiftUI
 
@@ -28,7 +29,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   private let pluginRegistry = BarTaskerPluginRegistry.nativeFirst()
-  lazy var checkvistManager: BarTaskerManager = BarTaskerManager(pluginRegistry: pluginRegistry)
+  lazy var checkvistManager: BarTaskerCoordinator = BarTaskerCoordinator(pluginRegistry: pluginRegistry)
   private var statusItem: NSStatusItem!
   private var window: NSWindow?
   private var preferencesWindow: NSWindow?
@@ -75,13 +76,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     statusItem.button?.target = self
     statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
-    // Title sync only — window size is fixed while open.
-    checkvistManager.objectWillChange
-      .debounce(for: .milliseconds(16), scheduler: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.updateTitle()
-      }
-      .store(in: &cancellables)
+    // Title sync — observe all relevant properties.
+    observeForTitleUpdates()
 
     // Install shared Carbon event handler for hotkeys once
     var eventType = EventTypeSpec(
@@ -114,42 +110,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       return self.handleSupplementalKey(event: event) ? nil : event
     }
 
-    // Register global hotkeys, debouncing rapid changes into a single re-registration.
+    // Register global hotkeys and observe preference changes.
     registerGlobalHotkeys()
-    Publishers.MergeMany(
-      checkvistManager.preferences.$globalHotkeyEnabled.dropFirst().map { _ in () }
-        .eraseToAnyPublisher(),
-      checkvistManager.preferences.$globalHotkeyKeyCode.dropFirst().map { _ in () }
-        .eraseToAnyPublisher(),
-      checkvistManager.preferences.$globalHotkeyModifiers.dropFirst().map { _ in () }
-        .eraseToAnyPublisher(),
-      checkvistManager.preferences.$quickAddHotkeyEnabled.dropFirst().map { _ in () }
-        .eraseToAnyPublisher(),
-      checkvistManager.preferences.$quickAddHotkeyKeyCode.dropFirst().map { _ in () }
-        .eraseToAnyPublisher(),
-      checkvistManager.preferences.$quickAddHotkeyModifiers.dropFirst().map { _ in () }
-        .eraseToAnyPublisher()
-    )
-    .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
-    .sink { [weak self] _ in
-      self?.registerGlobalHotkeys()
-    }
-    .store(in: &cancellables)
-
-    checkvistManager.preferences.$maxTitleWidth
-      .dropFirst().receive(on: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.updateTitle()
-      }
-      .store(in: &cancellables)
-
-    checkvistManager.preferences.$appTheme
-      .dropFirst()
-      .receive(on: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.applyAppTheme()
-      }
-      .store(in: &cancellables)
+    observeForHotkeyChanges()
+    observeForAppThemeChanges()
 
     NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
       .receive(on: RunLoop.main)
@@ -261,9 +225,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let rawTaskText = checkvistManager.currentTaskText
     let baseTaskText = menuBarDisplayTaskText(rawTaskText)
     let taskText =
-      checkvistManager.pendingSyncMenuBarPrefix.isEmpty
+      checkvistManager.integrations.pendingSyncMenuBarPrefix.isEmpty
       ? baseTaskText
-      : "\(checkvistManager.pendingSyncMenuBarPrefix): \(baseTaskText)"
+      : "\(checkvistManager.integrations.pendingSyncMenuBarPrefix): \(baseTaskText)"
     if taskText.isEmpty {
       statusItem?.button?.attributedTitle = NSAttributedString(string: "…")
       statusItem?.button?.toolTip = nil
@@ -516,7 +480,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let hostingController = NSHostingController(
       rootView: PopoverView()
         .font(BarTaskerTypography.interfaceFont)
-        .environmentObject(checkvistManager))
+        .environment(checkvistManager))
     popoverWindow.contentViewController = hostingController
 
     popoverWindow.isMovableByWindowBackground = false
@@ -602,8 +566,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     let rootView = SettingsView()
       .font(BarTaskerTypography.interfaceFont)
-      .environmentObject(checkvistManager)
-      .environmentObject(navState)
+      .environment(checkvistManager)
+      .environment(navState)
       .frame(minWidth: 720, idealWidth: 820, minHeight: 560, idealHeight: 660)
     let hostingController = NSHostingController(rootView: rootView)
 
@@ -727,6 +691,58 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if let monitor = keyMonitor { NSEvent.removeMonitor(monitor) }
     if let monitor = clickMonitor { NSEvent.removeMonitor(monitor) }
     unregisterGlobalHotkeys()
+  }
+
+  // MARK: - Observation-based change tracking
+
+  private func observeForTitleUpdates() {
+    withObservationTracking {
+      _ = self.checkvistManager.currentTaskText
+      _ = self.checkvistManager.timer.timerBarLeading
+      _ = self.checkvistManager.timer.timerRunning
+      _ = self.checkvistManager.timer.timedTaskId
+      _ = self.checkvistManager.timer.timerByTaskId
+      _ = self.checkvistManager.timer.timerMode
+      _ = self.checkvistManager.preferences.maxTitleWidth
+      _ = self.checkvistManager.integrations.pendingObsidianSyncTaskIds
+      _ = self.checkvistManager.tasks
+      _ = self.checkvistManager.currentParentId
+      _ = self.checkvistManager.currentSiblingIndex
+      _ = self.checkvistManager.isLoading
+      _ = self.checkvistManager.errorMessage
+    } onChange: {
+      Task { @MainActor [weak self] in
+        self?.updateTitle()
+        self?.observeForTitleUpdates()
+      }
+    }
+  }
+
+  private func observeForHotkeyChanges() {
+    withObservationTracking {
+      _ = self.checkvistManager.preferences.globalHotkeyEnabled
+      _ = self.checkvistManager.preferences.globalHotkeyKeyCode
+      _ = self.checkvistManager.preferences.globalHotkeyModifiers
+      _ = self.checkvistManager.preferences.quickAddHotkeyEnabled
+      _ = self.checkvistManager.preferences.quickAddHotkeyKeyCode
+      _ = self.checkvistManager.preferences.quickAddHotkeyModifiers
+    } onChange: {
+      Task { @MainActor [weak self] in
+        self?.registerGlobalHotkeys()
+        self?.observeForHotkeyChanges()
+      }
+    }
+  }
+
+  private func observeForAppThemeChanges() {
+    withObservationTracking {
+      _ = self.checkvistManager.preferences.appTheme
+    } onChange: {
+      Task { @MainActor [weak self] in
+        self?.applyAppTheme()
+        self?.observeForAppThemeChanges()
+      }
+    }
   }
 }
 // swiftlint:enable type_body_length

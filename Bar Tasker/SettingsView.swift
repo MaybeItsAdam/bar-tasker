@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 
 // swiftlint:disable file_length
@@ -133,7 +132,7 @@ struct SettingsView: View {
 
   private struct ShortcutCategoryDescriptor: Identifiable {
     let title: String
-    let actions: [BarTaskerManager.ConfigurableShortcutAction]
+    let actions: [ConfigurableShortcutAction]
     var id: String { title }
   }
 
@@ -167,8 +166,8 @@ struct SettingsView: View {
     let source: Source
   }
 
-  @EnvironmentObject var checkvistManager: BarTaskerManager
-  @EnvironmentObject var navState: SettingsNavState
+  @Environment(BarTaskerCoordinator.self) var checkvistManager
+  @Environment(SettingsNavState.self) var navState
   @State private var selectedPluginCardID: String?
   @State private var themeJSONDraft: String = ""
   @State private var themeJSONStatusMessage: String = ""
@@ -802,8 +801,8 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
           Text("Quick Add location")
           Picker("", selection: preferenceBinding(\.quickAddLocationMode)) {
-            Text("Default (List root)").tag(BarTaskerManager.QuickAddLocationMode.defaultRoot)
-            Text("Specific task ID").tag(BarTaskerManager.QuickAddLocationMode.specificParentTask)
+            Text("Default (List root)").tag(QuickAddLocationMode.defaultRoot)
+            Text("Specific task ID").tag(QuickAddLocationMode.specificParentTask)
           }
           .labelsHidden()
           .pickerStyle(.segmented)
@@ -917,9 +916,9 @@ struct SettingsView: View {
       VStack(alignment: .leading, spacing: 6) {
         Text("Appearance")
         Picker("", selection: preferenceBinding(\.appTheme)) {
-          Text("System").tag(BarTaskerManager.AppTheme.system)
-          Text("Light").tag(BarTaskerManager.AppTheme.light)
-          Text("Dark").tag(BarTaskerManager.AppTheme.dark)
+          Text("System").tag(AppTheme.system)
+          Text("Light").tag(AppTheme.light)
+          Text("Dark").tag(AppTheme.dark)
         }
         .labelsHidden()
         .pickerStyle(.segmented)
@@ -936,7 +935,7 @@ struct SettingsView: View {
       VStack(alignment: .leading, spacing: 8) {
         Text("Accent color")
         Picker("", selection: preferenceBinding(\.themeAccentPreset)) {
-          ForEach(BarTaskerManager.ThemeAccentPreset.allCases) { preset in
+          ForEach(ThemeAccentPreset.allCases) { preset in
             Text(preset.title).tag(preset)
           }
         }
@@ -944,7 +943,7 @@ struct SettingsView: View {
         .pickerStyle(.menu)
 
         HStack(spacing: 8) {
-          ForEach(BarTaskerManager.ThemeAccentPreset.allCases.filter { $0 != .custom }) { preset in
+          ForEach(ThemeAccentPreset.allCases.filter { $0 != .custom }) { preset in
             Button {
               preferences.themeAccentPreset = preset
             } label: {
@@ -968,7 +967,7 @@ struct SettingsView: View {
           .disabled(
             preferences.themeAccentPreset == .blue
               && preferences.themeCustomAccentHex
-                == BarTaskerManager.ThemeAccentPreset.blue.hex
+                == ThemeAccentPreset.blue.hex
           )
         }
 
@@ -1182,7 +1181,7 @@ struct SettingsView: View {
     }
   }
 
-  private func configurableShortcutBinding(for action: BarTaskerManager.ConfigurableShortcutAction)
+  private func configurableShortcutBinding(for action: ConfigurableShortcutAction)
     -> Binding<String>
   {
     Binding(
@@ -1235,7 +1234,7 @@ struct SettingsView: View {
     .clipShape(RoundedRectangle(cornerRadius: 10))
   }
 
-  private func shortcutBindingEditor(for action: BarTaskerManager.ConfigurableShortcutAction)
+  private func shortcutBindingEditor(for action: ConfigurableShortcutAction)
     -> some View
   {
     let isCustomized = isShortcutBindingCustomized(action)
@@ -1307,7 +1306,7 @@ struct SettingsView: View {
       .joined(separator: " / ")
   }
 
-  private func isShortcutBindingCustomized(_ action: BarTaskerManager.ConfigurableShortcutAction)
+  private func isShortcutBindingCustomized(_ action: ConfigurableShortcutAction)
     -> Bool
   {
     let current = preferences.shortcutBinding(for: action)
@@ -1320,7 +1319,7 @@ struct SettingsView: View {
   }
 
   private func shortcutActionMatchesSearch(
-    _ action: BarTaskerManager.ConfigurableShortcutAction,
+    _ action: ConfigurableShortcutAction,
     query: String
   ) -> Bool {
     let normalizedQuery = query.lowercased()
@@ -1398,8 +1397,8 @@ struct SettingsView: View {
 // swiftlint:enable type_body_length
 
 private struct ModeOrderList: View {
-  @ObservedObject var manager: BarTaskerManager
-  @State private var orderedModes: [BarTaskerManager.RootTaskView] = []
+  var manager: BarTaskerCoordinator
+  @State private var orderedModes: [RootTaskView] = []
 
   var body: some View {
     List {
@@ -1431,7 +1430,6 @@ private struct ModeOrderList: View {
   private func moveModes(from source: IndexSet, to destination: Int) {
     orderedModes.move(fromOffsets: source, toOffset: destination)
     manager.saveRootTaskViewOrder(orderedModes)
-    manager.objectWillChange.send()
   }
 }
 

@@ -1,12 +1,12 @@
 import AppKit
-import Combine
 import Foundation
+import Observation
 import OSLog
 import UniformTypeIdentifiers
 
 @MainActor
 // swiftlint:disable type_body_length
-final class UserPluginManager: ObservableObject {
+@Observable final class UserPluginManager {
   private struct ResolvedPluginPackage {
     let pluginRootURL: URL
     let temporaryURLs: [URL]
@@ -107,11 +107,11 @@ final class UserPluginManager: ObservableObject {
   private let defaults: UserDefaults
   private let fileManager: FileManager
 
-  @Published private(set) var pluginsDirectoryURL: URL
-  @Published private(set) var installedPlugins: [InstalledUserPlugin] = []
-  @Published private(set) var validationIssues: [PluginValidationIssue] = []
-  @Published private(set) var enabledPluginIdentifiers: Set<String>
-  @Published var lastErrorMessage: String?
+  private(set) var pluginsDirectoryURL: URL
+  private(set) var installedPlugins: [InstalledUserPlugin] = []
+  private(set) var validationIssues: [PluginValidationIssue] = []
+  private(set) var enabledPluginIdentifiers: Set<String>
+  var lastErrorMessage: String?
 
   init(
     builtInPluginIdentifiers: Set<String>,

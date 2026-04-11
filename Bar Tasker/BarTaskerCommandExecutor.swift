@@ -2,9 +2,9 @@ import Foundation
 
 @MainActor
 final class BarTaskerCommandExecutor {
-  private unowned let manager: BarTaskerManager
+  private unowned let manager: BarTaskerCoordinator
 
-  init(manager: BarTaskerManager) {
+  init(manager: BarTaskerCoordinator) {
     self.manager = manager
   }
 
@@ -38,10 +38,10 @@ final class BarTaskerCommandExecutor {
       manager.quickEntry.isQuickEntryFocused = true
       return
     case .chooseObsidianInbox:
-      _ = manager.chooseObsidianInboxFolder()
+      _ = manager.integrations.chooseObsidianInboxFolder()
       return
     case .clearObsidianInbox:
-      manager.clearObsidianInboxFolder()
+      manager.integrations.clearObsidianInboxFolder()
       return
     case .search:
       manager.quickEntry.quickEntryMode = .search
@@ -86,13 +86,13 @@ final class BarTaskerCommandExecutor {
       if manager.timer.timerRunning { manager.timer.pauseTimer() } else { manager.timer.resumeTimer() }
       return
     case .refreshMCPPath:
-      manager.refreshMCPServerCommandPath()
+      manager.integrations.refreshMCPServerCommandPath()
       return
     case .copyMCPClientConfig:
-      manager.copyMCPClientConfigurationToClipboard()
+      manager.integrations.copyMCPClientConfigurationToClipboard()
       return
     case .openMCPGuide:
-      manager.openMCPServerGuide()
+      manager.integrations.openMCPServerGuide()
       return
     case .exitParent:
       manager.exitToParent()
@@ -129,9 +129,9 @@ final class BarTaskerCommandExecutor {
         manager.errorMessage = "Missing start date/time. Try: start tomorrow 9am"
         return
       }
-      manager.setStartDate(for: task, rawInput: raw)
+      manager.startDates.setStartDate(for: task, rawInput: raw)
     case .clearStart:
-      manager.clearStartDate(for: task)
+      manager.startDates.clearStartDate(for: task)
     case .setRecurrence(let raw):
       guard !raw.isEmpty else {
         manager.errorMessage = "Missing repeat rule. Try: repeat daily, repeat every 3 days"
@@ -150,7 +150,7 @@ final class BarTaskerCommandExecutor {
       manager.quickEntry.quickEntryText = ""
       manager.quickEntry.isQuickEntryFocused = true
     case .openLink:
-      manager.openTaskLink()
+      manager.integrations.openTaskLink(task: task)
     case .toggleTimer:
       manager.timer.toggleTimer(forTaskId: task.id)
     case .delete:
@@ -189,17 +189,17 @@ final class BarTaskerCommandExecutor {
     case .clearPriority:
       manager.clearPriorityForCurrentTask()
     case .syncObsidian:
-      await manager.syncCurrentTaskToObsidian()
+      await manager.integrations.syncTaskToObsidian(taskId: nil, openMode: .standard)
     case .syncObsidianNewWindow:
-      await manager.openCurrentTaskInNewObsidianWindow()
+      await manager.integrations.syncTaskToObsidian(taskId: nil, openMode: .newWindow)
     case .linkObsidianFolder:
-      manager.linkCurrentTaskToObsidianFolder()
+      manager.integrations.linkTaskToObsidianFolder()
     case .createObsidianFolder:
-      manager.createAndLinkCurrentTaskObsidianFolder()
+      manager.integrations.createAndLinkTaskObsidianFolder()
     case .clearObsidianFolderLink:
-      manager.clearCurrentTaskObsidianFolderLink()
+      manager.integrations.clearTaskObsidianFolderLink()
     case .syncGoogleCalendar:
-      manager.openCurrentTaskInGoogleCalendar()
+      manager.integrations.openTaskInGoogleCalendar()
     default:
       // Handled above
       break

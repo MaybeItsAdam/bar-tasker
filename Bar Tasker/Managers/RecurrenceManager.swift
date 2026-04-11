@@ -1,15 +1,19 @@
-import Combine
 import Foundation
+import Observation
 import OSLog
 
 @MainActor
-class RecurrenceManager: ObservableObject {
-  private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "recurrence")
-  private let preferencesStore: BarTaskerPreferencesStore
-  private var cancellables = Set<AnyCancellable>()
+@Observable class RecurrenceManager {
+  @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "recurrence")
+  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
 
   /// Maps task ID → raw recurrence rule string (e.g. "daily", "every 3 days").
-  @Published var recurrenceRulesByTaskId: [Int: String] = [:]
+  var recurrenceRulesByTaskId: [Int: String] = [:] {
+    didSet {
+      let encoded = Dictionary(uniqueKeysWithValues: recurrenceRulesByTaskId.map { (String($0.key), $0.value) })
+      preferencesStore.set(encoded, for: .recurrenceRulesByTaskId)
+    }
+  }
 
   init(preferencesStore: BarTaskerPreferencesStore) {
     self.preferencesStore = preferencesStore
@@ -20,15 +24,6 @@ class RecurrenceManager: ObservableObject {
         return (id, value)
       }
     )
-    setupBindings()
-  }
-
-  private func setupBindings() {
-    $recurrenceRulesByTaskId.sink { [weak self] rules in
-      guard let self else { return }
-      let encoded = Dictionary(uniqueKeysWithValues: rules.map { (String($0.key), $0.value) })
-      self.preferencesStore.set(encoded, for: .recurrenceRulesByTaskId)
-    }.store(in: &cancellables)
   }
 
   // MARK: - Recurrence rule storage

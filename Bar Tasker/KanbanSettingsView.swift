@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - KanbanSettingsView
 
 struct KanbanSettingsView: View {
-  @EnvironmentObject var manager: BarTaskerManager
+  @Environment(BarTaskerCoordinator.self) var manager
 
   @State private var editingColumn: KanbanColumn? = nil
   @State private var showingAddColumn = false
@@ -123,7 +123,7 @@ struct KanbanColumnEditorView: View {
 
   @State private var pendingCondition: PendingCondition = .tag
   @State private var pendingTagName: String = ""
-  @State private var pendingDueBucket: BarTaskerManager.RootDueBucket = .today
+  @State private var pendingDueBucket: RootDueBucket = .today
 
   private enum PendingCondition: String, CaseIterable, Identifiable {
     case tag, due, catchAll
@@ -243,7 +243,7 @@ struct KanbanColumnEditorView: View {
             .frame(width: 120)
         case .due:
           Picker("", selection: $pendingDueBucket) {
-            ForEach(BarTaskerManager.RootDueBucket.allCases, id: \.rawValue) { bucket in
+            ForEach(RootDueBucket.allCases, id: \.rawValue) { bucket in
               Text(bucket.title).tag(bucket)
             }
           }

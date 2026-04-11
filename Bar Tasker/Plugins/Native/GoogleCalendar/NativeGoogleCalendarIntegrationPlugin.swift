@@ -1,18 +1,18 @@
 import AppKit
-import Combine
 import CryptoKit
 import Foundation
+import Observation
 import Security
 
 @MainActor
 // swiftlint:disable type_body_length
-final class NativeGoogleCalendarIntegrationPlugin: ObservableObject, GoogleCalendarIntegrationPlugin
+@Observable final class NativeGoogleCalendarIntegrationPlugin: GoogleCalendarIntegrationPlugin
 {
   let pluginIdentifier = "native.google.calendar.integration"
   let displayName = "Native Google Calendar Integration"
   let pluginDescription = "Create Google Calendar events from tasks using your Google account."
 
-  @Published var oauthClientID: String {
+  var oauthClientID: String {
     didSet {
       let normalized = oauthClientID.trimmingCharacters(in: .whitespacesAndNewlines)
       defaults.set(normalized, forKey: Self.oauthClientIDDefaultsKey)
@@ -21,7 +21,7 @@ final class NativeGoogleCalendarIntegrationPlugin: ObservableObject, GoogleCalen
     }
   }
 
-  @Published var targetCalendarID: String {
+  var targetCalendarID: String {
     didSet {
       defaults.set(
         targetCalendarID.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -30,15 +30,15 @@ final class NativeGoogleCalendarIntegrationPlugin: ObservableObject, GoogleCalen
     }
   }
 
-  @Published var openCreatedEventInBrowser: Bool {
+  var openCreatedEventInBrowser: Bool {
     didSet {
       defaults.set(openCreatedEventInBrowser, forKey: Self.openCreatedEventInBrowserDefaultsKey)
     }
   }
 
-  @Published private(set) var isAuthenticating = false
-  @Published private(set) var isAuthenticated = false
-  @Published private(set) var authenticationStatusDescription =
+  private(set) var isAuthenticating = false
+  private(set) var isAuthenticated = false
+  private(set) var authenticationStatusDescription =
     "Set a Google OAuth client ID to enable Calendar event creation."
 
   var requiresAuthentication: Bool { !normalizedOAuthClientID.isEmpty }

@@ -4,15 +4,16 @@ import SwiftUI
 extension NativeObsidianIntegrationPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "book.closed" }
 
-  func makeSettingsView(manager: BarTaskerManager) -> AnyView {
+  func makeSettingsView(manager: BarTaskerCoordinator) -> AnyView {
     AnyView(ObsidianIntegrationPluginSettingsView(manager: manager))
   }
 }
 
 private struct ObsidianIntegrationPluginSettingsView: View {
-  @ObservedObject var manager: BarTaskerManager
+  var manager: BarTaskerCoordinator
 
   var body: some View {
+    @Bindable var manager = manager
     Section(header: Text("Obsidian Plugin")) {
       Toggle("Enable Obsidian integration", isOn: $manager.integrations.obsidianIntegrationEnabled)
 
@@ -31,16 +32,16 @@ private struct ObsidianIntegrationPluginSettingsView: View {
 
           HStack {
             Button("Choose Folder") {
-              manager.chooseObsidianInboxFolder()
+              manager.integrations.chooseObsidianInboxFolder()
             }
             if !manager.integrations.obsidianInboxPath.isEmpty {
               Button("Clear") {
-                manager.clearObsidianInboxFolder()
+                manager.integrations.clearObsidianInboxFolder()
               }
             }
             Spacer()
-            if manager.hasPendingObsidianSync {
-              Text(manager.pendingSyncMenuBarPrefix)
+            if manager.integrations.hasPendingObsidianSync {
+              Text(manager.integrations.pendingSyncMenuBarPrefix)
                 .font(.caption)
                 .foregroundColor(.orange)
             }

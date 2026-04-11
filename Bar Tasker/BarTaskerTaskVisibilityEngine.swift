@@ -10,8 +10,8 @@ struct BarTaskerTaskVisibilityEngine {
     let hideFuture: Bool
     let shouldShowRootScopeSection: Bool
     let isRootLevel: Bool
-    let rootTaskView: BarTaskerManager.RootTaskView
-    let selectedRootDueBucket: BarTaskerManager.RootDueBucket?
+    let rootTaskView: RootTaskView
+    let selectedRootDueBucket: RootDueBucket?
     let selectedRootTag: String
     let taskById: [Int: CheckvistTask]
     let isDescendant: (CheckvistTask, Int) -> Bool
@@ -20,7 +20,7 @@ struct BarTaskerTaskVisibilityEngine {
     let compareByRootDueBucket: (CheckvistTask, CheckvistTask) -> Bool
     let hasAnyTag: (CheckvistTask) -> Bool
     let hasTag: (CheckvistTask, String) -> Bool
-    let rootDueBucket: (CheckvistTask) -> BarTaskerManager.RootDueBucket
+    let rootDueBucket: (CheckvistTask) -> RootDueBucket
   }
 
   static func computeVisibleTasks(in context: Context) -> [CheckvistTask] {

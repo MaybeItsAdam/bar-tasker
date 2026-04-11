@@ -175,7 +175,7 @@ All managers are `@MainActor`. Cross-cutting operations (e.g. `markDone` → rep
 
 ---
 
-## Phase 6: Migrate to @Observable
+## Phase 6: Migrate to @Observable (Completed)
 
 **Risk**: Medium-high (touches every file) but purely mechanical.
 
@@ -195,9 +195,24 @@ All managers are `@MainActor`. Cross-cutting operations (e.g. `markDone` → rep
 
 ---
 
-## Phase 7: Extract TaskRepository
+## Phase 7: Extract TaskRepository (Completed)
 
 **Risk**: High — core data layer, dual online/offline paths, most cross-cutting. Do last.
+
+**Status**: ✅ Completed
+
+**Completed**:
+- `TaskRepository` (`@Observable @MainActor`) created in `Bar Tasker/Managers/TaskRepository.swift`.
+- Owns all task data state: `tasks`, `availableLists`, `currentParentId`, `currentSiblingIndex`, `username`, `remoteKey`, `listId`, `isLoading`, `errorMessage`, `lastUndo`, `priorityTaskIds`, `isNetworkReachable`, offline state (`offlineArchivedTasksById`, `nextOfflineTaskIdValue`, `pendingTaskMutations`), and internal state (`loadingOperationCount`, `hasAttemptedRemoteKeyBootstrap`).
+- Owns dependencies: `checkvistSyncPlugin`, `localTaskStore`, `navigationCoordinator`, `reorderQueue`, `priorityQueueStore`, `preferencesStore`.
+- Owns pure helpers: `rebuiltTask`, `normalizeOfflineTasks`, `archivedOfflineTasks`, `nextOfflineTaskId`, `nextOptimisticTaskId`.
+- Owns loading/error helpers: `beginLoading`, `endLoading`, `withLoadingState`, `setAuthenticationRequiredErrorIfNeeded`, `runBooleanMutation`.
+- Owns priority queue: `normalizedTaskIdQueue`, `loadPriorityQueue`, `savePriorityQueue`, `removeTasksFromPriorityQueue`, `reconcilePriorityQueueWithOpenTasks`.
+- Owns API methods: `login`, `fetchLists`, `loadCheckvistLists`, `selectList`, `copyTasks`.
+- `BarTaskerCoordinator` now owns `let repository: TaskRepository` and exposes forwarding computed properties for all moved state (backward-compatible: all views, settings, and extensions work unchanged).
+- Coordinator extension methods (TaskOperations, ReorderingAndTiming, TaskScoping) delegate to `repository.*` for moved implementations.
+- `KeyboardShortcutRouter` updated: `BarTaskerCoordinator.maxPriorityRank` → `TaskRepository.maxPriorityRank`.
+- Cross-cutting `didSet` side-effects on `username`, `remoteKey`, `listId` handled via `repository.onUsernameChanged`, `onRemoteKeyChanged`, `onListIdChanged` callbacks wired in `setupChildCallbacks()`.
 
 **Create**: `Bar Tasker/Managers/TaskRepository.swift`
 

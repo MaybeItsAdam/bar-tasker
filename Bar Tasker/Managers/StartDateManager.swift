@@ -1,15 +1,23 @@
-import Combine
 import Foundation
+import Observation
 import OSLog
 
 @MainActor
-class StartDateManager: ObservableObject {
-  private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "startdate")
-  private let preferencesStore: BarTaskerPreferencesStore
-  private var cancellables = Set<AnyCancellable>()
+@Observable class StartDateManager {
+  @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "startdate")
+  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
 
   /// Maps task ID → start date string (same format as `due`).
-  @Published var taskStartDatesByTaskId: [Int: String] = [:]
+  var taskStartDatesByTaskId: [Int: String] = [:] {
+    didSet {
+      let encoded = Dictionary(uniqueKeysWithValues: taskStartDatesByTaskId.map { (String($0.key), $0.value) })
+      preferencesStore.set(encoded, for: .taskStartDatesByTaskId)
+      onCacheRelevantChange?()
+    }
+  }
+
+  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
+  @ObservationIgnored var dateResolver: ((String) -> String)?
 
   init(preferencesStore: BarTaskerPreferencesStore) {
     self.preferencesStore = preferencesStore
@@ -20,15 +28,6 @@ class StartDateManager: ObservableObject {
         return (id, value)
       }
     )
-    setupBindings()
-  }
-
-  private func setupBindings() {
-    $taskStartDatesByTaskId.sink { [weak self] dates in
-      guard let self else { return }
-      let encoded = Dictionary(uniqueKeysWithValues: dates.map { (String($0.key), $0.value) })
-      self.preferencesStore.set(encoded, for: .taskStartDatesByTaskId)
-    }.store(in: &cancellables)
   }
 
   // MARK: - Start date accessors
@@ -47,8 +46,8 @@ class StartDateManager: ObservableObject {
 
   // MARK: - Mutations
 
-  func setStartDate(for task: CheckvistTask, rawInput: String, resolveDueDate: (String) -> String) {
-    let resolved = resolveDueDate(rawInput)
+  func setStartDate(for task: CheckvistTask, rawInput: String) {
+    let resolved = dateResolver?(rawInput) ?? rawInput
     taskStartDatesByTaskId[task.id] = resolved
   }
 

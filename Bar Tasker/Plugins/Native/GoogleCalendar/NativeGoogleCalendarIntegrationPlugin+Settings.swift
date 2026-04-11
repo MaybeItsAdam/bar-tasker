@@ -4,7 +4,7 @@ import SwiftUI
 extension NativeGoogleCalendarIntegrationPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "calendar" }
 
-  func makeSettingsView(manager: BarTaskerManager) -> AnyView {
+  func makeSettingsView(manager: BarTaskerCoordinator) -> AnyView {
     AnyView(
       GoogleCalendarIntegrationPluginSettingsView(
         manager: manager,
@@ -15,11 +15,13 @@ extension NativeGoogleCalendarIntegrationPlugin: PluginSettingsPageProviding {
 }
 
 private struct GoogleCalendarIntegrationPluginSettingsView: View {
-  @ObservedObject var manager: BarTaskerManager
-  @ObservedObject var plugin: NativeGoogleCalendarIntegrationPlugin
+  var manager: BarTaskerCoordinator
+  var plugin: NativeGoogleCalendarIntegrationPlugin
   @State private var pluginActionError: String?
 
   var body: some View {
+    @Bindable var manager = manager
+    @Bindable var plugin = plugin
     Section(header: Text("Google Calendar Plugin")) {
       Toggle(
         "Enable Google Calendar integration",
@@ -59,7 +61,7 @@ private struct GoogleCalendarIntegrationPluginSettingsView: View {
             .disabled(plugin.isAuthenticating || !plugin.isAuthenticated)
 
             Button("Create event from selected task") {
-              manager.openCurrentTaskInGoogleCalendar()
+              manager.integrations.openTaskInGoogleCalendar()
             }
             .disabled(
               plugin.isAuthenticating || !plugin.hasOAuthClientConfiguration

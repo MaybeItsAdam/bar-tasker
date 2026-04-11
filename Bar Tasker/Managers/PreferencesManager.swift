@@ -1,44 +1,108 @@
 import AppKit
-import Combine
 import Foundation
+import Observation
 import SwiftUI
 
 @MainActor
-final class PreferencesManager: ObservableObject {
-  typealias AppTheme = BarTaskerManager.AppTheme
-  typealias ThemeAccentPreset = BarTaskerManager.ThemeAccentPreset
-  typealias QuickAddLocationMode = BarTaskerManager.QuickAddLocationMode
-  typealias ConfigurableShortcutAction = BarTaskerManager.ConfigurableShortcutAction
+@Observable final class PreferencesManager {
+  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
 
-  private let preferencesStore: BarTaskerPreferencesStore
-  private var cancellables = Set<AnyCancellable>()
+  @ObservationIgnored var onLaunchAtLoginChanged: ((Bool) -> Void)?
+  @ObservationIgnored var onIgnoreKeychainInDebugChanged: (() -> Void)?
 
-  @Published var confirmBeforeDelete: Bool
-  @Published var launchAtLogin: Bool
-  @Published var ignoreKeychainInDebug: Bool
-  @Published var appTheme: AppTheme
-  @Published var themeAccentPreset: ThemeAccentPreset
-  @Published var themeCustomAccentHex: String
-  @Published var themeColorTokenHexOverrides: [String: String]
-  @Published var globalHotkeyEnabled: Bool
+  var confirmBeforeDelete: Bool {
+    didSet { preferencesStore.set(confirmBeforeDelete, for: .confirmBeforeDelete) }
+  }
+  var launchAtLogin: Bool {
+    didSet {
+      preferencesStore.set(launchAtLogin, for: .launchAtLogin)
+      onLaunchAtLoginChanged?(launchAtLogin)
+    }
+  }
+  var ignoreKeychainInDebug: Bool {
+    didSet {
+      #if DEBUG
+        preferencesStore.set(ignoreKeychainInDebug, for: .ignoreKeychainInDebug)
+        onIgnoreKeychainInDebugChanged?()
+      #endif
+    }
+  }
+  var appTheme: AppTheme {
+    didSet { preferencesStore.set(appTheme.rawValue, for: .appThemeRawValue) }
+  }
+  var themeAccentPreset: ThemeAccentPreset {
+    didSet { preferencesStore.set(themeAccentPreset.rawValue, for: .themeAccentPresetRawValue) }
+  }
+  var themeCustomAccentHex: String {
+    didSet {
+      let normalized =
+        BarTaskerThemeColorCodec.normalizedHex(themeCustomAccentHex) ?? ThemeAccentPreset.blue.hex
+      if normalized != themeCustomAccentHex {
+        themeCustomAccentHex = normalized
+        return
+      }
+      preferencesStore.set(normalized, for: .themeCustomAccentHex)
+    }
+  }
+  var themeColorTokenHexOverrides: [String: String] {
+    didSet {
+      let normalized = Self.normalizedThemeColorTokenHexOverrides(themeColorTokenHexOverrides)
+      if normalized != themeColorTokenHexOverrides {
+        themeColorTokenHexOverrides = normalized
+        return
+      }
+      preferencesStore.set(normalized, for: .themeColorTokenHexOverrides)
+    }
+  }
+  var globalHotkeyEnabled: Bool {
+    didSet { preferencesStore.set(globalHotkeyEnabled, for: .globalHotkeyEnabled) }
+  }
   /// Carbon keyCode for the global hotkey (default 49 = Space)
-  @Published var globalHotkeyKeyCode: Int
+  var globalHotkeyKeyCode: Int {
+    didSet { preferencesStore.set(globalHotkeyKeyCode, for: .globalHotkeyKeyCode) }
+  }
   /// Carbon modifier mask (default 0x0800 = optionKey i.e. ⌥)
-  @Published var globalHotkeyModifiers: Int
-  @Published var quickAddHotkeyEnabled: Bool
+  var globalHotkeyModifiers: Int {
+    didSet { preferencesStore.set(globalHotkeyModifiers, for: .globalHotkeyModifiers) }
+  }
+  var quickAddHotkeyEnabled: Bool {
+    didSet { preferencesStore.set(quickAddHotkeyEnabled, for: .quickAddHotkeyEnabled) }
+  }
   /// Carbon keyCode for the quick add hotkey (default 11 = B)
-  @Published var quickAddHotkeyKeyCode: Int
+  var quickAddHotkeyKeyCode: Int {
+    didSet { preferencesStore.set(quickAddHotkeyKeyCode, for: .quickAddHotkeyKeyCode) }
+  }
   /// Carbon modifier mask (default 0x0A00 = shift+option)
-  @Published var quickAddHotkeyModifiers: Int
-  @Published var quickAddLocationMode: QuickAddLocationMode
-  @Published var quickAddSpecificParentTaskId: String
-  @Published var customizableShortcutsByAction: [String: String]
-  @Published var maxTitleWidth: Double
-  @Published var showTaskBreadcrumbContext: Bool
-  @Published var namedTimeMorningHour: Int
-  @Published var namedTimeAfternoonHour: Int
-  @Published var namedTimeEveningHour: Int
-  @Published var namedTimeEodHour: Int
+  var quickAddHotkeyModifiers: Int {
+    didSet { preferencesStore.set(quickAddHotkeyModifiers, for: .quickAddHotkeyModifiers) }
+  }
+  var quickAddLocationMode: QuickAddLocationMode {
+    didSet { preferencesStore.set(quickAddLocationMode.rawValue, for: .quickAddLocationModeRawValue) }
+  }
+  var quickAddSpecificParentTaskId: String {
+    didSet { preferencesStore.set(quickAddSpecificParentTaskId, for: .quickAddSpecificParentTaskId) }
+  }
+  var customizableShortcutsByAction: [String: String] {
+    didSet { preferencesStore.set(customizableShortcutsByAction, for: .customizableShortcutsByAction) }
+  }
+  var maxTitleWidth: Double {
+    didSet { preferencesStore.set(maxTitleWidth, for: .maxTitleWidth) }
+  }
+  var showTaskBreadcrumbContext: Bool {
+    didSet { preferencesStore.set(showTaskBreadcrumbContext, for: .showTaskBreadcrumbContext) }
+  }
+  var namedTimeMorningHour: Int {
+    didSet { preferencesStore.set(namedTimeMorningHour, for: .namedTimeMorningHour) }
+  }
+  var namedTimeAfternoonHour: Int {
+    didSet { preferencesStore.set(namedTimeAfternoonHour, for: .namedTimeAfternoonHour) }
+  }
+  var namedTimeEveningHour: Int {
+    didSet { preferencesStore.set(namedTimeEveningHour, for: .namedTimeEveningHour) }
+  }
+  var namedTimeEodHour: Int {
+    didSet { preferencesStore.set(namedTimeEodHour, for: .namedTimeEodHour) }
+  }
 
   init(preferencesStore: BarTaskerPreferencesStore) {
     self.preferencesStore = preferencesStore
@@ -67,20 +131,20 @@ final class PreferencesManager: ObservableObject {
     self.globalHotkeyEnabled = preferencesStore.bool(.globalHotkeyEnabled, default: false)
     self.globalHotkeyKeyCode = preferencesStore.int(
       .globalHotkeyKeyCode,
-      default: BarTaskerManager.CarbonKey.space
+      default: BarTaskerCoordinator.CarbonKey.space
     )
     self.globalHotkeyModifiers = preferencesStore.int(
       .globalHotkeyModifiers,
-      default: BarTaskerManager.CarbonModifier.option
+      default: BarTaskerCoordinator.CarbonModifier.option
     )
     self.quickAddHotkeyEnabled = preferencesStore.bool(.quickAddHotkeyEnabled, default: false)
     self.quickAddHotkeyKeyCode = preferencesStore.int(
       .quickAddHotkeyKeyCode,
-      default: BarTaskerManager.CarbonKey.b
+      default: BarTaskerCoordinator.CarbonKey.b
     )
     self.quickAddHotkeyModifiers = preferencesStore.int(
       .quickAddHotkeyModifiers,
-      default: BarTaskerManager.CarbonModifier.shiftOption
+      default: BarTaskerCoordinator.CarbonModifier.shiftOption
     )
     self.quickAddLocationMode =
       QuickAddLocationMode(
@@ -94,140 +158,6 @@ final class PreferencesManager: ObservableObject {
     self.namedTimeAfternoonHour = preferencesStore.int(.namedTimeAfternoonHour, default: 14)
     self.namedTimeEveningHour = preferencesStore.int(.namedTimeEveningHour, default: 18)
     self.namedTimeEodHour = preferencesStore.int(.namedTimeEodHour, default: 17)
-    setupBindings()
-  }
-
-  private func setupBindings() {
-    $confirmBeforeDelete.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .confirmBeforeDelete)
-    }
-    .store(in: &cancellables)
-
-    $launchAtLogin.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .launchAtLogin)
-    }
-    .store(in: &cancellables)
-
-    #if DEBUG
-      $ignoreKeychainInDebug
-        .dropFirst()
-        .sink { [weak self] in
-          self?.preferencesStore.set($0, for: .ignoreKeychainInDebug)
-        }
-        .store(in: &cancellables)
-    #endif
-
-    $appTheme.sink { [weak self] in
-      self?.preferencesStore.set($0.rawValue, for: .appThemeRawValue)
-    }
-    .store(in: &cancellables)
-
-    $themeAccentPreset.sink { [weak self] in
-      self?.preferencesStore.set($0.rawValue, for: .themeAccentPresetRawValue)
-    }
-    .store(in: &cancellables)
-
-    $themeCustomAccentHex
-      .dropFirst()
-      .sink { [weak self] value in
-        guard let self else { return }
-        let normalized =
-          BarTaskerThemeColorCodec.normalizedHex(value) ?? ThemeAccentPreset.blue.hex
-        if normalized != value {
-          self.themeCustomAccentHex = normalized
-          return
-        }
-        self.preferencesStore.set(normalized, for: .themeCustomAccentHex)
-      }
-      .store(in: &cancellables)
-
-    $themeColorTokenHexOverrides
-      .dropFirst()
-      .sink { [weak self] value in
-        guard let self else { return }
-        let normalized = Self.normalizedThemeColorTokenHexOverrides(value)
-        if normalized != value {
-          self.themeColorTokenHexOverrides = normalized
-          return
-        }
-        self.preferencesStore.set(normalized, for: .themeColorTokenHexOverrides)
-      }
-      .store(in: &cancellables)
-
-    $showTaskBreadcrumbContext.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .showTaskBreadcrumbContext)
-    }
-    .store(in: &cancellables)
-
-    $globalHotkeyEnabled.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .globalHotkeyEnabled)
-    }
-    .store(in: &cancellables)
-
-    $globalHotkeyKeyCode.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .globalHotkeyKeyCode)
-    }
-    .store(in: &cancellables)
-
-    $globalHotkeyModifiers.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .globalHotkeyModifiers)
-    }
-    .store(in: &cancellables)
-
-    $quickAddHotkeyEnabled.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .quickAddHotkeyEnabled)
-    }
-    .store(in: &cancellables)
-
-    $quickAddHotkeyKeyCode.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .quickAddHotkeyKeyCode)
-    }
-    .store(in: &cancellables)
-
-    $quickAddHotkeyModifiers.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .quickAddHotkeyModifiers)
-    }
-    .store(in: &cancellables)
-
-    $quickAddLocationMode.sink { [weak self] in
-      self?.preferencesStore.set($0.rawValue, for: .quickAddLocationModeRawValue)
-    }
-    .store(in: &cancellables)
-
-    $quickAddSpecificParentTaskId.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .quickAddSpecificParentTaskId)
-    }
-    .store(in: &cancellables)
-
-    $customizableShortcutsByAction.sink { [weak self] value in
-      self?.preferencesStore.set(value, for: .customizableShortcutsByAction)
-    }
-    .store(in: &cancellables)
-
-    $maxTitleWidth.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .maxTitleWidth)
-    }
-    .store(in: &cancellables)
-
-    $namedTimeMorningHour.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .namedTimeMorningHour)
-    }
-    .store(in: &cancellables)
-
-    $namedTimeAfternoonHour.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .namedTimeAfternoonHour)
-    }
-    .store(in: &cancellables)
-
-    $namedTimeEveningHour.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .namedTimeEveningHour)
-    }
-    .store(in: &cancellables)
-
-    $namedTimeEodHour.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .namedTimeEodHour)
-    }
-    .store(in: &cancellables)
   }
 
   var configurableShortcutActions: [ConfigurableShortcutAction] {

@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - KanbanBoardView
 
 struct KanbanBoardView: View {
-  @EnvironmentObject var manager: BarTaskerManager
+  @Environment(BarTaskerCoordinator.self) var manager
 
   private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
@@ -104,7 +104,7 @@ struct KanbanBoardView: View {
 // MARK: - KanbanColumnView
 
 private struct KanbanColumnView: View {
-  @EnvironmentObject var manager: BarTaskerManager
+  @Environment(BarTaskerCoordinator.self) var manager
   let column: KanbanColumn
   let tasks: [CheckvistTask]
   let columnIndex: Int
@@ -201,7 +201,7 @@ private struct KanbanColumnView: View {
 // MARK: - KanbanTaskCard
 
 private struct KanbanTaskCard: View {
-  @EnvironmentObject var manager: BarTaskerManager
+  @Environment(BarTaskerCoordinator.self) var manager
   let task: CheckvistTask
   let isSelected: Bool
   let childCount: Int

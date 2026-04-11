@@ -2,7 +2,7 @@ import Foundation
 
 /// Batches reorder requests and drains them sequentially against the remote API.
 ///
-/// Owned by `BarTaskerManager`. Callers enqueue position changes; the queue
+/// Owned by `BarTaskerCoordinator`. Callers enqueue position changes; the queue
 /// coalesces per-task-id and flushes in order, retrying on failure via a
 /// delayed resync.
 @MainActor

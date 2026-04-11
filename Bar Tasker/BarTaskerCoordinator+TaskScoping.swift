@@ -1,6 +1,6 @@
 import Foundation
 
-extension BarTaskerManager {
+extension BarTaskerCoordinator {
   var hasCredentials: Bool {
     !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && !remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -17,7 +17,7 @@ extension BarTaskerManager {
   var isUsingOfflineStore: Bool { !hasListSelection }
 
   var offlineOpenTaskCount: Int {
-    localTaskStore.load().openTasks.count
+    repository.localTaskStore.load().openTasks.count
   }
 
   var quickAddSpecificParentTaskIdValue: Int? {
@@ -40,7 +40,7 @@ extension BarTaskerManager {
 
   var activePluginSettingsPages: [any PluginSettingsPageProviding] {
     [
-      checkvistSyncPlugin as any BarTaskerPlugin,
+      repository.checkvistSyncPlugin as any BarTaskerPlugin,
       integrations.obsidianPlugin as any BarTaskerPlugin,
       integrations.googleCalendarPlugin as any BarTaskerPlugin,
       integrations.mcpIntegrationPlugin as any BarTaskerPlugin,
@@ -113,16 +113,21 @@ extension BarTaskerManager {
         selectedRootTag: selectedRootTag,
         taskById: cache.taskById,
         isDescendant: { [weak self] task, rootId in
-          self?.isDescendant(task, of: rootId) ?? false
+          guard let self else { return false }
+          return TaskFilterEngine.isDescendant(task, of: rootId, taskById: cache.taskById)
         },
         taskMatchesActiveRootScope: { [weak self] task in
           self?.taskMatchesActiveRootScope(task) ?? false
         },
         compareByPriorityThenPosition: { [weak self] lhs, rhs in
-          self?.compareByPriorityThenPosition(lhs, rhs) ?? false
+          guard let self else { return false }
+          return TaskFilterEngine.compareByPriorityThenPosition(
+            lhs, rhs, priorityRankById: cache.priorityRank)
         },
         compareByRootDueBucket: { [weak self] lhs, rhs in
-          self?.compareByRootDueBucket(lhs, rhs) ?? false
+          guard let self else { return false }
+          return TaskFilterEngine.compareByRootDueBucket(
+            lhs, rhs, rootDueBucketById: cache.rootDueBucket)
         },
         hasAnyTag: { [weak self] task in
           self?.hasAnyTag(task) ?? false
@@ -219,13 +224,6 @@ extension BarTaskerManager {
       && selectedRootDueBucket == nil
   }
 
-  private static let tagRegex: NSRegularExpression = {
-    guard let regex = try? NSRegularExpression(pattern: "[@#][a-zA-Z0-9_\\-]+") else {
-      fatalError("Failed to build task tag regex.")
-    }
-    return regex
-  }()
-
   private func hasAnyTag(_ task: CheckvistTask) -> Bool {
     cache.tagsByTaskId[task.id] != nil
   }
@@ -262,84 +260,9 @@ extension BarTaskerManager {
     }
   }
 
-  private func compareByPositionThenContent(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
-    switch (lhs.position, rhs.position) {
-    case (.some(let leftPosition), .some(let rightPosition)) where leftPosition != rightPosition:
-      return leftPosition < rightPosition
-    default:
-      break
-    }
-    return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
-  }
-
-  private func compareByPriorityThenPosition(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
-    let leftPriority = priorityRank(for: lhs)
-    let rightPriority = priorityRank(for: rhs)
-
-    if let leftPriority, let rightPriority, leftPriority != rightPriority {
-      return leftPriority < rightPriority
-    }
-    if leftPriority != nil && rightPriority == nil {
-      return true
-    }
-    if leftPriority == nil && rightPriority != nil {
-      return false
-    }
-
-    return compareByPositionThenContent(lhs, rhs)
-  }
-
-  private func compareByRootDueBucket(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
-    let leftBucket = rootDueBucket(for: lhs)
-    let rightBucket = rootDueBucket(for: rhs)
-    if leftBucket != rightBucket {
-      return leftBucket.rawValue < rightBucket.rawValue
-    }
-
-    switch (lhs.dueDate, rhs.dueDate) {
-    case (.some(let leftDate), .some(let rightDate)) where leftDate != rightDate:
-      return leftDate < rightDate
-    default:
-      break
-    }
-
-    switch (lhs.position, rhs.position) {
-    case (.some(let leftPosition), .some(let rightPosition)) where leftPosition != rightPosition:
-      return leftPosition < rightPosition
-    default:
-      break
-    }
-
-    return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
-  }
-
   func rootDueBucket(for task: CheckvistTask) -> RootDueBucket {
-    // Use pre-computed cache when available (hot path during filtering/sorting).
     if let cached = cache.rootDueBucket[task.id] { return cached }
-    return Self.classifyDueBucket(task: task)
-  }
-
-  private static func classifyDueBucket(task: CheckvistTask) -> RootDueBucket {
-    let dueText = task.due?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    guard !dueText.isEmpty else { return .noDueDate }
-    if dueText == "asap" { return .asap }
-    guard let dueDate = task.dueDate else { return .future }
-
-    let calendar = Calendar.current
-    let now = Date()
-    let todayStart = calendar.startOfDay(for: now)
-    if dueDate < todayStart { return .overdue }
-    if calendar.isDateInToday(dueDate) { return .today }
-    if calendar.isDateInTomorrow(dueDate) { return .tomorrow }
-    guard let sevenDaysOut = calendar.date(byAdding: .day, value: 8, to: todayStart) else {
-      return .future
-    }
-    if dueDate < sevenDaysOut { return .nextSevenDays }
-    return .future
-  }
-
-  private static func computeRootDueBuckets(tasks: [CheckvistTask]) -> [Int: RootDueBucket] {
-    Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, classifyDueBucket(task: $0)) })
+    return TaskFilterEngine.classifyDueBucket(task: task)
   }
 
   func setRootTaskView(_ view: RootTaskView) {
@@ -476,14 +399,14 @@ extension BarTaskerManager {
   }
 
   @MainActor func setPriorityForCurrentTask(_ rank: Int) {
-    guard (1...Self.maxPriorityRank).contains(rank), let task = currentTask else { return }
+    guard (1...TaskRepository.maxPriorityRank).contains(rank), let task = currentTask else { return }
 
-    var updated = priorityTaskIds
+    var updated = repository.priorityTaskIds
     updated.removeAll { $0 == task.id }
     let insertIndex = min(max(rank - 1, 0), updated.count)
     updated.insert(task.id, at: insertIndex)
-    if updated.count > Self.maxPriorityRank {
-      updated = Array(updated.prefix(Self.maxPriorityRank))
+    if updated.count > TaskRepository.maxPriorityRank {
+      updated = Array(updated.prefix(TaskRepository.maxPriorityRank))
     }
     savePriorityQueue(updated)
     errorMessage = nil
@@ -496,11 +419,11 @@ extension BarTaskerManager {
   @MainActor func sendCurrentTaskToPriorityBack() {
     guard let task = currentTask else { return }
 
-    var updated = priorityTaskIds
+    var updated = repository.priorityTaskIds
     let wasPrioritized = updated.contains(task.id)
     updated.removeAll { $0 == task.id }
 
-    if !wasPrioritized && updated.count >= Self.maxPriorityRank {
+    if !wasPrioritized && updated.count >= TaskRepository.maxPriorityRank {
       errorMessage = "Priority slots full (1-9). Press 1-9 to replace one."
       return
     }
@@ -516,8 +439,8 @@ extension BarTaskerManager {
 
   @MainActor func clearPriorityForCurrentTask() {
     guard let task = currentTask else { return }
-    guard priorityTaskIds.contains(task.id) else { return }
-    savePriorityQueue(priorityTaskIds.filter { $0 != task.id })
+    guard repository.priorityTaskIds.contains(task.id) else { return }
+    savePriorityQueue(repository.priorityTaskIds.filter { $0 != task.id })
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
@@ -529,13 +452,7 @@ extension BarTaskerManager {
 
   /// Returns true if task is a descendant of the given parentId (or IS at that level)
   func isDescendant(_ task: CheckvistTask, of rootId: Int) -> Bool {
-    if rootId == 0 { return true }  // root contains everything
-    var pid = task.parentId ?? 0
-    while pid != 0 {
-      if pid == rootId { return true }
-      pid = cache.taskById[pid]?.parentId ?? 0
-    }
-    return false
+    TaskFilterEngine.isDescendant(task, of: rootId, taskById: cache.taskById)
   }
 
   func invalidateCaches() {
@@ -547,10 +464,10 @@ extension BarTaskerManager {
     cache.isRebuilding = true
     defer { cache.isRebuilding = false }
     cache.taskById = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
-    cache.tagsByTaskId = Self.extractTagsByTaskId(tasks: tasks)
-    cache.rootDueBucket = Self.computeRootDueBuckets(tasks: tasks)
+    cache.tagsByTaskId = TaskFilterEngine.extractTagsByTaskId(tasks: tasks)
+    cache.rootDueBucket = TaskFilterEngine.computeRootDueBuckets(tasks: tasks)
     cache.priorityRank = Dictionary(
-      uniqueKeysWithValues: priorityTaskIds.enumerated().map { ($1, $0 + 1) })
+      uniqueKeysWithValues: repository.priorityTaskIds.enumerated().map { ($1, $0 + 1) })
     cache.dirty = false
     cache.visibleTasks = computeVisibleTasks()
     let nodes = tasks.map { BarTaskerTimerNode(id: $0.id, parentId: $0.parentId) }
@@ -560,17 +477,4 @@ extension BarTaskerManager {
     cache.rootLevelTagNames = computeRootLevelTagNames(limit: 30)
   }
 
-  /// Extract all lowercased tags from each task's content in a single pass.
-  private static func extractTagsByTaskId(tasks: [CheckvistTask]) -> [Int: [String]] {
-    var result: [Int: [String]] = [:]
-    for task in tasks {
-      let range = NSRange(task.content.startIndex..., in: task.content)
-      let matches = tagRegex.matches(in: task.content, range: range)
-      guard !matches.isEmpty else { continue }
-      result[task.id] = matches.compactMap { match in
-        Range(match.range, in: task.content).map { String(task.content[$0]).lowercased() }
-      }
-    }
-    return result
-  }
 }

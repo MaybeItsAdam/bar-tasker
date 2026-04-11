@@ -3,5 +3,5 @@ import SwiftUI
 @MainActor
 protocol PluginSettingsPageProviding: BarTaskerPlugin {
   var settingsIconSystemName: String { get }
-  func makeSettingsView(manager: BarTaskerManager) -> AnyView
+  func makeSettingsView(manager: BarTaskerCoordinator) -> AnyView
 }

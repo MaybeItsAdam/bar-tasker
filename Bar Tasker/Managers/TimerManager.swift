@@ -1,50 +1,42 @@
-import Combine
 import Foundation
+import Observation
 import OSLog
 
 @MainActor
-class TimerManager: ObservableObject {
-  private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "timer")
-  private let preferencesStore: BarTaskerPreferencesStore
-  private var cancellables = Set<AnyCancellable>()
+@Observable class TimerManager {
+  @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "timer")
+  @ObservationIgnored private let preferencesStore: BarTaskerPreferencesStore
 
-  @Published var timedTaskId: Int? = nil
-  @Published var timerByTaskId: [Int: TimeInterval] = [:]
-  @Published var timerRunning: Bool = false
-  @Published var timerBarLeading: Bool
-  @Published var timerMode: TimerMode
-  var timerTask: Task<Void, Never>? = nil
+  var timedTaskId: Int? = nil
+  var timerByTaskId: [Int: TimeInterval] = [:] {
+    didSet {
+      let encoded = Dictionary(uniqueKeysWithValues: timerByTaskId.map { (String($0.key), $0.value) })
+      preferencesStore.set(encoded, for: .timerByTaskId)
+      onCacheRelevantChange?()
+    }
+  }
+  var timerRunning: Bool = false
+  var timerBarLeading: Bool {
+    didSet { preferencesStore.set(timerBarLeading, for: .timerBarLeading) }
+  }
+  var timerMode: TimerMode {
+    didSet {
+      preferencesStore.set(timerMode.rawValue, for: .timerMode)
+      if timerMode == .disabled { stopTimer() }
+    }
+  }
+  @ObservationIgnored var timerTask: Task<Void, Never>? = nil
 
   var timerIsEnabled: Bool { timerMode != .disabled }
   var timerIsVisible: Bool { timerMode == .visible }
+
+  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
 
   init(preferencesStore: BarTaskerPreferencesStore) {
     self.preferencesStore = preferencesStore
     self.timerBarLeading = preferencesStore.bool(.timerBarLeading, default: false)
     self.timerMode = TimerMode(rawValue: preferencesStore.int(.timerMode, default: 0)) ?? .visible
     self.timerByTaskId = Self.timerDictionaryFromDefaults(preferencesStore: preferencesStore)
-    setupBindings()
-  }
-
-  private func setupBindings() {
-    $timerBarLeading.sink { [weak self] in
-      self?.preferencesStore.set($0, for: .timerBarLeading)
-    }.store(in: &cancellables)
-
-    $timerMode.sink { [weak self] mode in
-      self?.preferencesStore.set(mode.rawValue, for: .timerMode)
-      if mode == .disabled {
-        Task { @MainActor in
-          self?.stopTimer()
-        }
-      }
-    }.store(in: &cancellables)
-
-    $timerByTaskId.sink { [weak self] timers in
-      guard let self else { return }
-      let encoded = Dictionary(uniqueKeysWithValues: timers.map { (String($0.key), $0.value) })
-      self.preferencesStore.set(encoded, for: .timerByTaskId)
-    }.store(in: &cancellables)
   }
 
   // MARK: - Timer Operations
@@ -124,7 +116,7 @@ class TimerManager: ObservableObject {
   }
 }
 
-// MARK: - TimerMode (moved from BarTaskerManager+Types)
+// MARK: - TimerMode (moved from BarTaskerCoordinator+Types)
 
 enum TimerMode: Int, CaseIterable {
   case visible

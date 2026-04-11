@@ -4,7 +4,7 @@ import OSLog
 @MainActor
 // swiftlint:disable type_body_length function_body_length cyclomatic_complexity
 struct KeyboardShortcutRouter {
-  let manager: BarTaskerManager
+  let manager: BarTaskerCoordinator
   let logger: Logger
   let updateTitle: () -> Void
   let closeWindow: () -> Void
@@ -24,7 +24,7 @@ struct KeyboardShortcutRouter {
       cmd: cmd,
       option: option
     )
-    func matches(_ action: BarTaskerManager.ConfigurableShortcutAction) -> Bool {
+    func matches(_ action: ConfigurableShortcutAction) -> Bool {
       manager.preferences.shortcutMatches(action: action, keyToken: keyToken)
     }
 
@@ -93,15 +93,15 @@ struct KeyboardShortcutRouter {
 
     if manager.quickEntry.quickEntryMode == .command && isFocused {
       if event.keyCode == 125 {
-        manager.selectNextCommandSuggestion(for: manager.quickEntry.quickEntryText)
+        manager.quickEntry.selectNextCommandSuggestion(for: manager.quickEntry.quickEntryText)
         return true
       }
       if event.keyCode == 126 {
-        manager.selectPreviousCommandSuggestion(for: manager.quickEntry.quickEntryText)
+        manager.quickEntry.selectPreviousCommandSuggestion(for: manager.quickEntry.quickEntryText)
         return true
       }
       if event.keyCode == 36 {
-        let suggestions = manager.filteredCommandSuggestions(query: manager.quickEntry.quickEntryText)
+        let suggestions = manager.quickEntry.filteredCommandSuggestions(query: manager.quickEntry.quickEntryText)
         if suggestions.indices.contains(manager.quickEntry.commandSuggestionIndex) {
           let selected = suggestions[manager.quickEntry.commandSuggestionIndex]
           if selected.submitImmediately {
@@ -207,7 +207,7 @@ struct KeyboardShortcutRouter {
     if !isFocused && matches(.openInObsidian) {
       if !isRepeat {
         Task {
-          await manager.syncCurrentTaskToObsidian()
+          await manager.integrations.syncTaskToObsidian(taskId: nil, openMode: .standard)
           updateTitle()
         }
       }
@@ -216,7 +216,7 @@ struct KeyboardShortcutRouter {
     if !isFocused && matches(.openInObsidianNewWindow) {
       if !isRepeat {
         Task {
-          await manager.openCurrentTaskInNewObsidianWindow()
+          await manager.integrations.syncTaskToObsidian(taskId: nil, openMode: .newWindow)
           updateTitle()
         }
       }
@@ -461,7 +461,7 @@ struct KeyboardShortcutRouter {
 
     // z/x/c/v/b/n/m - lower root filter shortcuts (Due/Tags row options).
     if !isFocused && manager.rootScopeShowsFilterControls {
-      let rootFilterActions: [BarTaskerManager.ConfigurableShortcutAction] = [
+      let rootFilterActions: [ConfigurableShortcutAction] = [
         .rootFilter1, .rootFilter2, .rootFilter3, .rootFilter4, .rootFilter5, .rootFilter6,
         .rootFilter7,
       ]
@@ -473,7 +473,7 @@ struct KeyboardShortcutRouter {
     }
 
     // Two-key sequences.
-    let sequenceActions: [BarTaskerManager.ConfigurableShortcutAction] = [
+    let sequenceActions: [ConfigurableShortcutAction] = [
       .sequenceDue, .sequenceDueToday, .sequenceStart, .sequenceRepeat, .sequenceOpenLink,
       .sequenceGoogleCalendar, .sequenceTag, .sequenceUntag, .sequenceToggleContext,
     ]
@@ -523,14 +523,14 @@ struct KeyboardShortcutRouter {
         }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceOpenLink, sequence: sequence)
         {
-          manager.openTaskLink()
+          if let task = manager.currentTask { manager.integrations.openTaskLink(task: task) }
           return true
         }
         if manager.preferences.shortcutMatchesSequence(
           action: .sequenceGoogleCalendar,
           sequence: sequence
         ) {
-          manager.openCurrentTaskInGoogleCalendar()
+          manager.integrations.openTaskInGoogleCalendar()
           return true
         }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceTag, sequence: sequence) {
@@ -628,7 +628,7 @@ struct KeyboardShortcutRouter {
       }
       if matches(.setPriorityRank),
         let priority = Int(chars),
-        (1...BarTaskerManager.maxPriorityRank).contains(priority)
+        (1...TaskRepository.maxPriorityRank).contains(priority)
       {
         manager.setPriorityForCurrentTask(priority)
         updateTitle()

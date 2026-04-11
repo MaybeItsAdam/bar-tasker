@@ -1,19 +1,26 @@
-import Combine
 import Foundation
+import Observation
 
 @MainActor
-class QuickEntryManager: ObservableObject {
-  @Published var searchText: String = ""
-  @Published var quickEntryText: String = ""
-  @Published var quickEntryMode: BarTaskerManager.QuickEntryMode = .search
-  @Published var isQuickEntryFocused: Bool = false
-  @Published var editCursorAtEnd: Bool = true  // true = append (a), false = insert (i)
-  @Published var pendingDeleteConfirmation: Bool = false
-  @Published var completingTaskId: Int? = nil
-  @Published var commandSuggestionIndex: Int = 0
-  @Published var keyBuffer: String = ""
+@Observable class QuickEntryManager {
+  var searchText: String = "" {
+    didSet { onCacheRelevantChange?() }
+  }
+  var quickEntryText: String = ""
+  var quickEntryMode: QuickEntryMode = .search {
+    didSet { onCacheRelevantChange?() }
+  }
+  var isQuickEntryFocused: Bool = false
+  var editCursorAtEnd: Bool = true  // true = append (a), false = insert (i)
+  var pendingDeleteConfirmation: Bool = false
+  var completingTaskId: Int? = nil
+  var commandSuggestionIndex: Int = 0
+  var keyBuffer: String = ""
 
-  static let commandSuggestions: [BarTaskerManager.CommandSuggestion] =
+  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
+  @ObservationIgnored var integrationFlagsProvider: (() -> (obsidian: Bool, googleCalendar: Bool, mcp: Bool))?
+
+  static let commandSuggestions: [CommandSuggestion] =
     BarTaskerCommandEngine.suggestions.map {
       .init(
         label: $0.label,
@@ -31,7 +38,7 @@ class QuickEntryManager: ObservableObject {
     obsidianEnabled: Bool,
     googleCalendarEnabled: Bool,
     mcpEnabled: Bool
-  ) -> [BarTaskerManager.CommandSuggestion] {
+  ) -> [CommandSuggestion] {
     let filtered = BarTaskerCommandEngine.filteredSuggestions(query: query).filter { suggestion in
       switch suggestion.command {
       case "sync obsidian", "open obsidian new window", "choose obsidian inbox",
@@ -88,6 +95,42 @@ class QuickEntryManager: ObservableObject {
     ).count
     guard total > 0 else { return }
     commandSuggestionIndex = max(commandSuggestionIndex - 1, 0)
+  }
+
+  // MARK: - Command palette (no-argument overloads using integrationFlagsProvider)
+
+  private func currentIntegrationFlags() -> (obsidian: Bool, googleCalendar: Bool, mcp: Bool) {
+    integrationFlagsProvider?() ?? (obsidian: false, googleCalendar: false, mcp: false)
+  }
+
+  func filteredCommandSuggestions(query: String) -> [CommandSuggestion] {
+    let flags = currentIntegrationFlags()
+    return filteredCommandSuggestions(
+      query: query,
+      obsidianEnabled: flags.obsidian,
+      googleCalendarEnabled: flags.googleCalendar,
+      mcpEnabled: flags.mcp
+    )
+  }
+
+  func selectNextCommandSuggestion(for query: String) {
+    let flags = currentIntegrationFlags()
+    selectNextCommandSuggestion(
+      for: query,
+      obsidianEnabled: flags.obsidian,
+      googleCalendarEnabled: flags.googleCalendar,
+      mcpEnabled: flags.mcp
+    )
+  }
+
+  func selectPreviousCommandSuggestion(for query: String) {
+    let flags = currentIntegrationFlags()
+    selectPreviousCommandSuggestion(
+      for: query,
+      obsidianEnabled: flags.obsidian,
+      googleCalendarEnabled: flags.googleCalendar,
+      mcpEnabled: flags.mcp
+    )
   }
 
   // MARK: - Search state

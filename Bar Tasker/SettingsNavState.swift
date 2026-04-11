@@ -1,7 +1,7 @@
 import AppKit
-import Combine
+import Observation
 
-final class SettingsNavState: NSObject, ObservableObject {
+@Observable final class SettingsNavState: NSObject {
   enum Pane: String {
     case preferences
     case keybindings
@@ -47,8 +47,8 @@ final class SettingsNavState: NSObject, ObservableObject {
     }
   }
 
-  @Published var selectedPane: Pane = .preferences
-  weak var toolbar: NSToolbar?
+  var selectedPane: Pane = .preferences
+  @ObservationIgnored weak var toolbar: NSToolbar?
 }
 
 extension SettingsNavState: NSToolbarDelegate {

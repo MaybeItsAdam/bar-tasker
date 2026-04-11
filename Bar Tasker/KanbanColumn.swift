@@ -14,7 +14,7 @@ enum KanbanColumnCondition: Codable, Hashable {
     switch self {
     case .tag(let name): return "#\(name)"
     case .dueBucket(let raw):
-      return BarTaskerManager.RootDueBucket(rawValue: raw)?.title ?? "Due bucket \(raw)"
+      return RootDueBucket(rawValue: raw)?.title ?? "Due bucket \(raw)"
     case .catchAll: return "Everything else"
     }
   }
@@ -24,7 +24,7 @@ enum KanbanColumnCondition: Codable, Hashable {
     switch self {
     case .tag: return true
     case .dueBucket(let raw):
-      guard let bucket = BarTaskerManager.RootDueBucket(rawValue: raw) else { return false }
+      guard let bucket = RootDueBucket(rawValue: raw) else { return false }
       switch bucket {
       case .today, .tomorrow, .noDueDate: return true
       default: return false
@@ -87,17 +87,17 @@ struct KanbanColumn: Identifiable, Codable {
       KanbanColumn(
         name: "Today",
         conditions: [
-          .dueBucket(BarTaskerManager.RootDueBucket.asap.rawValue),
-          .dueBucket(BarTaskerManager.RootDueBucket.overdue.rawValue),
-          .dueBucket(BarTaskerManager.RootDueBucket.today.rawValue),
+          .dueBucket(RootDueBucket.asap.rawValue),
+          .dueBucket(RootDueBucket.overdue.rawValue),
+          .dueBucket(RootDueBucket.today.rawValue),
         ],
         sortOrder: .priorityThenDueAscending
       ),
       KanbanColumn(
         name: "Next 7 Days",
         conditions: [
-          .dueBucket(BarTaskerManager.RootDueBucket.tomorrow.rawValue),
-          .dueBucket(BarTaskerManager.RootDueBucket.nextSevenDays.rawValue),
+          .dueBucket(RootDueBucket.tomorrow.rawValue),
+          .dueBucket(RootDueBucket.nextSevenDays.rawValue),
         ],
         sortOrder: .priorityThenDueAscending
       ),
