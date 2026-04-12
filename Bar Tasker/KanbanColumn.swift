@@ -26,7 +26,7 @@ enum KanbanColumnCondition: Codable, Hashable {
     case .dueBucket(let raw):
       guard let bucket = RootDueBucket(rawValue: raw) else { return false }
       switch bucket {
-      case .today, .tomorrow, .noDueDate: return true
+      case .today, .tomorrow, .nextSevenDays, .noDueDate: return true
       default: return false
       }
     case .catchAll: return true

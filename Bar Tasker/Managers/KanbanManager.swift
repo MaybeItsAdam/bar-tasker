@@ -52,6 +52,10 @@ enum KanbanMoveOutcome {
   var kanbanFilterParentId: Int? = nil {
     didSet { onCacheRelevantChange?() }
   }
+  /// Column ID currently showing the inline add field (nil = none).
+  var addingToColumnId: UUID? = nil
+  /// Text for the inline add field.
+  var addText: String = ""
 
   @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
 
@@ -96,6 +100,13 @@ enum KanbanMoveOutcome {
 
   /// Returns the first column (in order) that a task matches.
   func columnForTask(_ task: CheckvistTask, in columns: [KanbanColumn]) -> KanbanColumn? {
+    // Always evaluate non-catch-all conditions first so fallback columns don't
+    // shadow more specific due/tag columns when ordering is customized.
+    for column in columns where column.conditions.contains(where: { $0 != .catchAll }) {
+      if taskMatchesKanbanColumn(task, column: column, includeCatchAll: false) {
+        return column
+      }
+    }
     for column in columns {
       if taskMatchesKanbanColumn(task, column: column) {
         return column
@@ -104,8 +115,13 @@ enum KanbanMoveOutcome {
     return nil
   }
 
-  private func taskMatchesKanbanColumn(_ task: CheckvistTask, column: KanbanColumn) -> Bool {
+  private func taskMatchesKanbanColumn(
+    _ task: CheckvistTask,
+    column: KanbanColumn,
+    includeCatchAll: Bool = true
+  ) -> Bool {
     for condition in column.conditions {
+      if !includeCatchAll, condition == .catchAll { continue }
       if taskMatchesCondition(task, condition: condition) {
         return true
       }
@@ -297,11 +313,6 @@ enum KanbanMoveOutcome {
     targetColumn: KanbanColumn,
     allColumns: [KanbanColumn]
   ) -> (content: String, due: String?)? {
-    // Find the first writable condition in the target column.
-    guard let writableCondition = targetColumn.conditions.first(where: { $0.isWritable }) else {
-      return nil
-    }
-
     var content = task.content
     var due: String? = task.due
 
@@ -315,10 +326,14 @@ enum KanbanMoveOutcome {
         }
       }
     for tag in otherColumnTags {
+      let escapedTag = NSRegularExpression.escapedPattern(for: tag)
+      if let regex = try? NSRegularExpression(pattern: "(?i)(?:^|\\s)#\(escapedTag)\\b") {
+        let range = NSRange(content.startIndex..<content.endIndex, in: content)
+        content = regex.stringByReplacingMatches(in: content, range: range, withTemplate: "")
+      }
       content =
         content
-        .replacingOccurrences(of: " #\(tag)", with: "")
-        .replacingOccurrences(of: "#\(tag)", with: "")
+        .replacingOccurrences(of: "\\s{2,}", with: " ", options: .regularExpression)
         .trimmingCharacters(in: .whitespaces)
     }
 
@@ -329,6 +344,27 @@ enum KanbanMoveOutcome {
         if case .dueBucket = $0 { return true }
         return false
       }) ?? false
+
+    // Preserve due when moving into a due-based column that already matches the task's bucket.
+    // This avoids clobbering an existing date/time (e.g. moving within "Next 7 Days").
+    if let ds = dataSource {
+      let targetDueBuckets = targetColumn.conditions.compactMap { condition -> RootDueBucket? in
+        guard case .dueBucket(let raw) = condition else { return nil }
+        return RootDueBucket(rawValue: raw)
+      }
+      let existingDue = task.due?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if !targetDueBuckets.isEmpty, !existingDue.isEmpty {
+        let currentBucket = ds.rootDueBucket(for: task)
+        if targetDueBuckets.contains(currentBucket) {
+          return (content, due)
+        }
+      }
+    }
+
+    // Find the first writable condition in the target column.
+    guard let writableCondition = targetColumn.conditions.first(where: { $0.isWritable }) else {
+      return nil
+    }
 
     switch writableCondition {
     case .tag(let name):
@@ -342,19 +378,19 @@ enum KanbanMoveOutcome {
 
     case .dueBucket(let raw):
       guard let bucket = RootDueBucket(rawValue: raw) else { return nil }
-      let calendar = Calendar.current
-      let today = calendar.startOfDay(for: Date())
-      let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-      }()
       switch bucket {
       case .today:
-        due = formatter.string(from: today)
+        due = CommandEngine.resolveDueDate("today")
       case .tomorrow:
-        due = formatter.string(from: calendar.date(byAdding: .day, value: 1, to: today)!)
+        due = CommandEngine.resolveDueDate("tomorrow")
+      case .nextSevenDays:
+        // Pick a date 3 days out — comfortably inside the 7-day window.
+        let cal = Calendar.current
+        let target = cal.date(byAdding: .day, value: 3, to: cal.startOfDay(for: Date()))!
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "yyyy-MM-dd"
+        due = fmt.string(from: target)
       case .noDueDate:
         due = ""
       default:
@@ -375,13 +411,7 @@ enum KanbanMoveOutcome {
     guard let ds = dataSource, ds.rootTaskView == .kanban else { return }
     let columns = kanbanColumns
     // Display is reversed, so visual right = lower array index.
-    var next = kanbanFocusedColumnIndex - direction
-    // Skip empty columns in the navigation direction.
-    while columns.indices.contains(next) {
-      let colTasks = tasksForKanbanColumn(columns[next], allColumns: columns)
-      if !colTasks.isEmpty { break }
-      next -= direction
-    }
+    let next = kanbanFocusedColumnIndex - direction
     guard columns.indices.contains(next) else { return }
     kanbanFocusedColumnIndex = next
     ds.currentSiblingIndex = 0
@@ -510,5 +540,46 @@ enum KanbanMoveOutcome {
       let json = String(data: data, encoding: .utf8)
     else { return }
     preferencesStore.set(json, for: .kanbanColumns)
+  }
+
+  // MARK: - Inline add
+
+  /// Returns (content, due) with column attributes applied to raw user input.
+  func contentAndDueForNewTask(rawContent: String, in column: KanbanColumn) -> (content: String, due: String?) {
+    var content = rawContent
+    var due: String? = nil
+
+    guard let condition = column.conditions.first(where: { $0.isWritable }) else {
+      return (content, due)
+    }
+
+    switch condition {
+    case .tag(let name):
+      if !content.lowercased().contains("#\(name.lowercased())") {
+        content = "\(content) #\(name)"
+      }
+    case .dueBucket(let raw):
+      if let bucket = RootDueBucket(rawValue: raw) {
+        switch bucket {
+        case .today:
+          due = CommandEngine.resolveDueDate("today")
+        case .tomorrow:
+          due = CommandEngine.resolveDueDate("tomorrow")
+        case .nextSevenDays:
+          let cal = Calendar.current
+          let target = cal.date(byAdding: .day, value: 3, to: cal.startOfDay(for: Date()))!
+          let fmt = DateFormatter()
+          fmt.locale = Locale(identifier: "en_US_POSIX")
+          fmt.dateFormat = "yyyy-MM-dd"
+          due = fmt.string(from: target)
+        default:
+          break
+        }
+      }
+    case .catchAll:
+      break
+    }
+
+    return (content, due)
   }
 }

@@ -105,6 +105,7 @@ struct KanbanBoardView: View {
 
 private struct KanbanColumnView: View {
   @Environment(AppCoordinator.self) var manager
+  @FocusState private var addFieldFocused: Bool
   let column: KanbanColumn
   let tasks: [CheckvistTask]
   let columnIndex: Int
@@ -143,8 +144,8 @@ private struct KanbanColumnView: View {
   }
 
   private var taskListArea: some View {
-    Group {
-      if tasks.isEmpty {
+    VStack(spacing: 0) {
+      if tasks.isEmpty && !isAddingHere {
         VStack {
           Spacer()
           Text("No tasks")
@@ -155,7 +156,7 @@ private struct KanbanColumnView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .dropDestination(for: String.self) { ids, _ in
           guard let idStr = ids.first, let taskId = Int(idStr) else { return false }
-          Task { await manager.moveTask(id: taskId, toColumn: column) }
+          manager.moveTask(id: taskId, toColumn: column)
           return true
         }
       } else {
@@ -178,23 +179,60 @@ private struct KanbanColumnView: View {
                 }
                 .draggable(String(task.id))
               }
+              inlineAddField
+                .id("kanban-add-field")
             }
           }
-          .onChange(of: manager.currentSiblingIndex) { _, _ in
-            guard isFocused, let task = manager.kanban.currentKanbanTask else { return }
-            if tasks.contains(where: { $0.id == task.id }) {
-              proxy.scrollTo(task.id, anchor: .center)
+          .onChange(of: manager.kanban.kanbanSelectedTaskId) { _, selectedId in
+            guard let selectedId, tasks.contains(where: { $0.id == selectedId }) else { return }
+            proxy.scrollTo(selectedId, anchor: .center)
+          }
+          .onChange(of: isAddingHere) { _, adding in
+            if adding {
+              proxy.scrollTo("kanban-add-field", anchor: .bottom)
             }
           }
           .dropDestination(for: String.self) { ids, _ in
             guard let idStr = ids.first, let taskId = Int(idStr) else { return false }
-            Task { await manager.moveTask(id: taskId, toColumn: column) }
+            manager.moveTask(id: taskId, toColumn: column)
             return true
           }
         }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+  }
+
+  private var isAddingHere: Bool {
+    manager.kanban.addingToColumnId == column.id
+  }
+
+  @ViewBuilder
+  private var inlineAddField: some View {
+    if isAddingHere {
+      @Bindable var kanban = manager.kanban
+      TextField("Add task…", text: $kanban.addText)
+        .textFieldStyle(.plain)
+        .font(.system(size: 12))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(themeColor(.panelSurface))
+        .focused($addFieldFocused)
+        .onAppear { addFieldFocused = true }
+        .onChange(of: isAddingHere) { _, active in
+          if active { addFieldFocused = true }
+        }
+        .onSubmit {
+          let text = manager.kanban.addText
+          guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            manager.kanban.addingToColumnId = nil
+            manager.kanban.addText = ""
+            return
+          }
+          manager.addTaskInKanbanColumn(rawContent: text, column: column)
+          manager.kanban.addText = ""
+        }
+    }
   }
 }
 

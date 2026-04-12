@@ -163,13 +163,13 @@ struct KeyboardShortcutRouter {
     if manager.rootTaskView == .kanban && !isFocused {
       if matches(.kanbanMoveLeft) {
         if !isRepeat {
-          Task { await manager.moveCurrentTaskToKanbanColumn(direction: -1) }
+          manager.moveCurrentTaskToKanbanColumn(direction: -1)
         }
         return true
       }
       if matches(.kanbanMoveRight) {
         if !isRepeat {
-          Task { await manager.moveCurrentTaskToKanbanColumn(direction: 1) }
+          manager.moveCurrentTaskToKanbanColumn(direction: 1)
         }
         return true
       }
@@ -351,6 +351,16 @@ struct KeyboardShortcutRouter {
         return true
       }
       if isFocused { return false }
+      // In kanban mode, Enter opens the inline add field in the focused column.
+      if manager.rootTaskView == .kanban {
+        let columns = manager.kanban.kanbanColumns
+        let idx = manager.kanban.kanbanFocusedColumnIndex
+        if columns.indices.contains(idx) {
+          manager.kanban.addingToColumnId = columns[idx].id
+          manager.kanban.addText = ""
+        }
+        return true
+      }
       manager.quickEntry.quickEntryMode = .addSibling
       manager.quickEntry.quickEntryText = ""
       manager.quickEntry.isQuickEntryFocused = true
@@ -380,6 +390,12 @@ struct KeyboardShortcutRouter {
 
     // Escape - cancel input if active; otherwise close.
     if matches(.closeOrCancel) {
+      // Dismiss kanban inline add field first.
+      if manager.kanban.addingToColumnId != nil {
+        manager.kanban.addingToColumnId = nil
+        manager.kanban.addText = ""
+        return true
+      }
       if rootScopeFocused {
         manager.rootScopeFocusLevel = 0
         return true

@@ -11,6 +11,9 @@ struct TaskFilterEngine {
     let dueText = task.due?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
     guard !dueText.isEmpty else { return .noDueDate }
     if dueText == "asap" { return .asap }
+    if dueText == "today" { return .today }
+    if dueText == "tomorrow" || dueText == "tmr" { return .tomorrow }
+    if dueText == "next week" || dueText == "next 7 days" { return .nextSevenDays }
     guard let dueDate = task.dueDate else { return .future }
 
     let calendar = Calendar.current

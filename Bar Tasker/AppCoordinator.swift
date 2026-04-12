@@ -300,23 +300,146 @@ extension AppCoordinator: KanbanTaskDataSource {}
 extension AppCoordinator: IntegrationDataSource {}
 
 extension AppCoordinator {
-  @MainActor func moveCurrentTaskToKanbanColumn(direction: Int) async {
+  @MainActor func moveCurrentTaskToKanbanColumn(direction: Int) {
     guard let outcome = kanban.computeMoveCurrentTask(direction: direction) else { return }
     switch outcome {
     case .error(let msg):
       repository.errorMessage = msg
     case .update(let task, let newContent, let newDue):
-      await updateTask(task: task, content: newContent, due: newDue)
+      applyOptimisticMoveAndSync(task: task, content: newContent, due: newDue)
     }
   }
 
-  @MainActor func moveTask(id taskId: Int, toColumn targetColumn: KanbanColumn) async {
+  @MainActor func moveTask(id taskId: Int, toColumn targetColumn: KanbanColumn) {
     guard let outcome = kanban.computeMoveTask(id: taskId, toColumn: targetColumn) else { return }
     switch outcome {
     case .error(let msg):
       repository.errorMessage = msg
     case .update(let task, let newContent, let newDue):
-      await updateTask(task: task, content: newContent, due: newDue)
+      applyOptimisticMoveAndSync(task: task, content: newContent, due: newDue)
+    }
+  }
+
+  /// Creates a new root-level task pre-configured for the given kanban column.
+  @MainActor func addTaskInKanbanColumn(rawContent: String, column: KanbanColumn) {
+    let trimmed = rawContent.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    guard !listId.isEmpty else {
+      errorMessage = "Choose a Checkvist list in Preferences to add tasks."
+      return
+    }
+
+    let (content, due) = kanban.contentAndDueForNewTask(rawContent: trimmed, in: column)
+
+    // Optimistic local insert
+    let optimisticId = -Int.random(in: 1...1_000_000)
+    let optimisticTask = CheckvistTask(
+      id: optimisticId, content: content, status: 0, due: due,
+      position: nil, parentId: nil, level: nil
+    )
+    tasks.append(optimisticTask)
+    kanban.kanbanSelectedTaskId = optimisticId
+
+    let listId = self.listId
+    let credentials = self.activeCredentials
+    let plugin = repository.activeSyncPlugin
+
+    Task { [weak self] in
+      do {
+        let newTask = try await plugin.createTask(
+          listId: listId, content: content, parentId: nil, position: nil,
+          credentials: credentials
+        )
+        await MainActor.run { [weak self] in
+          guard let self else { return }
+          if let newTask {
+            // If a due date was set, sync it to the server too.
+            if let due, !due.isEmpty {
+              let taskId = newTask.id
+              Task {
+                _ = try? await plugin.updateTask(
+                  listId: listId, taskId: taskId, content: nil, due: due,
+                  credentials: credentials
+                )
+              }
+            }
+            self.lastUndo = .add(taskId: newTask.id)
+            // Replace optimistic task with the real one.
+            if let idx = self.tasks.firstIndex(where: { $0.id == optimisticId }) {
+              self.tasks[idx] = CheckvistTask(
+                id: newTask.id, content: content, status: 0, due: due,
+                position: newTask.position, parentId: nil, level: nil
+              )
+            }
+            self.kanban.kanbanSelectedTaskId = newTask.id
+          } else {
+            self.tasks.removeAll { $0.id == optimisticId }
+            self.errorMessage = "Failed to add task."
+          }
+        }
+      } catch {
+        await MainActor.run { [weak self] in
+          self?.tasks.removeAll { $0.id == optimisticId }
+          self?.errorMessage = "Error adding task: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  /// Applies the move locally (immediate) and syncs to the server in the background.
+  @MainActor private func applyOptimisticMoveAndSync(
+    task: CheckvistTask, content: String?, due: String?
+  ) {
+    lastUndo = .update(taskId: task.id, oldContent: task.content, oldDue: task.due)
+
+    guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+    let originalTask = tasks[index]
+    tasks[index] = CheckvistTask(
+      id: originalTask.id,
+      content: content ?? originalTask.content,
+      status: originalTask.status,
+      due: due ?? originalTask.due,
+      position: originalTask.position,
+      parentId: originalTask.parentId,
+      level: originalTask.level,
+      notes: originalTask.notes,
+      updatedAt: originalTask.updatedAt
+    )
+
+    let listId = self.listId
+    let credentials = self.activeCredentials
+    let plugin = repository.activeSyncPlugin
+    let taskId = task.id
+
+    Task { [weak self] in
+      do {
+        let success = try await plugin.updateTask(
+          listId: listId,
+          taskId: taskId,
+          content: content,
+          due: due,
+          credentials: credentials
+        )
+        if !success {
+          await MainActor.run { [weak self] in
+            guard let self else { return }
+            if let idx = self.tasks.firstIndex(where: { $0.id == taskId }) {
+              self.tasks[idx] = originalTask
+            }
+            self.errorMessage = "Failed to sync task move."
+          }
+        }
+      } catch {
+        await MainActor.run { [weak self] in
+          guard let self else { return }
+          if !self.repository.isNetworkReachable {
+            self.repository.pendingTaskMutations[taskId] = (content: content, due: due)
+          } else if let idx = self.tasks.firstIndex(where: { $0.id == taskId }) {
+            self.tasks[idx] = originalTask
+            self.errorMessage = "Failed to sync task move."
+          }
+        }
+      }
     }
   }
 }

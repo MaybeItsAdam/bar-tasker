@@ -160,18 +160,23 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     due: String?,
     credentials: CheckvistCredentials
   ) async throws -> Bool {
-    var taskDict: [String: Any] = [:]
+    var bodyParts: [String] = []
     if let content {
-      taskDict["content"] = content
+      bodyParts.append("task[content]=\(Self.percentEncodeFormValue(content))")
     }
     if let due {
-      taskDict["due"] = due
+      bodyParts.append("task[due_date]=\(Self.percentEncodeFormValue(due))")
     }
-    guard !taskDict.isEmpty else { return true }
-    return try await putTask(
+    guard !bodyParts.isEmpty else { return true }
+    // Never send parse=true for updates.  Checkvist's server-side parser
+    // extracts inline #tags and due markers from the content text, which
+    // conflicts with our client-side tag/due management — it strips tags
+    // from the stored content and can overwrite explicitly-set due dates.
+    return try await putTaskFormEncoded(
       listId: listId,
       taskId: taskId,
-      bodyTaskPayload: taskDict,
+      bodyParts: bodyParts,
+      includeParseFlag: false,
       credentials: credentials
     )
   }
@@ -295,10 +300,20 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     listId: String,
     taskId: Int,
     bodyTaskPayload: [String: Any],
+    includeParseFlag: Bool = false,
     credentials: CheckvistCredentials
   ) async throws -> Bool {
-    guard let url = CheckvistEndpoints.task(listId: listId, taskId: taskId) else {
+    guard let baseURL = CheckvistEndpoints.task(listId: listId, taskId: taskId) else {
       return false
+    }
+    let url: URL
+    if includeParseFlag, var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) {
+      var items = components.queryItems ?? []
+      items.append(URLQueryItem(name: "parse", value: "true"))
+      components.queryItems = items
+      url = components.url ?? baseURL
+    } else {
+      url = baseURL
     }
 
     let (_, response) = try await performAuthenticatedRequest(credentials: credentials) {
@@ -308,7 +323,46 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-      request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": bodyTaskPayload])
+      var requestPayload: [String: Any] = ["task": bodyTaskPayload]
+      if includeParseFlag {
+        requestPayload["parse"] = true
+      }
+      request.httpBody = try? JSONSerialization.data(withJSONObject: requestPayload)
+      return request
+    }
+
+    return (200...299).contains(response.statusCode)
+  }
+
+  private func putTaskFormEncoded(
+    listId: String,
+    taskId: Int,
+    bodyParts: [String],
+    includeParseFlag: Bool = false,
+    credentials: CheckvistCredentials
+  ) async throws -> Bool {
+    guard let baseURL = CheckvistEndpoints.task(listId: listId, taskId: taskId) else {
+      return false
+    }
+    let url: URL
+    if includeParseFlag, var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) {
+      var items = components.queryItems ?? []
+      items.append(URLQueryItem(name: "parse", value: "true"))
+      components.queryItems = items
+      url = components.url ?? baseURL
+    } else {
+      url = baseURL
+    }
+
+    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) {
+      validToken in
+      var request = URLRequest(url: url)
+      request.httpMethod = "PUT"
+      request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+      request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+      request.setValue("application/json", forHTTPHeaderField: "Accept")
+      request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+      request.httpBody = bodyParts.joined(separator: "&").data(using: .utf8)
       return request
     }
 

@@ -99,10 +99,27 @@ struct CheckvistTask: Codable, Identifiable, Sendable, Equatable {
 
   private enum DecodingKeys: String, CodingKey {
     case id, content, status, due, position
+    case dueDate = "due_date"
+    case deadline
     case parentId = "parent_id"
     case level, notes
     case text
     case updatedAt = "updated_at"
+  }
+
+  private struct DynamicCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+      self.stringValue = stringValue
+      self.intValue = nil
+    }
+
+    init?(intValue: Int) {
+      self.stringValue = String(intValue)
+      self.intValue = intValue
+    }
   }
 
   init(
@@ -142,7 +159,22 @@ struct CheckvistTask: Codable, Identifiable, Sendable, Equatable {
       ?? container.decodeLossyString(forKey: .text)
       ?? ""
     let status = container.decodeLossyInt(forKey: .status) ?? 0
-    let due = container.decodeLossyString(forKey: .due)
+    var due =
+      container.decodeLossyString(forKey: .due)
+      ?? container.decodeLossyString(forKey: .dueDate)
+      ?? container.decodeLossyString(forKey: .deadline)
+    if due == nil, let dynamicContainer = try? decoder.container(keyedBy: DynamicCodingKey.self) {
+      for key in dynamicContainer.allKeys {
+        let lower = key.stringValue.lowercased()
+        guard lower.contains("due") || lower.contains("deadline") else { continue }
+        if let value = dynamicContainer.decodeLossyString(forKey: key),
+          !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+          due = value
+          break
+        }
+      }
+    }
     let position = container.decodeLossyInt(forKey: .position)
     let parentId = container.decodeLossyInt(forKey: .parentId)
     let level = container.decodeLossyInt(forKey: .level)
@@ -191,7 +223,15 @@ struct CheckvistTask: Codable, Identifiable, Sendable, Equatable {
     dateTime.locale = locale
     dateTime.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
 
-    return [dateOnly, dateOnlyNoPadding, dateTime]
+    let slashDateOnly = DateFormatter()
+    slashDateOnly.locale = locale
+    slashDateOnly.dateFormat = "yyyy/MM/dd"
+
+    let slashDateTime = DateFormatter()
+    slashDateTime.locale = locale
+    slashDateTime.dateFormat = "yyyy/MM/dd HH:mm:ss Z"
+
+    return [dateOnly, dateOnlyNoPadding, dateTime, slashDateOnly, slashDateTime]
   }()
 
   private static let iso8601Parsers: [ISO8601DateFormatter] = {
