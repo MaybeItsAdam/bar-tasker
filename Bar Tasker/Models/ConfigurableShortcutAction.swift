@@ -59,6 +59,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
   case kanbanFocusRight
   case rootTabKanban
   case kanbanShowInAll
+  case kanbanEnterTaskChildren
+  case kanbanExitToTaskParent
 
   var id: String { rawValue }
 
@@ -122,6 +124,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .kanbanFocusRight: return "Kanban: focus next column"
     case .rootTabKanban: return "Jump to root tab: Kanban"
     case .kanbanShowInAll: return "Kanban: show task in All view"
+    case .kanbanEnterTaskChildren: return "Kanban: drill into selected task's subtasks"
+    case .kanbanExitToTaskParent: return "Kanban: pop up to parent scope"
     }
   }
 
@@ -131,7 +135,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
       .rootCycleTabNext, .rootCycleFilterPrevious, .rootCycleFilterNext, .rootTabAll, .rootTabDue,
       .rootTabTags, .rootTabPriority, .rootFilter1, .rootFilter2, .rootFilter3, .rootFilter4,
       .rootFilter5, .rootFilter6, .rootFilter7, .rootTabKanban,
-      .kanbanFocusLeft, .kanbanFocusRight, .kanbanShowInAll:
+      .kanbanFocusLeft, .kanbanFocusRight, .kanbanShowInAll,
+      .kanbanEnterTaskChildren, .kanbanExitToTaskParent:
       return "Navigation"
     case .markDone, .invalidateTask, .addSibling, .addChild, .unindentTask, .editTaskAtEnd,
       .editTaskAtStart, .deleteTask, .moveTaskUp, .moveTaskDown, .undo, .clearPriority,
@@ -191,8 +196,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .sequenceTag: return "gt"
     case .sequenceUntag: return "gu"
     case .sequenceToggleContext: return "sc"
-    case .toggleTimer: return "t"
-    case .toggleTimerPause: return "p"
+    case .toggleTimer: return "p"
+    case .toggleTimerPause: return "shift+p"
     case .undo: return "u"
     case .toggleHideFuture: return "shift+h"
     case .quickListSwitch: return "shift+l"
@@ -207,6 +212,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .kanbanFocusRight: return "right,l"
     case .rootTabKanban: return "t"
     case .kanbanShowInAll: return "f"
+    case .kanbanEnterTaskChildren: return "]"
+    case .kanbanExitToTaskParent: return "["
     }
   }
 }

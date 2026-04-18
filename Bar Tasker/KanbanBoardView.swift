@@ -10,8 +10,9 @@ struct KanbanBoardView: View {
   }
 
   private var isFilterActive: Bool {
+    // kanbanFilterParentId is driven implicitly by the selected task's parent scope,
+    // so we don't surface it here — the user sees the scope via the selected column/task.
     !manager.kanban.kanbanFilterTag.isEmpty || manager.kanban.kanbanFilterSubtasks
-      || manager.kanban.kanbanFilterParentId != nil
   }
 
   var body: some View {
@@ -50,13 +51,7 @@ struct KanbanBoardView: View {
         .font(.system(size: 11))
         .foregroundColor(themeColor(.link))
 
-      if let parentId = manager.kanban.kanbanFilterParentId,
-        let parentTask = manager.tasks.first(where: { $0.id == parentId })
-      {
-        filterChip("↳ \(parentTask.content.strippingTags)") {
-          manager.kanban.kanbanFilterParentId = nil
-        }
-      } else if manager.kanban.kanbanFilterSubtasks {
+      if manager.kanban.kanbanFilterSubtasks {
         filterChip("Subtasks of current") {
           manager.kanban.kanbanFilterSubtasks = false
         }
@@ -327,12 +322,12 @@ private struct KanbanTaskCard: View {
     let hasDue = !(task.due ?? "").isEmpty
     let tags = extractTags(from: task.content)
     let hasChildren = childCount > 0
-    let priorityRank = manager.priorityRank(for: task)
+    let priorityLabel = manager.priorityPath(for: task)
 
-    if hasDue || !tags.isEmpty || hasChildren || priorityRank != nil {
+    if hasDue || !tags.isEmpty || hasChildren || priorityLabel != nil {
       HStack(spacing: 5) {
-        if let rank = priorityRank {
-          Text("P\(rank)")
+        if let label = priorityLabel {
+          Text("P\(label)")
             .font(.system(size: 10, weight: .semibold, design: .monospaced))
             .padding(.horizontal, 4)
             .padding(.vertical, 1)

@@ -102,8 +102,18 @@ extension AppCoordinator {
 
   var shouldShowRootScopeSection: Bool { !needsInitialSetup && !isSearchFilterActive }
   var rootScopeShowsFilterControls: Bool {
-    shouldShowRootScopeSection && isRootLevel
-      && (rootTaskView == .due || rootTaskView == .tags || rootTaskView == .kanban)
+    guard shouldShowRootScopeSection && isRootLevel else { return false }
+    switch rootTaskView {
+    case .due, .tags:
+      return true
+    case .kanban:
+      // The kanban filter row is only rendered when there are root-level tags.
+      // Reporting `false` otherwise keeps the height calc and keyboard nav
+      // consistent with the actual rendered chrome.
+      return !rootLevelTagNames(limit: 1).isEmpty
+    case .all, .priority:
+      return false
+    }
   }
 
   var selectedRootDueBucket: RootDueBucket? {
@@ -127,10 +137,38 @@ extension AppCoordinator {
 
   func rootDueSectionHeader(atVisibleIndex index: Int, visibleTasks: [CheckvistTask]) -> String? {
     guard shouldShowDueSectionHeaders, visibleTasks.indices.contains(index) else { return nil }
+    // Due-bucket section headers only apply to the matching portion of the list.
+    // Remainder tasks get their own header via `remainderSectionHeader`.
+    if let remainderStart = remainderStartIndex, index >= remainderStart { return nil }
     let currentBucket = rootDueBucket(for: visibleTasks[index])
     if index == 0 { return currentBucket.title }
     let previousBucket = rootDueBucket(for: visibleTasks[index - 1])
     return previousBucket == currentBucket ? nil : currentBucket.title
+  }
+
+  /// Exposes the boundary (if any) at which non-matching "remainder" tasks begin
+  /// within `visibleTasks`. Computed by `TaskVisibilityEngine` for due/tags/priority
+  /// root views.
+  var remainderStartIndex: Int? {
+    taskListViewModel.ensureVisibleTasksCacheValid()
+    return taskListViewModel.cache.remainderStartIndex
+  }
+
+  /// Returns the header title to display just before the task at the given index, or
+  /// nil when no remainder header belongs there. Only the boundary index produces a
+  /// header. Other tasks return nil.
+  func remainderSectionHeader(atVisibleIndex index: Int) -> String? {
+    guard let start = remainderStartIndex, index == start else { return nil }
+    switch rootTaskView {
+    case .due:
+      return start == 0 ? "All tasks" : "Other tasks"
+    case .tags:
+      return start == 0 ? "Untagged" : "Other tasks"
+    case .priority:
+      return start == 0 ? "Unprioritised" : "Other tasks"
+    case .all, .kanban:
+      return nil
+    }
   }
 
   func rootDueSectionCount(in visibleTasks: [CheckvistTask]) -> Int {
@@ -155,6 +193,11 @@ extension AppCoordinator {
   func priorityRank(for task: CheckvistTask) -> Int? {
     taskListViewModel.ensureVisibleTasksCacheValid()
     return taskListViewModel.cache.priorityRank[task.id]
+  }
+
+  func priorityPath(for task: CheckvistTask) -> String? {
+    taskListViewModel.ensureVisibleTasksCacheValid()
+    return taskListViewModel.cache.priorityPath[task.id]
   }
 
   var isSearchFilterActive: Bool { quickEntry.isSearchFilterActive }
@@ -206,11 +249,22 @@ extension AppCoordinator {
   }
 
   func setRootTaskView(_ view: RootTaskView) {
+    // Capture tree position BEFORE changing rootTaskView — `currentTask` dispatches
+    // on `rootTaskView` and would otherwise return the kanban selection, not the
+    // task the user had highlighted in the source view.
+    let capturedParentId = currentParentId
+    let capturedTask = currentTask
     rootTaskView = view
-    if currentParentId != 0 {
-      currentParentId = 0
+    // Preserve drill-in across view switches. Previously we reset currentParentId
+    // to 0 which lost the user's subtask scope whenever they flipped tabs.
+    // We also try to keep the same task selected by re-finding it in the new view.
+    if let task = capturedTask,
+      let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id })
+    {
+      currentSiblingIndex = newIndex
+    } else {
+      currentSiblingIndex = 0
     }
-    currentSiblingIndex = 0
     if view != .due {
       selectedRootDueBucket = nil
     }
@@ -222,8 +276,16 @@ extension AppCoordinator {
       kanban.kanbanFilterSubtasks = false
       kanban.kanbanFilterParentId = nil
     } else {
-      // Clear stale root-scope focus so column navigation works immediately.
-      rootScopeFocusLevel = 0
+      // Propagate the user's current tree position into the kanban filter so
+      // switching views shows the same scope the user was browsing.
+      let inheritedParentId: Int? = capturedParentId == 0 ? nil : capturedParentId
+      kanban.kanbanFilterParentId = inheritedParentId
+      kanban.kanbanFilterSubtasks = false
+      kanban.kanbanFilterTag = ""
+      // Seed the kanban selection from the task the user had highlighted.
+      if let task = capturedTask {
+        kanban.kanbanSelectedTaskId = task.id
+      }
       // Ensure a valid selection when entering kanban. Search ALL columns for the
       // selected task — not just the focused column — since the task may have moved
       // to a different column while we were in another view.
@@ -345,18 +407,23 @@ extension AppCoordinator {
   }
 
   @MainActor func setPriorityForCurrentTask(_ rank: Int) {
-    guard (1...TaskRepository.maxPriorityRank).contains(rank), let task = currentTask else {
-      return
-    }
+    guard rank >= 1, let task = currentTask else { return }
 
-    var updated = repository.priorityTaskIds
-    updated.removeAll { $0 == task.id }
-    let insertIndex = min(max(rank - 1, 0), updated.count)
-    updated.insert(task.id, at: insertIndex)
-    if updated.count > TaskRepository.maxPriorityRank {
-      updated = Array(updated.prefix(TaskRepository.maxPriorityRank))
+    let scopeId = task.parentId ?? 0
+    var byParent = repository.priorityTaskIdsByParentId
+    // Remove this task from any existing scope it may have previously lived in.
+    for (pid, ids) in byParent {
+      let filtered = ids.filter { $0 != task.id }
+      if filtered.count != ids.count {
+        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
+        else { byParent[pid] = filtered }
+      }
     }
-    savePriorityQueue(updated)
+    var scope = byParent[scopeId] ?? []
+    let insertIndex = min(max(rank - 1, 0), scope.count)
+    scope.insert(task.id, at: insertIndex)
+    byParent[scopeId] = scope
+    savePriorityQueue(byParent)
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
@@ -367,17 +434,19 @@ extension AppCoordinator {
   @MainActor func sendCurrentTaskToPriorityBack() {
     guard let task = currentTask else { return }
 
-    var updated = repository.priorityTaskIds
-    let wasPrioritized = updated.contains(task.id)
-    updated.removeAll { $0 == task.id }
-
-    if !wasPrioritized && updated.count >= TaskRepository.maxPriorityRank {
-      errorMessage = "Priority slots full (1-9). Press 1-9 to replace one."
-      return
+    let scopeId = task.parentId ?? 0
+    var byParent = repository.priorityTaskIdsByParentId
+    for (pid, ids) in byParent {
+      let filtered = ids.filter { $0 != task.id }
+      if filtered.count != ids.count {
+        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
+        else { byParent[pid] = filtered }
+      }
     }
-
-    updated.append(task.id)
-    savePriorityQueue(updated)
+    var scope = byParent[scopeId] ?? []
+    scope.append(task.id)
+    byParent[scopeId] = scope
+    savePriorityQueue(byParent)
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
@@ -387,8 +456,16 @@ extension AppCoordinator {
 
   @MainActor func clearPriorityForCurrentTask() {
     guard let task = currentTask else { return }
-    guard repository.priorityTaskIds.contains(task.id) else { return }
-    savePriorityQueue(repository.priorityTaskIds.filter { $0 != task.id })
+    guard repository.prioritizedTaskIds.contains(task.id) else { return }
+    var byParent = repository.priorityTaskIdsByParentId
+    for (pid, ids) in byParent {
+      let filtered = ids.filter { $0 != task.id }
+      if filtered.count != ids.count {
+        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
+        else { byParent[pid] = filtered }
+      }
+    }
+    savePriorityQueue(byParent)
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {

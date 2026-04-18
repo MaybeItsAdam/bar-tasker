@@ -19,6 +19,7 @@ import Observation
 
   @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
   @ObservationIgnored var integrationFlagsProvider: (() -> (obsidian: Bool, googleCalendar: Bool, mcp: Bool))?
+  @ObservationIgnored var shortcutBindingProvider: ((ConfigurableShortcutAction) -> String)?
 
   static let commandSuggestions: [CommandSuggestion] =
     CommandEngine.suggestions.map {
@@ -54,15 +55,66 @@ import Observation
       }
     }
 
-    return filtered.map {
-      .init(
-        label: $0.label,
-        command: $0.command,
-        preview: $0.preview,
-        keybind: $0.keybind,
-        submitImmediately: $0.submitImmediately
+    return filtered.map { suggestion in
+      let keybind = resolvedKeybindLabel(for: suggestion)
+      return CommandSuggestion(
+        label: suggestion.label,
+        command: suggestion.command,
+        preview: suggestion.preview,
+        keybind: keybind,
+        submitImmediately: suggestion.submitImmediately
       )
     }
+  }
+
+  private func resolvedKeybindLabel(for suggestion: CommandPaletteSuggestion) -> String? {
+    guard
+      let raw = suggestion.boundActionRawValue,
+      let action = ConfigurableShortcutAction(rawValue: raw),
+      let provider = shortcutBindingProvider
+    else { return suggestion.keybind }
+    let binding = provider(action).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !binding.isEmpty else { return suggestion.keybind }
+    return Self.formatBinding(binding)
+  }
+
+  /// Formats a comma-separated raw binding string (e.g. "cmd+k,;,shift+;") into a
+  /// compact display like "⌘K · ;" suitable for the palette row.
+  static func formatBinding(_ raw: String) -> String {
+    raw.split(separator: ",")
+      .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .map(prettifyToken)
+      .joined(separator: " · ")
+  }
+
+  private static func prettifyToken(_ token: String) -> String {
+    let parts = token.lowercased().split(separator: "+")
+    var modifiers = ""
+    var key = ""
+    for part in parts {
+      switch part {
+      case "cmd": modifiers += "⌘"
+      case "shift": modifiers += "⇧"
+      case "ctrl": modifiers += "⌃"
+      case "option", "opt", "alt": modifiers += "⌥"
+      default: key = String(part)
+      }
+    }
+    let prettyKey: String
+    switch key {
+    case "left": prettyKey = "←"
+    case "right": prettyKey = "→"
+    case "up": prettyKey = "↑"
+    case "down": prettyKey = "↓"
+    case "enter", "return": prettyKey = "⏎"
+    case "tab": prettyKey = "⇥"
+    case "escape", "esc": prettyKey = "⎋"
+    case "space": prettyKey = "␣"
+    case "delete", "del": prettyKey = "⌫"
+    default: prettyKey = key.count == 1 ? key.uppercased() : key.capitalized
+    }
+    return modifiers + prettyKey
   }
 
   func selectNextCommandSuggestion(

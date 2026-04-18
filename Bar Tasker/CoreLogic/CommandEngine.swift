@@ -16,6 +16,24 @@ struct CommandPaletteSuggestion: Equatable, Sendable {
   let preview: String
   let keybind: String?
   let submitImmediately: Bool
+  /// If set, the live keybinding is read from preferences for this action and overrides `keybind`.
+  let boundActionRawValue: String?
+
+  init(
+    label: String,
+    command: String,
+    preview: String,
+    keybind: String?,
+    submitImmediately: Bool,
+    boundActionRawValue: String? = nil
+  ) {
+    self.label = label
+    self.command = command
+    self.preview = preview
+    self.keybind = keybind
+    self.submitImmediately = submitImmediately
+    self.boundActionRawValue = boundActionRawValue
+  }
 }
 
 enum Command: Equatable, Sendable {
@@ -62,6 +80,18 @@ enum Command: Equatable, Sendable {
   case refreshMCPPath
   case copyMCPClientConfig
   case openMCPGuide
+  case switchTab(String)
+  case cycleTab(Int)
+  case cycleFilter(Int)
+  case quickAdd
+  case kanbanMove(Int)
+  case kanbanFocus(Int)
+  case kanbanShowInAll
+  case kanbanDrillIn
+  case kanbanPopOut
+  case toggleContext
+  case editAtStart
+  case openCommandPalette
   case unknown(String)
 }
 
@@ -116,8 +146,9 @@ enum CommandEngine {
       label: "Remove tag", command: "untag ", preview: "Remove #tag from task", keybind: "gu",
       submitImmediately: false),
     .init(
-      label: "Set priority", command: "priority 1",
-      preview: "Set selected task priority (1-9)", keybind: "1-9", submitImmediately: false),
+      label: "Set priority", command: "priority ",
+      preview: "Set priority rank within parent scope (any number)", keybind: "1-9",
+      submitImmediately: false),
     .init(
       label: "Send to priority back", command: "priority back",
       preview: "Move selected task to end of priority list", keybind: "=",
@@ -252,6 +283,82 @@ enum CommandEngine {
     .init(
       label: "Exit to parent", command: "exit parent", preview: "Go up one level",
       keybind: "h / ←", submitImmediately: true),
+    .init(
+      label: "Switch to All tab", command: "tab all",
+      preview: "Show all tasks", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "rootTabAll"),
+    .init(
+      label: "Switch to Due tab", command: "tab due",
+      preview: "Show tasks grouped by due bucket", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "rootTabDue"),
+    .init(
+      label: "Switch to Tags tab", command: "tab tags",
+      preview: "Show tasks filtered by tag", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "rootTabTags"),
+    .init(
+      label: "Switch to Priority tab", command: "tab priority",
+      preview: "Show prioritised tasks", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "rootTabPriority"),
+    .init(
+      label: "Switch to Kanban tab", command: "tab kanban",
+      preview: "Show the kanban board", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "rootTabKanban"),
+    .init(
+      label: "Cycle root tab next", command: "cycle tab next",
+      preview: "Move to the next root tab", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "rootCycleTabNext"),
+    .init(
+      label: "Cycle root tab previous", command: "cycle tab previous",
+      preview: "Move to the previous root tab", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "rootCycleTabPrevious"),
+    .init(
+      label: "Cycle root filter next", command: "cycle filter next",
+      preview: "Move to the next bucket / tag in the current view", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "rootCycleFilterNext"),
+    .init(
+      label: "Cycle root filter previous", command: "cycle filter previous",
+      preview: "Move to the previous bucket / tag in the current view", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "rootCycleFilterPrevious"),
+    .init(
+      label: "Quick add task", command: "quick add",
+      preview: "Open the configured quick add prompt", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "quickAdd"),
+    .init(
+      label: "Edit task at start", command: "edit start",
+      preview: "Open the editor with cursor at the beginning", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "editTaskAtStart"),
+    .init(
+      label: "Toggle breadcrumb context", command: "toggle context",
+      preview: "Show or hide the breadcrumb path on tasks", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "sequenceToggleContext"),
+    .init(
+      label: "Kanban: move task to next column", command: "kanban move right",
+      preview: "Push the selected task one column right", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "kanbanMoveRight"),
+    .init(
+      label: "Kanban: move task to previous column", command: "kanban move left",
+      preview: "Push the selected task one column left", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "kanbanMoveLeft"),
+    .init(
+      label: "Kanban: focus next column", command: "kanban focus right",
+      preview: "Move column focus right without moving the task", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "kanbanFocusRight"),
+    .init(
+      label: "Kanban: focus previous column", command: "kanban focus left",
+      preview: "Move column focus left without moving the task", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "kanbanFocusLeft"),
+    .init(
+      label: "Kanban: show selected in All view", command: "kanban show in all",
+      preview: "Open the selected kanban task in the All-tab tree", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "kanbanShowInAll"),
+    .init(
+      label: "Kanban: drill into selected task", command: "kanban drill in",
+      preview: "Filter kanban to the selected task's children", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "kanbanEnterTaskChildren"),
+    .init(
+      label: "Kanban: pop scope to parent", command: "kanban pop out",
+      preview: "Move kanban scope up one level", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "kanbanExitToTaskParent"),
   ]
 
   static func filteredSuggestions(query: String, limit: Int? = nil) -> [CommandPaletteSuggestion]
@@ -331,7 +438,7 @@ enum CommandEngine {
       if raw == "clear" {
         return .clearPriority
       }
-      if let rank = Int(raw), (1...9).contains(rank) {
+      if let rank = Int(raw), rank >= 1 {
         return .priority(rank)
       }
     }
@@ -380,6 +487,28 @@ enum CommandEngine {
     }
     if cmd == "open mcp guide" || cmd == "mcp guide" {
       return .openMCPGuide
+    }
+    if cmd.hasPrefix("tab ") {
+      return .switchTab(String(cmd.dropFirst(4)).trimmingCharacters(in: .whitespaces))
+    }
+    if cmd == "cycle tab next" { return .cycleTab(1) }
+    if cmd == "cycle tab previous" || cmd == "cycle tab prev" { return .cycleTab(-1) }
+    if cmd == "cycle filter next" { return .cycleFilter(1) }
+    if cmd == "cycle filter previous" || cmd == "cycle filter prev" { return .cycleFilter(-1) }
+    if cmd == "quick add" { return .quickAdd }
+    if cmd == "kanban move right" || cmd == "kanban right" { return .kanbanMove(1) }
+    if cmd == "kanban move left" || cmd == "kanban left" { return .kanbanMove(-1) }
+    if cmd == "kanban focus right" { return .kanbanFocus(1) }
+    if cmd == "kanban focus left" { return .kanbanFocus(-1) }
+    if cmd == "kanban show in all" || cmd == "kanban show all" { return .kanbanShowInAll }
+    if cmd == "kanban drill in" || cmd == "kanban enter" { return .kanbanDrillIn }
+    if cmd == "kanban pop out" || cmd == "kanban pop" || cmd == "kanban exit" {
+      return .kanbanPopOut
+    }
+    if cmd == "toggle context" { return .toggleContext }
+    if cmd == "edit start" { return .editAtStart }
+    if cmd == "command palette" || cmd == "open palette" || cmd == "palette" {
+      return .openCommandPalette
     }
     return .unknown(input)
   }

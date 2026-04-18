@@ -52,6 +52,9 @@ extension AppCoordinator {
         integrations.mcpIntegrationEnabled
       )
     }
+    quickEntry.shortcutBindingProvider = { [weak self] action in
+      self?.preferences.shortcutBinding(for: action) ?? action.defaultBinding
+    }
     timer.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
     kanban.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
     startDates.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
@@ -98,8 +101,8 @@ extension AppCoordinator {
 
   // MARK: - Priority Queue (forwarding to repository)
 
-  func savePriorityQueue(_ queue: [Int]) {
-    repository.savePriorityQueue(queue)
+  func savePriorityQueue(_ queues: [Int: [Int]]) {
+    repository.savePriorityQueue(queues)
   }
 
   @MainActor func removeTasksFromPriorityQueue(_ taskIds: Set<Int>) {

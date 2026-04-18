@@ -189,6 +189,42 @@ struct KeyboardShortcutRouter {
       }
     }
 
+    // ] / [ - enter or exit the selected task as the current scope.
+    // Works in every view: kanban uses its scoped drill, other views use the
+    // shared parent-id navigation so the keybind behaves consistently.
+    if !isFocused && !rootScopeFocused && matches(.kanbanEnterTaskChildren) {
+      if !isRepeat {
+        if manager.rootTaskView == .kanban {
+          manager.kanban.enterSelectedTaskAsScope()
+        } else {
+          manager.enterChildren()
+          if !manager.quickEntry.searchText.isEmpty {
+            manager.quickEntry.searchText = ""
+            manager.quickEntry.quickEntryMode = .search
+            manager.quickEntry.isQuickEntryFocused = false
+          }
+        }
+        updateTitle()
+      }
+      return true
+    }
+    if !isFocused && !rootScopeFocused && matches(.kanbanExitToTaskParent) {
+      if !isRepeat {
+        if manager.rootTaskView == .kanban {
+          manager.kanban.exitToParentScope()
+        } else {
+          if !manager.quickEntry.searchText.isEmpty {
+            manager.quickEntry.searchText = ""
+            manager.quickEntry.quickEntryMode = .search
+            manager.quickEntry.isQuickEntryFocused = false
+          }
+          manager.exitToParent()
+        }
+        updateTitle()
+      }
+      return true
+    }
+
     // Cmd+↑/↓ - reorder (ignore key repeat to prevent rapid-fire API calls).
     if matches(.moveTaskDown) {
       if !isRepeat {
@@ -578,7 +614,7 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    // t - toggle timer.
+    // p - toggle timer on current task.
     if !isFocused && matches(.toggleTimer) {
       if !isRepeat && manager.timer.timerIsEnabled {
         if let task = manager.currentTask {
@@ -588,7 +624,7 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    // p - pause/resume timer.
+    // shift+p - pause/resume timer.
     if !isFocused && matches(.toggleTimerPause) {
       if !isRepeat && manager.timer.timerIsEnabled {
         if manager.timer.timerRunning { manager.timer.pauseTimer() } else { manager.timer.resumeTimer() }

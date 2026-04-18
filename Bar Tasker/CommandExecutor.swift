@@ -97,6 +97,81 @@ final class CommandExecutor {
     case .exitParent:
       manager.exitToParent()
       return
+    case .switchTab(let raw):
+      let view: RootTaskView?
+      switch raw {
+      case "all": view = .all
+      case "due": view = .due
+      case "tags": view = .tags
+      case "priority", "prio": view = .priority
+      case "kanban", "board": view = .kanban
+      default: view = nil
+      }
+      if let view {
+        manager.setRootTaskView(view)
+      } else {
+        manager.errorMessage = "Unknown tab: \(raw). Try: tab all|due|tags|priority|kanban"
+      }
+      return
+    case .cycleTab(let direction):
+      manager.cycleRootTaskView(direction: direction)
+      return
+    case .cycleFilter(let direction):
+      manager.cycleRootScopeFilter(direction: direction)
+      return
+    case .quickAdd:
+      _ = manager.beginQuickAddEntry()
+      return
+    case .kanbanMove(let direction):
+      manager.rootTaskView = .kanban
+      manager.moveCurrentTaskToKanbanColumn(direction: direction)
+      return
+    case .kanbanFocus(let direction):
+      manager.rootTaskView = .kanban
+      manager.kanban.focusKanbanColumn(direction: direction)
+      return
+    case .kanbanShowInAll:
+      guard let task = manager.kanban.currentKanbanTask else {
+        manager.errorMessage = "No kanban task selected."
+        return
+      }
+      let childCounts = manager.childCountByTaskId()
+      manager.rootTaskView = .all
+      manager.rootScopeFocusLevel = 0
+      if childCounts[task.id, default: 0] > 0 {
+        manager.currentParentId = task.id
+        manager.currentSiblingIndex = 0
+      } else {
+        manager.navigateTo(task: task)
+      }
+      return
+    case .kanbanDrillIn:
+      manager.rootTaskView = .kanban
+      manager.kanban.enterSelectedTaskAsScope()
+      return
+    case .kanbanPopOut:
+      manager.rootTaskView = .kanban
+      manager.kanban.exitToParentScope()
+      return
+    case .toggleContext:
+      manager.preferences.showTaskBreadcrumbContext.toggle()
+      return
+    case .editAtStart:
+      guard let task = manager.currentTask else {
+        manager.errorMessage = "No task selected."
+        return
+      }
+      manager.quickEntry.quickEntryMode = .editTask
+      manager.quickEntry.editCursorAtEnd = false
+      manager.quickEntry.quickEntryText = task.content
+      manager.quickEntry.isQuickEntryFocused = true
+      return
+    case .openCommandPalette:
+      manager.quickEntry.quickEntryMode = .command
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.commandSuggestionIndex = 0
+      manager.quickEntry.isQuickEntryFocused = true
+      return
     case .unknown(let raw):
       manager.errorMessage = "Unknown command: \(raw)"
       return

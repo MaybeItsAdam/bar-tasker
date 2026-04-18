@@ -14,6 +14,7 @@ protocol KanbanTaskDataSource: AnyObject {
   func ensureVisibleTasksCacheValid()
   func rootDueBucket(for task: CheckvistTask) -> RootDueBucket
   func priorityRank(for task: CheckvistTask) -> Int?
+  func priorityPath(for task: CheckvistTask) -> String?
 }
 
 /// Describes the outcome of a kanban move so the coordinator can apply the actual task mutation.
@@ -39,7 +40,9 @@ enum KanbanMoveOutcome {
   }
   /// Task ID of the selected card in kanban view. Decoupled from currentSiblingIndex
   /// so selection survives task-list refreshes and view switches.
-  var kanbanSelectedTaskId: Int? = nil
+  var kanbanSelectedTaskId: Int? = nil {
+    didSet { syncFilterToSelection() }
+  }
   /// Active tag filter in kanban view (empty = no filter)
   var kanbanFilterTag: String = "" {
     didSet { onCacheRelevantChange?() }
@@ -472,6 +475,77 @@ enum KanbanMoveOutcome {
       }
     }
     return kanbanFocusedColumnIndex
+  }
+
+  // MARK: - Auto-sync filter with selection
+
+  /// Keeps `kanbanFilterParentId` in step with the selected task's parent, so the
+  /// visible cards always represent siblings of whatever is currently selected.
+  private func syncFilterToSelection() {
+    guard let ds = dataSource, let selectedId = kanbanSelectedTaskId else { return }
+    guard let task = ds.cache.taskById[selectedId] else { return }
+    let parentId = task.parentId ?? 0
+    let desired: Int? = parentId == 0 ? nil : parentId
+    if kanbanFilterParentId != desired {
+      kanbanFilterParentId = desired
+    }
+  }
+
+  // MARK: - Scope drill in/out
+
+  /// Drills the kanban into the selected task's subtree so its children become
+  /// the new sibling-pool. Selection moves to the first child if any.
+  @MainActor func enterSelectedTaskAsScope() {
+    guard let task = currentKanbanTask else { return }
+    let columns = kanbanColumns
+    kanbanFilterParentId = task.id
+    // Pick the first task in the first non-empty column for the new scope.
+    for (idx, col) in columns.enumerated() {
+      let colTasks = tasksForKanbanColumn(col, allColumns: columns)
+      if let first = colTasks.first {
+        kanbanFocusedColumnIndex = idx
+        kanbanSelectedTaskId = first.id
+        dataSource?.currentSiblingIndex = 0
+        return
+      }
+    }
+    // No children — clear selection but keep the drilled scope so user sees an empty board.
+    kanbanSelectedTaskId = nil
+    dataSource?.currentSiblingIndex = 0
+  }
+
+  /// Pops the kanban scope up one level. If we're at root, restores selection to
+  /// what was previously the parent task (so navigation feels reversible).
+  @MainActor func exitToParentScope() {
+    guard let ds = dataSource else { return }
+    guard let currentFilterId = kanbanFilterParentId else { return }
+    let parentTask = ds.cache.taskById[currentFilterId]
+    let newParentId = parentTask?.parentId ?? 0
+    kanbanFilterParentId = newParentId == 0 ? nil : newParentId
+
+    let columns = kanbanColumns
+    // Re-select the task we just popped out of so the user has context.
+    if let parentTask {
+      for (idx, col) in columns.enumerated() {
+        let colTasks = tasksForKanbanColumn(col, allColumns: columns)
+        if colTasks.contains(where: { $0.id == parentTask.id }) {
+          kanbanFocusedColumnIndex = idx
+          kanbanSelectedTaskId = parentTask.id
+          ds.currentSiblingIndex = colTasks.firstIndex(where: { $0.id == parentTask.id }) ?? 0
+          return
+        }
+      }
+    }
+    // Fallback: pick first task in first non-empty column.
+    for (idx, col) in columns.enumerated() {
+      let colTasks = tasksForKanbanColumn(col, allColumns: columns)
+      if let first = colTasks.first {
+        kanbanFocusedColumnIndex = idx
+        kanbanSelectedTaskId = first.id
+        ds.currentSiblingIndex = 0
+        return
+      }
+    }
   }
 
   // MARK: - Scope navigation helpers

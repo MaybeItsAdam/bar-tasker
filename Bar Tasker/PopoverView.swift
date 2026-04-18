@@ -413,6 +413,17 @@ struct PopoverView: View {
     .onAppear {
       manager.presentOnboardingDialogIfNeeded()
     }
+    // Watch the composer visibility from a persistent parent so that when navigating
+    // out of an empty scope (which unmounts `emptyStateView`), we still get a chance
+    // to drop the auto-activated .addSibling mode. Otherwise the empty-list add bar
+    // persists into scopes that already have tasks.
+    .onChange(of: shouldShowEmptyListComposer) { _, isVisible in
+      if isVisible {
+        activateEmptyListComposerModeIfNeeded()
+      } else {
+        deactivateEmptyListComposerModeIfNeeded()
+      }
+    }
   }
 
   private var isAddMode: Bool {
@@ -423,9 +434,18 @@ struct PopoverView: View {
     manager.isRootLevel && manager.shouldShowRootScopeSection && manager.rootTaskView != .all
   }
 
+  /// True when the user has zero tasks anywhere — distinct from "filter excludes all tasks".
+  private var hasNoTasksAtAll: Bool {
+    manager.tasks.isEmpty
+  }
+
   private var emptyStateTitle: String {
     if manager.isSearchFilterActive {
       return "No matches"
+    }
+
+    if hasNoTasksAtAll {
+      return "No tasks yet"
     }
 
     if isRootFilteredView {
@@ -455,6 +475,12 @@ struct PopoverView: View {
       return "Refine or clear your search to see tasks."
     }
 
+    if hasNoTasksAtAll {
+      return manager.listId.isEmpty
+        ? "Connect Checkvist in Preferences, then add your first task below."
+        : "Add your first task below."
+    }
+
     guard isRootFilteredView else { return nil }
 
     switch manager.rootTaskView {
@@ -478,8 +504,8 @@ struct PopoverView: View {
   }
 
   private var shouldShowEmptyListComposer: Bool {
-    manager.visibleTasks.isEmpty
-      && !isRootFilteredView
+    let baseConditions =
+      manager.visibleTasks.isEmpty
       && !manager.isLoading
       && !manager.quickEntry.pendingDeleteConfirmation
       && manager.activeOnboardingDialog == nil
@@ -487,6 +513,11 @@ struct PopoverView: View {
       && manager.quickEntry.quickEntryMode != .command
       && manager.quickEntry.quickEntryMode != .quickAddDefault
       && manager.quickEntry.quickEntryMode != .quickAddSpecific
+
+    guard baseConditions else { return false }
+    // Always offer the composer when there are zero tasks — otherwise the user
+    // gets stranded on a filtered tab (default is .due) with no way in.
+    return !isRootFilteredView || hasNoTasksAtAll
   }
 
   private var shouldShowBottomPrompt: Bool {
@@ -858,38 +889,9 @@ struct PopoverView: View {
         }
       } else if manager.rootTaskView == .kanban {
         let tags = manager.rootLevelTagNames(limit: 30)
-        let hasParent = manager.currentParentId != 0
-        Group {
+        if !tags.isEmpty {
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-              rootScopeChip(
-                title: "All tasks",
-                isSelected: manager.kanban.kanbanFilterTag.isEmpty && !manager.kanban.kanbanFilterSubtasks
-                  && manager.kanban.kanbanFilterParentId == nil
-              ) {
-                manager.kanban.kanbanFilterTag = ""
-                manager.kanban.kanbanFilterSubtasks = false
-                manager.kanban.kanbanFilterParentId = nil
-              }
-
-              if hasParent {
-                rootScopeSeparator()
-                rootScopeChip(
-                  title: "Subtasks",
-                  isSelected: manager.kanban.kanbanFilterSubtasks
-                ) {
-                  manager.kanban.kanbanFilterSubtasks.toggle()
-                  if manager.kanban.kanbanFilterSubtasks {
-                    manager.kanban.kanbanFilterTag = ""
-                    manager.kanban.kanbanFilterParentId = nil
-                  }
-                }
-              }
-
-              if !tags.isEmpty {
-                rootScopeSeparator()
-              }
-
               ForEach(Array(tags.enumerated()), id: \.element) { index, tag in
                 if index > 0 {
                   rootScopeSeparator()
@@ -899,24 +901,20 @@ struct PopoverView: View {
                   isSelected: manager.kanban.kanbanFilterTag == tag
                 ) {
                   manager.kanban.kanbanFilterTag = manager.kanban.kanbanFilterTag == tag ? "" : tag
-                  if !manager.kanban.kanbanFilterTag.isEmpty {
-                    manager.kanban.kanbanFilterSubtasks = false
-                    manager.kanban.kanbanFilterParentId = nil
-                  }
                 }
               }
             }
           }
-        }
-        .background(themeColor(.panelSurface))
-        .overlay {
-          Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
-        }
-        .overlay(alignment: .bottom) {
-          if manager.rootScopeFocusLevel == 2 {
-            Rectangle()
-              .fill(themeColor(.focusRing))
-              .frame(height: 2)
+          .background(themeColor(.panelSurface))
+          .overlay {
+            Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
+          }
+          .overlay(alignment: .bottom) {
+            if manager.rootScopeFocusLevel == 2 {
+              Rectangle()
+                .fill(themeColor(.focusRing))
+                .frame(height: 2)
+            }
           }
         }
       } else if manager.rootTaskView == .tags {
@@ -1077,6 +1075,9 @@ struct PopoverView: View {
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(Array(visibleTasks.enumerated()), id: \.element.id) { index, task in
+                if let remainderHeader = manager.remainderSectionHeader(atVisibleIndex: index) {
+                  dueSectionHeader(remainderHeader)
+                }
                 if let sectionHeader = manager.rootDueSectionHeader(
                   atVisibleIndex: index, visibleTasks: visibleTasks)
                 {
@@ -1155,11 +1156,6 @@ struct PopoverView: View {
     .frame(minHeight: 150)
     .onAppear {
       activateEmptyListComposerModeIfNeeded()
-    }
-    .onChange(of: shouldShowEmptyListComposer) { _, isVisible in
-      if isVisible {
-        activateEmptyListComposerModeIfNeeded()
-      }
     }
   }
 
@@ -1625,6 +1621,17 @@ struct PopoverView: View {
     }
   }
 
+  /// When the empty-list composer becomes inactive (e.g., user switches to a tab that
+  /// has tasks), drop the .addSibling mode we activated for it so the quick-entry bar
+  /// doesn't stay open with empty text.
+  func deactivateEmptyListComposerModeIfNeeded() {
+    guard manager.quickEntry.quickEntryMode == .addSibling,
+      manager.quickEntry.quickEntryText.isEmpty
+    else { return }
+    manager.quickEntry.quickEntryMode = .search
+    manager.quickEntry.isQuickEntryFocused = false
+  }
+
   func breadcrumbPath(for task: CheckvistTask, includeCurrentParent: Bool = false) -> String {
     var parts: [String] = []
     var pid = task.parentId ?? 0
@@ -1756,7 +1763,7 @@ struct PopoverView: View {
     let startLabel = manager.startDates.startDateLabel(for: task)
     let recurrenceRule = manager.recurrenceRule(for: task)
     if !metadataTokens.isEmpty
-      || manager.priorityRank(for: task) != nil
+      || manager.priorityPath(for: task) != nil
       || (manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id))
       || task.due != nil
       || startLabel != nil
@@ -1766,8 +1773,8 @@ struct PopoverView: View {
         ForEach(metadataTokens, id: \.self) { token in
           metadataTokenBadge(token)
         }
-        if let priority = manager.priorityRank(for: task) {
-          priorityBadge(priority)
+        if let priorityLabel = manager.priorityPath(for: task) {
+          priorityBadge(priorityLabel)
         }
         if manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id) {
           timerBadge(
@@ -1790,8 +1797,8 @@ struct PopoverView: View {
   }
 
   @ViewBuilder
-  func priorityBadge(_ priority: Int) -> some View {
-    Text("P\(priority)")
+  func priorityBadge(_ priorityLabel: String) -> some View {
+    Text("P\(priorityLabel)")
       .font(.system(size: 10, weight: .semibold, design: .monospaced))
       .padding(.horizontal, 5)
       .padding(.vertical, 2)

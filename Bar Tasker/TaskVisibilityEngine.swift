@@ -23,29 +23,41 @@ struct TaskVisibilityEngine {
     let rootDueBucket: (CheckvistTask) -> RootDueBucket
   }
 
+  struct Result {
+    let tasks: [CheckvistTask]
+    /// Index at which non-matching "remainder" tasks begin. nil when the view
+    /// does not split matching / remainder.
+    let remainderStartIndex: Int?
+  }
+
   static func computeVisibleTasks(in context: Context) -> [CheckvistTask] {
+    compute(in: context).tasks
+  }
+
+  static func compute(in context: Context) -> Result {
     if context.isSearchFilterActive {
       var matches = context.tasks.filter { task in
         task.content.localizedCaseInsensitiveContains(context.searchText)
           && context.isDescendant(task, context.currentParentId)
       }
       matches.sort(by: context.compareByPriorityThenPosition)
-      return matches
+      return Result(tasks: matches, remainderStartIndex: nil)
     }
 
     let baseTasks: [CheckvistTask]
     if context.shouldShowRootScopeSection {
       if context.isRootLevel {
         switch context.rootTaskView {
-        case .all:
+        case .all, .due, .tags, .priority:
+          // Always scope to current-level siblings so hierarchy + breadcrumb
+          // navigation behave consistently across all root tabs. Filtered
+          // tabs reorder (matches first, then remainder) rather than flatten.
           baseTasks = context.currentLevelTasks
-        case .due, .tags, .priority:
-          baseTasks = context.tasks
         case .kanban:
           // Kanban has its own per-column task lists via tasksForKanbanColumn;
           // visibleTasks is unused in kanban mode, so return empty to prevent
           // any stale-index interaction with currentSiblingIndex.
-          return []
+          return Result(tasks: [], remainderStartIndex: nil)
         }
       } else {
         baseTasks = context.currentLevelTasks
@@ -71,38 +83,70 @@ struct TaskVisibilityEngine {
         case .all:
           result.sort(by: context.compareByPriorityThenPosition)
         case .due:
-          if let selectedRootDueBucket = context.selectedRootDueBucket {
-            result = result.filter { context.rootDueBucket($0) == selectedRootDueBucket }
-          } else {
-            result = result.filter { context.rootDueBucket($0) != .noDueDate }
+          let matchesFilter: (CheckvistTask) -> Bool = { task in
+            if let selectedRootDueBucket = context.selectedRootDueBucket {
+              return context.rootDueBucket(task) == selectedRootDueBucket
+            }
+            return context.rootDueBucket(task) != .noDueDate
           }
-          result.sort(by: context.compareByRootDueBucket)
+          var matching = result.filter(matchesFilter)
+          matching.sort(by: context.compareByRootDueBucket)
+          var remainder = result.filter { !matchesFilter($0) }
+          remainder.sort(by: context.compareByPriorityThenPosition)
+          let start = matching.count
+          return Result(
+            tasks: matching + remainder,
+            remainderStartIndex: remainder.isEmpty ? nil : start
+          )
         case .tags:
-          if context.selectedRootTag.isEmpty {
-            result = result.filter(context.hasAnyTag)
-          } else {
-            result = result.filter { context.hasTag($0, context.selectedRootTag) }
+          let matchesFilter: (CheckvistTask) -> Bool = { task in
+            if context.selectedRootTag.isEmpty { return context.hasAnyTag(task) }
+            return context.hasTag(task, context.selectedRootTag)
           }
-          result.sort(by: context.compareByPriorityThenPosition)
+          var matching = result.filter(matchesFilter)
+          matching.sort(by: context.compareByPriorityThenPosition)
+          var remainder = result.filter { !matchesFilter($0) }
+          remainder.sort(by: context.compareByPriorityThenPosition)
+          let start = matching.count
+          return Result(
+            tasks: matching + remainder,
+            remainderStartIndex: remainder.isEmpty ? nil : start
+          )
         case .priority:
-          result = result.filter { context.taskMatchesActiveRootScope($0) }
-          result.sort(by: context.compareByPriorityThenPosition)
+          var matching = result.filter { context.taskMatchesActiveRootScope($0) }
+          matching.sort(by: context.compareByPriorityThenPosition)
+          var remainder = result.filter { !context.taskMatchesActiveRootScope($0) }
+          remainder.sort(by: context.compareByPriorityThenPosition)
+          let start = matching.count
+          return Result(
+            tasks: matching + remainder,
+            remainderStartIndex: remainder.isEmpty ? nil : start
+          )
         case .kanban:
           break  // unreachable — kanban returns [] above
         }
       } else {
-        if let parentTask = context.taskById[context.currentParentId],
-          context.taskMatchesActiveRootScope(parentTask)
-        {
-          // Parent matches current scope: show all children.
-        } else {
-          result = result.filter(context.taskMatchesActiveRootScope)
+        // Sub-level in a filtered root tab: show matching children first, then
+        // the rest of the siblings as "remainder" so drilling into a subtask
+        // still surfaces its full hierarchy regardless of which tab is active.
+        switch context.rootTaskView {
+        case .all, .kanban:
+          result.sort(by: context.compareByPriorityThenPosition)
+        case .due, .tags, .priority:
+          var matching = result.filter(context.taskMatchesActiveRootScope)
+          matching.sort(by: context.compareByPriorityThenPosition)
+          var remainder = result.filter { !context.taskMatchesActiveRootScope($0) }
+          remainder.sort(by: context.compareByPriorityThenPosition)
+          let start = matching.count
+          return Result(
+            tasks: matching + remainder,
+            remainderStartIndex: remainder.isEmpty ? nil : start
+          )
         }
-        result.sort(by: context.compareByPriorityThenPosition)
       }
     } else {
       result.sort(by: context.compareByPriorityThenPosition)
     }
-    return result
+    return Result(tasks: result, remainderStartIndex: nil)
   }
 }

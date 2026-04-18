@@ -15,7 +15,8 @@ import Observation
   @ObservationIgnored let offlineSyncPlugin: OfflineTaskSyncPlugin
   @ObservationIgnored let navigationCoordinator = TaskNavigationCoordinator()
   @ObservationIgnored let reorderQueue = ReorderQueue()
-  @ObservationIgnored let priorityQueueStore: ListScopedTaskIDStore
+  @ObservationIgnored let priorityQueueStore: ListScopedPriorityStore
+  @ObservationIgnored let legacyPriorityQueueStore: ListScopedTaskIDStore
 
   // MARK: - Callbacks
 
@@ -26,8 +27,10 @@ import Observation
 
   // MARK: - Constants
 
+  /// Retained for legacy migration only. Hierarchical priorities have no cap.
   static let maxPriorityRank = 9
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
+  private static let scopedPriorityQueuesDefaultsKey = "priorityTaskIdsByParentIdByListId"
 
   // MARK: - Task Data
 
@@ -70,8 +73,14 @@ import Observation
 
   // MARK: - Priority
 
-  var priorityTaskIds: [Int] {
+  /// Per-parent priority queues. Key = parent task id (0 = root). No cap per scope.
+  var priorityTaskIdsByParentId: [Int: [Int]] {
     didSet { onCacheRelevantChange?() }
+  }
+
+  /// Convenience: flattened set of all prioritized task ids across every scope.
+  var prioritizedTaskIds: Set<Int> {
+    Set(priorityTaskIdsByParentId.values.flatMap { $0 })
   }
 
   // MARK: - Offline State
@@ -112,7 +121,10 @@ import Observation
     self.checkvistSyncPlugin = checkvistSyncPlugin
     self.localTaskStore = localTaskStore
     self.offlineSyncPlugin = OfflineTaskSyncPlugin(localStore: localTaskStore)
-    self.priorityQueueStore = ListScopedTaskIDStore(
+    self.priorityQueueStore = ListScopedPriorityStore(
+      defaultsKey: Self.scopedPriorityQueuesDefaultsKey
+    )
+    self.legacyPriorityQueueStore = ListScopedTaskIDStore(
       defaultsKey: Self.priorityQueuesDefaultsKey,
       maximumCount: Self.maxPriorityRank
     )
@@ -127,7 +139,11 @@ import Observation
     self.tasks =
       storedListId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? offlinePayload.openTasks : []
-    self.priorityTaskIds = priorityQueueStore.load(for: storedListId)
+    self.priorityTaskIdsByParentId = Self.loadScopedPriorities(
+      scoped: priorityQueueStore,
+      legacy: legacyPriorityQueueStore,
+      listId: storedListId
+    )
   }
   // swiftlint:enable function_body_length
 }
@@ -194,29 +210,77 @@ extension TaskRepository {
     return normalized
   }
 
-  func loadPriorityQueue(for listId: String) {
-    priorityTaskIds = priorityQueueStore.load(for: listId)
+  static func loadScopedPriorities(
+    scoped: ListScopedPriorityStore,
+    legacy: ListScopedTaskIDStore,
+    listId: String
+  ) -> [Int: [Int]] {
+    let byParent = scoped.load(for: listId)
+    if !byParent.isEmpty { return byParent }
+    let legacyFlat = legacy.load(for: listId)
+    guard !legacyFlat.isEmpty else { return [:] }
+    // Migrate the legacy flat queue to root-scope. We don't have parentId info at this
+    // point (tasks not loaded yet), so drop the legacy key into root. Re-scoping happens
+    // on the next reconcile once tasks are loaded.
+    return [0: legacyFlat]
   }
 
-  func savePriorityQueue(_ queue: [Int]) {
-    let normalized = Self.normalizedTaskIdQueue(queue, maximumCount: Self.maxPriorityRank)
-    priorityTaskIds = normalized
+  func loadPriorityQueue(for listId: String) {
+    priorityTaskIdsByParentId = Self.loadScopedPriorities(
+      scoped: priorityQueueStore,
+      legacy: legacyPriorityQueueStore,
+      listId: listId
+    )
+  }
+
+  func savePriorityQueue(_ queues: [Int: [Int]]) {
+    var normalized: [Int: [Int]] = [:]
+    for (parentId, ids) in queues {
+      let dedup = ListScopedPriorityStore.normalizedQueue(ids)
+      if !dedup.isEmpty { normalized[parentId] = dedup }
+    }
+    priorityTaskIdsByParentId = normalized
     guard !listId.isEmpty else { return }
     priorityQueueStore.save(normalized, for: listId)
   }
 
   @MainActor func removeTasksFromPriorityQueue(_ taskIds: Set<Int>) {
     guard !taskIds.isEmpty else { return }
-    let filtered = priorityTaskIds.filter { !taskIds.contains($0) }
-    guard filtered != priorityTaskIds else { return }
-    savePriorityQueue(filtered)
+    var changed = false
+    var updated = priorityTaskIdsByParentId
+    for (parentId, ids) in updated {
+      let filtered = ids.filter { !taskIds.contains($0) }
+      if filtered.count != ids.count {
+        changed = true
+        if filtered.isEmpty {
+          updated.removeValue(forKey: parentId)
+        } else {
+          updated[parentId] = filtered
+        }
+      }
+    }
+    guard changed else { return }
+    savePriorityQueue(updated)
   }
 
   @MainActor func reconcilePriorityQueueWithOpenTasks() {
+    let tasksById = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
     let openTaskIds = Set(tasks.map(\.id))
-    let filtered = priorityTaskIds.filter { openTaskIds.contains($0) }
-    if filtered != priorityTaskIds {
-      savePriorityQueue(filtered)
+    var updated: [Int: [Int]] = [:]
+    var changed = false
+    for (parentId, ids) in priorityTaskIdsByParentId {
+      for id in ids {
+        guard openTaskIds.contains(id) else { changed = true; continue }
+        // Re-scope each task under its *actual* current parent. This keeps stored
+        // queues coherent if a task was moved, and also normalizes legacy-migrated
+        // queues that all landed under root scope.
+        let actualParent = tasksById[id]?.parentId ?? 0
+        if actualParent != parentId { changed = true }
+        updated[actualParent, default: []].append(id)
+      }
+    }
+    if changed {
+      savePriorityQueue(updated)
     }
   }
 }

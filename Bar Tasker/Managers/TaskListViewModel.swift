@@ -54,10 +54,21 @@ import Observation
     cache.taskById = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
     cache.tagsByTaskId = TaskFilterEngine.extractTagsByTaskId(tasks: tasks)
     cache.rootDueBucket = TaskFilterEngine.computeRootDueBuckets(tasks: tasks)
-    cache.priorityRank = Dictionary(
-      uniqueKeysWithValues: repository.priorityTaskIds.enumerated().map { ($1, $0 + 1) })
+    var rankByTaskId: [Int: Int] = [:]
+    for (_, ids) in repository.priorityTaskIdsByParentId {
+      for (idx, id) in ids.enumerated() {
+        rankByTaskId[id] = idx + 1
+      }
+    }
+    cache.priorityRank = rankByTaskId
+    cache.priorityPath = Self.computePriorityPaths(
+      rankByTaskId: rankByTaskId,
+      taskById: cache.taskById
+    )
     cache.dirty = false
-    cache.visibleTasks = computeVisibleTasks()
+    let visibility = computeVisibility()
+    cache.visibleTasks = visibility.tasks
+    cache.remainderStartIndex = visibility.remainderStartIndex
     let nodes = tasks.map { TimerNode(id: $0.id, parentId: $0.parentId) }
     cache.childCount = TimerStore.childCountByTaskId(nodes: nodes)
     cache.rolledUpElapsed = TimerStore.rolledUpElapsedByTaskId(
@@ -65,7 +76,7 @@ import Observation
     cache.rootLevelTagNames = computeRootLevelTagNames(limit: 30)
   }
 
-  private func computeVisibleTasks() -> [CheckvistTask] {
+  private func computeVisibility() -> TaskVisibilityEngine.Result {
     let tasks = repository.tasks
     let currentParentId = navigationState.currentParentId
     let currentLevelTasks = tasks.filter { ($0.parentId ?? 0) == currentParentId }
@@ -73,7 +84,7 @@ import Observation
     let isSearchFilterActive = quickEntry.isSearchFilterActive
     let shouldShowRootScopeSection = !isSearchFilterActive
 
-    return TaskVisibilityEngine.computeVisibleTasks(
+    return TaskVisibilityEngine.compute(
       in: .init(
         tasks: tasks,
         currentLevelTasks: currentLevelTasks,
@@ -166,5 +177,35 @@ import Observation
     case .kanban:
       return true
     }
+  }
+
+  /// Computes a hierarchical priority path per ranked task. For each ranked task, walks
+  /// from the root of its ancestor chain down to itself; each ancestor contributes its
+  /// own rank-in-parent-scope or "=" if unranked in that scope.
+  static func computePriorityPaths(
+    rankByTaskId: [Int: Int],
+    taskById: [Int: CheckvistTask]
+  ) -> [Int: String] {
+    var result: [Int: String] = [:]
+    for taskId in rankByTaskId.keys {
+      guard let task = taskById[taskId] else { continue }
+      var chain: [CheckvistTask] = []
+      var cursor: CheckvistTask? = task
+      while let current = cursor {
+        chain.append(current)
+        if let pid = current.parentId, pid != 0, let parent = taskById[pid] {
+          cursor = parent
+        } else {
+          cursor = nil
+        }
+      }
+      chain.reverse()  // root-first
+      let segments: [String] = chain.map { node in
+        if let rank = rankByTaskId[node.id] { return String(rank) }
+        return "="
+      }
+      result[taskId] = segments.joined(separator: ".")
+    }
+    return result
   }
 }
