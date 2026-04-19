@@ -178,6 +178,10 @@ extension AppCoordinator {
   }
 
   func rolledUpElapsedByTaskId() -> [Int: TimeInterval] {
+    // Touch the observable dictionary so SwiftUI re-renders on per-second ticks.
+    // Without this, callers only read the @ObservationIgnored cache and never
+    // establish a dependency on `timer.timerByTaskId`.
+    _ = timer.timerByTaskId
     ensureVisibleTasksCacheValid()
     return cache.rolledUpElapsed
   }

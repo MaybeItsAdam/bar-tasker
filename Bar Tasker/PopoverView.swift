@@ -127,8 +127,8 @@ private struct MarqueeTextLine<Content: View>: View {
       ZStack(alignment: .leading) {
         if shouldMarquee {
           HStack(spacing: 28) {
-            marqueeContent
-            marqueeContent
+            scrollingContent
+            scrollingContent
           }
           .offset(x: xOffset)
           .onAppear {
@@ -136,14 +136,12 @@ private struct MarqueeTextLine<Content: View>: View {
             startMarqueeIfNeeded()
           }
         } else {
-          marqueeContent
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, alignment: .leading)
+          truncatingContent
         }
       }
       .mask(fadeMask)
       .contentShape(Rectangle())
+      .clipped()
       .onAppear {
         containerWidth = width
       }
@@ -158,8 +156,7 @@ private struct MarqueeTextLine<Content: View>: View {
     }
     .frame(height: 22)
     .background(
-      marqueeContent
-        .fixedSize(horizontal: true, vertical: false)
+      scrollingContent
         .hidden()
         .background(
           GeometryReader { proxy in
@@ -174,10 +171,19 @@ private struct MarqueeTextLine<Content: View>: View {
     )
   }
 
-  private var marqueeContent: some View {
+  // Used for marquee animation and background width measurement — unconstrained width.
+  private var scrollingContent: some View {
     content()
       .lineLimit(1)
       .fixedSize(horizontal: true, vertical: false)
+  }
+
+  // Used for static display — respects the container width and truncates with a tail.
+  private var truncatingContent: some View {
+    content()
+      .lineLimit(1)
+      .truncationMode(.tail)
+      .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private var fadeMask: some View {
