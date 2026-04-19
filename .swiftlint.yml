@@ -1,0 +1,61 @@
+excluded:
+  - .build
+  - build
+  - DerivedData
+  - FocusCore/.build
+  - "**/*.derived"
+
+disabled_rules:
+  # Style-only rules that fire widely across the project
+  - opening_brace
+  - trailing_comma
+  - void_return
+  - trailing_whitespace
+  - trailing_newline
+  - non_optional_string_data_conversion
+  - duplicate_imports
+  - todo
+
+identifier_name:
+  min_length:
+    warning: 1
+    error: 1
+  max_length:
+    warning: 60
+    error: 80
+
+type_name:
+  max_length:
+    warning: 60
+    error: 80
+
+line_length:
+  warning: 200
+  error: 400
+  ignores_comments: true
+  ignores_urls: true
+
+function_body_length:
+  warning: 150
+  error: 300
+
+file_length:
+  warning: 800
+  error: 1500
+  ignore_comment_only_lines: true
+
+type_body_length:
+  warning: 600
+  error: 1000
+
+function_parameter_count:
+  warning: 8
+  error: 12
+
+cyclomatic_complexity:
+  warning: 25
+  error: 50
+
+large_tuple:
+  warning: 5
+  error: 8
