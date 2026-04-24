@@ -117,7 +117,7 @@ import Observation
   var hasListSelection: Bool {
     !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
-  var isUsingOfflineStore: Bool { !checkvistIntegrationEnabled || !hasListSelection }
+  var isUsingOfflineStore: Bool { !checkvistIntegrationEnabled || !hasListSelection || !hasCredentials }
   var offlineOpenTaskCount: Int { localTaskStore.load().openTasks.count }
   var activeCredentials: CheckvistCredentials {
     CheckvistCredentials(username: username, remoteKey: remoteKey)
@@ -166,7 +166,7 @@ import Observation
     self.remoteKey = initialRemoteKey
     let isOfflineAtLaunch =
       !resolvedIntegrationEnabled
-      || storedListId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || storedListId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || initialRemoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     self.tasks = isOfflineAtLaunch ? offlinePayload.openTasks : []
     self.priorityTaskIdsByParentId = Self.loadScopedPriorities(
       scoped: priorityQueueStore,
