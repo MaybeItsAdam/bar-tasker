@@ -13,6 +13,7 @@ protocol KanbanTaskDataSource: AnyObject {
   var cache: CacheState { get }
   func ensureVisibleTasksCacheValid()
   func rootDueBucket(for task: CheckvistTask) -> RootDueBucket
+  func absolutePriorityRank(for task: CheckvistTask) -> Int?
   func priorityRank(for task: CheckvistTask) -> Int?
   func priorityPath(for task: CheckvistTask) -> String?
 }
@@ -190,6 +191,11 @@ enum KanbanMoveOutcome {
       }
     case .priorityAscending:
       return tasks.sorted { lhs, rhs in
+        let la = ds.absolutePriorityRank(for: lhs)
+        let ra = ds.absolutePriorityRank(for: rhs)
+        if let la, let ra, la != ra { return la < ra }
+        if la != nil && ra == nil { return true }
+        if la == nil && ra != nil { return false }
         let lp = ds.priorityRank(for: lhs)
         let rp = ds.priorityRank(for: rhs)
         if let lp, let rp, lp != rp { return lp < rp }
@@ -199,6 +205,11 @@ enum KanbanMoveOutcome {
       }
     case .priorityThenDueAscending:
       return tasks.sorted { lhs, rhs in
+        let la = ds.absolutePriorityRank(for: lhs)
+        let ra = ds.absolutePriorityRank(for: rhs)
+        if let la, let ra, la != ra { return la < ra }
+        if la != nil && ra == nil { return true }
+        if la == nil && ra != nil { return false }
         let lp = ds.priorityRank(for: lhs)
         let rp = ds.priorityRank(for: rhs)
         if let lp, let rp, lp != rp { return lp < rp }

@@ -632,13 +632,17 @@ struct PopoverView: View {
         pluginToggleRow(
           label: "Checkvist",
           isOn: Binding(
-            get: { !manager.username.isEmpty },
+            get: { manager.checkvistIntegrationEnabled },
             set: { on in
-              if on { AppDelegate.shared.menuSettings() }
+              manager.checkvistIntegrationEnabled = on
+              if on && manager.username.isEmpty {
+                AppDelegate.shared.menuSettings(pane: .plugins)
+              }
             }
           ),
-          prompt: manager.username.isEmpty ? "Connect to sync tasks" : nil,
-          onPromptTap: { AppDelegate.shared.menuSettings() }
+          prompt: manager.checkvistIntegrationEnabled && manager.username.isEmpty
+            ? "Connect to sync tasks" : nil,
+          onPromptTap: { AppDelegate.shared.menuSettings(pane: .plugins) }
         )
         pluginToggleRow(
           label: "Obsidian",
@@ -721,10 +725,10 @@ struct PopoverView: View {
     case .checkvist:
       return (
         "Connect Checkvist",
-        "Optional. You can keep using Bar Tasker offline and connect anytime in Preferences.",
-        "Preferences",
+        "Sync your tasks to Checkvist, or keep working offline.",
+        "Set Up",
         {
-          AppDelegate.shared.menuSettings()
+          AppDelegate.shared.menuSettings(pane: .plugins)
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
@@ -1768,8 +1772,9 @@ struct PopoverView: View {
     let metadataTokens = taskMetadataTokens(task.content)
     let startLabel = manager.startDates.startDateLabel(for: task)
     let recurrenceRule = manager.recurrenceRule(for: task)
+    let priorityLabel = manager.priorityBadgeLabel(for: task)
     if !metadataTokens.isEmpty
-      || manager.priorityPath(for: task) != nil
+      || priorityLabel != nil
       || (manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id))
       || task.due != nil
       || startLabel != nil
@@ -1779,7 +1784,7 @@ struct PopoverView: View {
         ForEach(metadataTokens, id: \.self) { token in
           metadataTokenBadge(token)
         }
-        if let priorityLabel = manager.priorityPath(for: task) {
+        if let priorityLabel {
           priorityBadge(priorityLabel)
         }
         if manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id) {
@@ -1804,12 +1809,13 @@ struct PopoverView: View {
 
   @ViewBuilder
   func priorityBadge(_ priorityLabel: String) -> some View {
-    Text("P\(priorityLabel)")
+    let isAbsolute = priorityLabel.hasPrefix("A")
+    Text(priorityLabel)
       .font(.system(size: 10, weight: .semibold, design: .monospaced))
       .padding(.horizontal, 5)
       .padding(.vertical, 2)
-      .background(themeColor(.selectionBackground))
-      .foregroundColor(themeColor(.selectionForeground))
+      .background(isAbsolute ? themeColor(.danger) : themeColor(.selectionBackground))
+      .foregroundColor(isAbsolute ? Color.white : themeColor(.selectionForeground))
       .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 

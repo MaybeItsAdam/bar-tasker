@@ -111,8 +111,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   func menuSettings() {
+    menuSettings(pane: nil)
+  }
+
+  func menuSettings(pane: SettingsNavState.Pane?) {
     menuBarController.closeWindow()
     let window = makePreferencesWindowIfNeeded()
+    if let pane {
+      preferencesNavState?.select(pane: pane)
+    }
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }

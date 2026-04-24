@@ -20,6 +20,8 @@ struct CacheState {
   var rolledUpElapsed: [Int: TimeInterval] = [:]
   /// Task id → rank within the task's own parent scope (1-based).
   var priorityRank: [Int: Int] = [:]
+  /// Task id → absolute priority rank across the entire list (1-based).
+  var absolutePriorityRank: [Int: Int] = [:]
   /// Task id → hierarchical priority path (e.g. "1.2.=.3"). Only populated for tasks
   /// that are themselves ranked. Uses "=" for unranked ancestors.
   var priorityPath: [Int: String] = [:]

@@ -381,6 +381,7 @@ extension AppCoordinator {
   private struct OptimisticCompletionSnapshot {
     let tasks: [CheckvistTask]
     let priorityTaskIdsByParentId: [Int: [Int]]
+    let absolutePriorityTaskIds: [Int]
     let timerByTaskId: [Int: TimeInterval]
     let pendingObsidianSyncTaskIds: [Int]
   }
@@ -393,6 +394,7 @@ extension AppCoordinator {
     let snapshot = OptimisticCompletionSnapshot(
       tasks: tasks,
       priorityTaskIdsByParentId: repository.priorityTaskIdsByParentId,
+      absolutePriorityTaskIds: repository.absolutePriorityTaskIds,
       timerByTaskId: timer.timerByTaskId,
       pendingObsidianSyncTaskIds: integrations.pendingObsidianSyncTaskIds
     )
@@ -405,6 +407,7 @@ extension AppCoordinator {
   @MainActor private func restoreTasksSnapshot(_ snapshot: OptimisticCompletionSnapshot) {
     tasks = snapshot.tasks
     savePriorityQueue(snapshot.priorityTaskIdsByParentId)
+    repository.saveAbsolutePriorityQueue(snapshot.absolutePriorityTaskIds)
     timer.timerByTaskId = snapshot.timerByTaskId
     integrations.savePendingObsidianSyncQueue(snapshot.pendingObsidianSyncTaskIds, listId: listId)
     clampSelectionToVisibleRange()

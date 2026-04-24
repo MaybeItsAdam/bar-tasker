@@ -10,11 +10,24 @@ extension AppCoordinator {
     hasCredentials
   }
 
+  var checkvistConnectionState: CheckvistConnectionState {
+    if !hasCredentials { return .disconnected }
+    if availableLists.isEmpty {
+      return isLoading ? .connecting : .awaitingConnect
+    }
+    return .connected(listCount: availableLists.count)
+  }
+
   var hasListSelection: Bool {
     !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
-  var isUsingOfflineStore: Bool { !hasListSelection }
+  var isUsingOfflineStore: Bool { !checkvistIntegrationEnabled || !hasListSelection }
+
+  var checkvistIntegrationEnabled: Bool {
+    get { repository.checkvistIntegrationEnabled }
+    set { repository.checkvistIntegrationEnabled = newValue }
+  }
 
   var offlineOpenTaskCount: Int {
     repository.localTaskStore.load().openTasks.count
@@ -195,9 +208,24 @@ extension AppCoordinator {
     return taskListViewModel.cache.priorityRank[task.id]
   }
 
+  func absolutePriorityRank(for task: CheckvistTask) -> Int? {
+    taskListViewModel.ensureVisibleTasksCacheValid()
+    return taskListViewModel.cache.absolutePriorityRank[task.id]
+  }
+
   func priorityPath(for task: CheckvistTask) -> String? {
     taskListViewModel.ensureVisibleTasksCacheValid()
     return taskListViewModel.cache.priorityPath[task.id]
+  }
+
+  func priorityBadgeLabel(for task: CheckvistTask) -> String? {
+    if let absolute = absolutePriorityRank(for: task) {
+      return "A\(absolute)"
+    }
+    if let scoped = priorityPath(for: task) {
+      return "P\(scoped)"
+    }
+    return nil
   }
 
   var isSearchFilterActive: Bool { quickEntry.isSearchFilterActive }
@@ -237,7 +265,7 @@ extension AppCoordinator {
       }
       return hasTag(task, tag: selectedRootTag)
     case .priority:
-      return priorityRank(for: task) != nil
+      return absolutePriorityRank(for: task) != nil || priorityRank(for: task) != nil
     case .kanban:
       return true
     }
@@ -431,6 +459,16 @@ extension AppCoordinator {
     }
   }
 
+  @MainActor func setAbsolutePriorityForCurrentTask(_ rank: Int) {
+    guard rank >= 1, let task = currentTask else { return }
+    repository.setAbsolutePriority(taskId: task.id, rank: rank)
+    errorMessage = nil
+
+    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      currentSiblingIndex = newIndex
+    }
+  }
+
   @MainActor func sendCurrentTaskToPriorityBack() {
     guard let task = currentTask else { return }
 
@@ -456,7 +494,9 @@ extension AppCoordinator {
 
   @MainActor func clearPriorityForCurrentTask() {
     guard let task = currentTask else { return }
-    guard repository.prioritizedTaskIds.contains(task.id) else { return }
+    let hasScoped = repository.prioritizedTaskIds.contains(task.id)
+    let hasAbsolute = repository.absolutePrioritizedTaskIds.contains(task.id)
+    guard hasScoped || hasAbsolute else { return }
     var byParent = repository.priorityTaskIdsByParentId
     for (pid, ids) in byParent {
       let filtered = ids.filter { $0 != task.id }
@@ -466,6 +506,9 @@ extension AppCoordinator {
       }
     }
     savePriorityQueue(byParent)
+    if hasAbsolute {
+      repository.clearAbsolutePriority(taskId: task.id)
+    }
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {

@@ -53,6 +53,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
   case clearPriority
   case pushPriorityBack
   case setPriorityRank
+  case setAbsolutePriorityRank
   case kanbanMoveLeft
   case kanbanMoveRight
   case kanbanFocusLeft
@@ -118,6 +119,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .clearPriority: return "Clear priority"
     case .pushPriorityBack: return "Send priority to back"
     case .setPriorityRank: return "Set priority rank"
+    case .setAbsolutePriorityRank: return "Set absolute priority rank"
     case .kanbanMoveLeft: return "Kanban: move task to previous column"
     case .kanbanMoveRight: return "Kanban: move task to next column"
     case .kanbanFocusLeft: return "Kanban: focus previous column"
@@ -140,7 +142,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
       return "Navigation"
     case .markDone, .invalidateTask, .addSibling, .addChild, .unindentTask, .editTaskAtEnd,
       .editTaskAtStart, .deleteTask, .moveTaskUp, .moveTaskDown, .undo, .clearPriority,
-      .pushPriorityBack, .setPriorityRank, .kanbanMoveLeft, .kanbanMoveRight:
+      .pushPriorityBack, .setPriorityRank, .setAbsolutePriorityRank, .kanbanMoveLeft, .kanbanMoveRight:
       return "Task Actions"
     case .openCommandPalette, .closeOrCancel, .focusSearch, .sequenceDue, .sequenceDueToday,
       .sequenceStart, .sequenceRepeat, .sequenceTag, .sequenceUntag, .sequenceToggleContext,
@@ -206,6 +208,9 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .clearPriority: return "-"
     case .pushPriorityBack: return "="
     case .setPriorityRank: return "1,2,3,4,5,6,7,8,9"
+    case .setAbsolutePriorityRank:
+      return
+        "ctrl+cmd+option+shift+1,ctrl+cmd+option+shift+2,ctrl+cmd+option+shift+3,ctrl+cmd+option+shift+4,ctrl+cmd+option+shift+5,ctrl+cmd+option+shift+6,ctrl+cmd+option+shift+7,ctrl+cmd+option+shift+8,ctrl+cmd+option+shift+9"
     case .kanbanMoveLeft: return "cmd+left"
     case .kanbanMoveRight: return "cmd+right"
     case .kanbanFocusLeft: return "left,h"

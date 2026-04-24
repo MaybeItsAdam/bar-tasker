@@ -416,7 +416,7 @@ struct SettingsView: View {
   private func pluginStatusLabel(for pluginIdentifier: String) -> String {
     switch pluginIdentifier {
     case "native.checkvist.sync":
-      return "Active"
+      return checkvistManager.checkvistIntegrationEnabled ? "Enabled" : "Disabled"
     case "native.obsidian.integration":
       return checkvistManager.integrations.obsidianIntegrationEnabled ? "Enabled" : "Disabled"
     case "native.google.calendar.integration":
@@ -445,53 +445,11 @@ struct SettingsView: View {
 
   private var preferencesPane: some View {
     Group {
-      Section(header: Text("Workspace")) {
-        VStack(alignment: .leading, spacing: 10) {
-          if checkvistManager.canAttemptLogin || !checkvistManager.availableLists.isEmpty {
-            HStack(spacing: 8) {
-              Button("Reload Lists") {
-                Task { await loadCheckvistLists(assignFirstIfMissing: false) }
-              }
-              .disabled(
-                checkvistManager.isLoading || isLoadingCheckvistLists
-                  || !checkvistManager.canAttemptLogin)
-
-              Spacer()
-              if checkvistManager.isLoading || isLoadingCheckvistLists {
-                ProgressView()
-                  .scaleEffect(0.8)
-              }
-            }
-          }
-
-          Picker("Workspace", selection: activeCheckvistWorkspaceBinding) {
-            Text("Offline Workspace").tag("")
-            if !checkvistManager.listId.isEmpty && !isCurrentListInAvailableLists {
-              Text("Current List ID (\(checkvistManager.listId))").tag(checkvistManager.listId)
-            }
-            ForEach(checkvistManager.availableLists) { list in
-              Text("\(list.name) (\(list.id))").tag(String(list.id))
-            }
-          }
-          .pickerStyle(.menu)
-
-          Text(checkvistWorkspaceCaption)
-            .font(.caption)
-            .foregroundColor(themeColor(.textSecondary))
-
-          if let errorMessage = checkvistManager.errorMessage {
-            Text(errorMessage)
-              .foregroundColor(themeColor(.danger))
-              .font(.caption)
-          } else if checkvistManager.canAttemptLogin || !checkvistManager.availableLists.isEmpty {
-            Text(checkvistConnectionStatusText)
-              .foregroundColor(checkvistStatusColor)
-              .font(.caption)
-          }
-        }
-        .padding(.top, 4)
+      Section(header: Text("Checkvist")) {
+        checkvistWorkspaceSummary
       }
 
+      if checkvistManager.checkvistIntegrationEnabled {
       Section(header: Text("Merge Lists")) {
         VStack(alignment: .leading, spacing: 10) {
           Text("Copy open tasks from one Checkvist list into another.")
@@ -545,6 +503,7 @@ struct SettingsView: View {
           }
         }
         .padding(.top, 4)
+      }
       }
 
       Section(header: Text("Preferences")) {
@@ -635,52 +594,103 @@ struct SettingsView: View {
     }
   }
 
-  private var activeCheckvistWorkspaceBinding: Binding<String> {
-    Binding(
-      get: { checkvistManager.listId },
-      set: { newValue in
-        Task { await switchCheckvistWorkspace(to: newValue) }
+  private var checkvistWorkspaceSummary: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(alignment: .top, spacing: 10) {
+        Image(systemName: checkvistSummaryIconName)
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundColor(checkvistSummaryTint)
+          .frame(width: 18)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(checkvistSummaryTitle)
+            .font(.system(size: 12, weight: .semibold))
+          Text(checkvistSummarySubtitle)
+            .font(.caption)
+            .foregroundColor(themeColor(.textSecondary))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 0)
+        Button(checkvistSummaryButtonTitle) {
+          navState.select(pane: .plugins)
+        }
       }
-    )
-  }
 
-  private var isCurrentListInAvailableLists: Bool {
-    checkvistManager.availableLists.contains { String($0.id) == checkvistManager.listId }
-  }
-
-  private var checkvistWorkspaceCaption: String {
-    if checkvistManager.isUsingOfflineStore {
-      if checkvistManager.availableLists.isEmpty {
-        return "You’re using the local offline workspace. Load your Checkvist lists to switch."
+      if let errorMessage = checkvistManager.errorMessage {
+        Text(errorMessage)
+          .foregroundColor(themeColor(.danger))
+          .font(.caption)
       }
-      return
-        "You’re using the local offline workspace. Your Checkvist lists are available in the picker."
     }
-
-    if let activeList = checkvistManager.availableLists.first(where: {
-      String($0.id) == checkvistManager.listId
-    }) {
-      return "Bar Tasker is currently working against “\(activeList.name)”."
-    }
-
-    return "Bar Tasker is currently using Checkvist list ID \(checkvistManager.listId)."
+    .padding(.top, 4)
   }
 
-  private var checkvistConnectionStatusText: String {
-    if checkvistManager.isUsingOfflineStore {
-      return "Offline workspace active."
+  private var checkvistSummaryIconName: String {
+    if !checkvistManager.checkvistIntegrationEnabled { return "tray" }
+    switch checkvistManager.checkvistConnectionState {
+    case .disconnected: return "circle.dashed"
+    case .connecting: return "arrow.triangle.2.circlepath"
+    case .awaitingConnect: return "bolt.horizontal.circle"
+    case .connected: return checkvistManager.isUsingOfflineStore ? "tray" : "checkmark.circle.fill"
     }
-    if checkvistManager.canAttemptLogin || !checkvistManager.availableLists.isEmpty {
-      return "Checkvist lists are available."
-    }
-    return "Connect Checkvist in Plugins to load lists."
   }
 
-  private var checkvistStatusColor: Color {
-    if checkvistManager.isUsingOfflineStore {
-      return themeColor(.textSecondary)
+  private var checkvistSummaryTint: Color {
+    if !checkvistManager.checkvistIntegrationEnabled { return themeColor(.textSecondary) }
+    switch checkvistManager.checkvistConnectionState {
+    case .disconnected: return themeColor(.textSecondary)
+    case .connecting: return themeColor(.link)
+    case .awaitingConnect: return themeColor(.warning)
+    case .connected:
+      return checkvistManager.isUsingOfflineStore
+        ? themeColor(.textSecondary) : themeColor(.success)
     }
-    return checkvistManager.canAttemptLogin ? themeColor(.success) : themeColor(.textSecondary)
+  }
+
+  private var checkvistSummaryTitle: String {
+    if !checkvistManager.checkvistIntegrationEnabled { return "Offline mode" }
+    switch checkvistManager.checkvistConnectionState {
+    case .disconnected:
+      return "Not connected"
+    case .connecting:
+      return "Connecting…"
+    case .awaitingConnect:
+      return "Credentials entered"
+    case .connected:
+      if let active = checkvistManager.availableLists.first(where: {
+        String($0.id) == checkvistManager.listId
+      }) {
+        return "Syncing with “\(active.name)”"
+      }
+      if !checkvistManager.listId.isEmpty {
+        return "Syncing with list \(checkvistManager.listId)"
+      }
+      return "Offline workspace active"
+    }
+  }
+
+  private var checkvistSummarySubtitle: String {
+    if !checkvistManager.checkvistIntegrationEnabled {
+      return "Checkvist sync is turned off. Enable the plugin to sync your tasks."
+    }
+    switch checkvistManager.checkvistConnectionState {
+    case .disconnected:
+      return "Bar Tasker is running in offline mode. Connect Checkvist to sync your tasks."
+    case .connecting:
+      return "Signing in and loading your lists."
+    case .awaitingConnect:
+      return "Open Checkvist settings to finish connecting."
+    case .connected(let listCount):
+      let listWord = listCount == 1 ? "list" : "lists"
+      return "Connected as \(checkvistManager.username). \(listCount) \(listWord) available."
+    }
+  }
+
+  private var checkvistSummaryButtonTitle: String {
+    if !checkvistManager.checkvistIntegrationEnabled { return "Enable Checkvist" }
+    switch checkvistManager.checkvistConnectionState {
+    case .disconnected, .awaitingConnect: return "Set Up Checkvist"
+    case .connecting, .connected: return "Checkvist Settings"
+    }
   }
 
   @MainActor
@@ -688,7 +698,9 @@ struct SettingsView: View {
     guard !didAutoloadCheckvistLists else { return }
     didAutoloadCheckvistLists = true
 
-    if checkvistManager.canAttemptLogin && checkvistManager.availableLists.isEmpty {
+    if checkvistManager.checkvistIntegrationEnabled, checkvistManager.canAttemptLogin,
+      checkvistManager.availableLists.isEmpty
+    {
       await loadCheckvistLists(assignFirstIfMissing: false)
     } else {
       seedMergeSelectionsIfNeeded()
@@ -700,12 +712,6 @@ struct SettingsView: View {
     isLoadingCheckvistLists = true
     defer { isLoadingCheckvistLists = false }
     _ = await checkvistManager.loadCheckvistLists(assignFirstIfMissing: assignFirstIfMissing)
-    seedMergeSelectionsIfNeeded()
-  }
-
-  @MainActor
-  private func switchCheckvistWorkspace(to newValue: String) async {
-    await checkvistManager.switchCheckvistList(to: newValue)
     seedMergeSelectionsIfNeeded()
   }
 
@@ -1366,7 +1372,10 @@ struct SettingsView: View {
         .init(keys: "Cmd+↑ / Cmd+↓", action: "Move task", note: nil),
         .init(keys: "Delete", action: "Delete task", note: "Uses delete confirmation setting"),
         .init(keys: "u", action: "Undo last action", note: nil),
-        .init(keys: "1-9 / = / -", action: "Set priority / send to back / clear", note: nil),
+        .init(
+          keys: "1-9 / Hyper+1-9 / = / -",
+          action: "Set scoped priority / set absolute priority / send to back / clear",
+          note: nil),
       ]
     ),
     ShortcutReferenceGroup(

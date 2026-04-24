@@ -60,7 +60,12 @@ import Observation
         rankByTaskId[id] = idx + 1
       }
     }
+    var absoluteRankByTaskId: [Int: Int] = [:]
+    for (idx, id) in repository.absolutePriorityTaskIds.enumerated() {
+      absoluteRankByTaskId[id] = idx + 1
+    }
     cache.priorityRank = rankByTaskId
+    cache.absolutePriorityRank = absoluteRankByTaskId
     cache.priorityPath = Self.computePriorityPaths(
       rankByTaskId: rankByTaskId,
       taskById: cache.taskById
@@ -104,9 +109,16 @@ import Observation
         taskMatchesActiveRootScope: { [weak self] task in
           self?.taskMatchesActiveRootScope(task) ?? false
         },
+        isAbsolutePrioritized: { [weak self] task in
+          self?.cache.absolutePriorityRank[task.id] != nil
+        },
         compareByPriorityThenPosition: { lhs, rhs in
           TaskFilterEngine.compareByPriorityThenPosition(
-            lhs, rhs, priorityRankById: self.cache.priorityRank)
+            lhs,
+            rhs,
+            priorityRankById: self.cache.priorityRank,
+            absolutePriorityRankById: self.cache.absolutePriorityRank
+          )
         },
         compareByRootDueBucket: { lhs, rhs in
           TaskFilterEngine.compareByRootDueBucket(
@@ -173,7 +185,7 @@ import Observation
       if selectedRootTag.isEmpty { return hasAnyTag(task) }
       return hasTag(task, tag: selectedRootTag)
     case .priority:
-      return cache.priorityRank[task.id] != nil
+      return cache.absolutePriorityRank[task.id] != nil || cache.priorityRank[task.id] != nil
     case .kanban:
       return true
     }

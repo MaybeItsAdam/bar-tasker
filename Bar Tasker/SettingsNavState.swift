@@ -49,6 +49,11 @@ import Observation
 
   var selectedPane: Pane = .preferences
   @ObservationIgnored weak var toolbar: NSToolbar?
+
+  func select(pane: Pane) {
+    selectedPane = pane
+    toolbar?.selectedItemIdentifier = NSToolbarItem.Identifier(pane.rawValue)
+  }
 }
 
 extension SettingsNavState: NSToolbarDelegate {

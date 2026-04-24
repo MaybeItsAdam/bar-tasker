@@ -322,17 +322,18 @@ private struct KanbanTaskCard: View {
     let hasDue = !(task.due ?? "").isEmpty
     let tags = extractTags(from: task.content)
     let hasChildren = childCount > 0
-    let priorityLabel = manager.priorityPath(for: task)
+    let priorityLabel = manager.priorityBadgeLabel(for: task)
 
     if hasDue || !tags.isEmpty || hasChildren || priorityLabel != nil {
       HStack(spacing: 5) {
         if let label = priorityLabel {
-          Text("P\(label)")
+          let isAbsolute = label.hasPrefix("A")
+          Text(label)
             .font(.system(size: 10, weight: .semibold, design: .monospaced))
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
-            .background(themeColor(.selectionBackground))
-            .foregroundColor(themeColor(.selectionForeground))
+            .background(isAbsolute ? themeColor(.danger) : themeColor(.selectionBackground))
+            .foregroundColor(isAbsolute ? Color.white : themeColor(.selectionForeground))
             .clipShape(RoundedRectangle(cornerRadius: 3))
         }
 

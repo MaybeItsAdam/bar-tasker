@@ -666,7 +666,8 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    // 1-9 set priority rank, = sends to the back of prioritized tasks, - clears priority.
+    // 1-9 set scoped priority, Hyper+1-9 (Ctrl+Cmd+Option+Shift) set absolute priority,
+    // = sends to the back of prioritized tasks, - clears priority.
     if !isFocused && !rootScopeFocused {
       if matches(.clearPriority) {
         manager.clearPriorityForCurrentTask()
@@ -678,11 +679,34 @@ struct KeyboardShortcutRouter {
         updateTitle()
         return true
       }
+      let keyCodePriority: Int? = {
+        switch event.keyCode {
+        case 18: return 1
+        case 19: return 2
+        case 20: return 3
+        case 21: return 4
+        case 23: return 5
+        case 22: return 6
+        case 26: return 7
+        case 28: return 8
+        case 25: return 9
+        default: return nil
+        }
+      }()
+
       if matches(.setPriorityRank),
-        let priority = Int(chars),
+        let priority = Int(chars) ?? keyCodePriority,
         (1...TaskRepository.maxPriorityRank).contains(priority)
       {
         manager.setPriorityForCurrentTask(priority)
+        updateTitle()
+        return true
+      }
+      if matches(.setAbsolutePriorityRank),
+        let priority = Int(chars) ?? keyCodePriority,
+        (1...TaskRepository.maxPriorityRank).contains(priority)
+      {
+        manager.setAbsolutePriorityForCurrentTask(priority)
         updateTitle()
         return true
       }
@@ -709,6 +733,16 @@ struct KeyboardShortcutRouter {
     option: Bool
   ) -> String {
     let keyNameByCode: [UInt16: String] = [
+      18: "1",
+      19: "2",
+      20: "3",
+      21: "4",
+      23: "5",
+      22: "6",
+      26: "7",
+      28: "8",
+      25: "9",
+      29: "0",
       49: "space",
       36: "enter",
       48: "tab",

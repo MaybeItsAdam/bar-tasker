@@ -41,6 +41,11 @@ extension AppCoordinator {
       self.integrations.loadPendingObsidianSyncQueue(for: listId)
       self.refreshOnboardingDialogState()
     }
+    repository.onCheckvistIntegrationEnabledChanged = { [weak self] in
+      guard let self else { return }
+      self.invalidateCaches()
+      self.refreshOnboardingDialogState()
+    }
 
     // Other manager callbacks
     quickEntry.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
@@ -298,7 +303,7 @@ extension AppCoordinator {
     case .pluginSelection:
       return !preferencesStore.bool(.pluginSelectionOnboardingCompleted, default: false)
     case .checkvist:
-      return false
+      return checkvistIntegrationEnabled && !hasCredentials
     case .obsidian:
       return integrations.obsidianIntegrationEnabled && integrations.obsidianInboxPath.isEmpty
     case .googleCalendar:

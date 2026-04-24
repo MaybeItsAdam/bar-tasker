@@ -77,7 +77,8 @@ Each box is dismissable so the app remains usable in offline-first mode.
 | `Shift+Tab` | Unindent |
 | `Shift+A` | Quick-add (configured location) |
 | `Cmd+↑` / `Cmd+↓` | Move task |
-| `1`–`9` | Set priority rank |
+| `1`–`9` | Set scoped priority rank (within parent) |
+| `Hyper+1`–`Hyper+9` | Set absolute priority rank (`Ctrl+Cmd+Option+Shift`) |
 | `=` | Send to priority back |
 | `-` | Clear priority |
 

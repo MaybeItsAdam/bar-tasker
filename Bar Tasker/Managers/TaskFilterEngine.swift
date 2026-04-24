@@ -86,8 +86,18 @@ struct TaskFilterEngine {
   static func compareByPriorityThenPosition(
     _ lhs: CheckvistTask,
     _ rhs: CheckvistTask,
-    priorityRankById: [Int: Int]
+    priorityRankById: [Int: Int],
+    absolutePriorityRankById: [Int: Int]
   ) -> Bool {
+    let leftAbsolute = absolutePriorityRankById[lhs.id]
+    let rightAbsolute = absolutePriorityRankById[rhs.id]
+
+    if let leftAbsolute, let rightAbsolute, leftAbsolute != rightAbsolute {
+      return leftAbsolute < rightAbsolute
+    }
+    if leftAbsolute != nil && rightAbsolute == nil { return true }
+    if leftAbsolute == nil && rightAbsolute != nil { return false }
+
     let leftPriority = priorityRankById[lhs.id]
     let rightPriority = priorityRankById[rhs.id]
 

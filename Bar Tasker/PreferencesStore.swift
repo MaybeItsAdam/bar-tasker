@@ -20,6 +20,7 @@ final class PreferencesStore {
     case onboardingCompleted
     case pluginSelectionOnboardingCompleted
     case ignoreKeychainInDebug
+    case checkvistIntegrationEnabled
     case obsidianIntegrationEnabled
     case googleCalendarIntegrationEnabled
     case googleCalendarEventLinksByTaskKey

@@ -16,6 +16,7 @@ import Observation
   @ObservationIgnored let navigationCoordinator = TaskNavigationCoordinator()
   @ObservationIgnored let reorderQueue = ReorderQueue()
   @ObservationIgnored let priorityQueueStore: ListScopedPriorityStore
+  @ObservationIgnored let absolutePriorityQueueStore: ListScopedTaskIDStore
   @ObservationIgnored let legacyPriorityQueueStore: ListScopedTaskIDStore
 
   // MARK: - Callbacks
@@ -27,10 +28,11 @@ import Observation
 
   // MARK: - Constants
 
-  /// Retained for legacy migration only. Hierarchical priorities have no cap.
+  /// Keyboard rank bounds (1...9); also used by legacy migration.
   static let maxPriorityRank = 9
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
   private static let scopedPriorityQueuesDefaultsKey = "priorityTaskIdsByParentIdByListId"
+  private static let absolutePriorityQueuesDefaultsKey = "absolutePriorityTaskIdsByListId"
 
   // MARK: - Task Data
 
@@ -57,9 +59,18 @@ import Observation
     didSet {
       preferencesStore.set(listId, for: .checkvistListId)
       loadPriorityQueue(for: listId)
+      loadAbsolutePriorityQueue(for: listId)
       onListIdChanged?(listId)
     }
   }
+  var checkvistIntegrationEnabled: Bool {
+    didSet {
+      guard checkvistIntegrationEnabled != oldValue else { return }
+      preferencesStore.set(checkvistIntegrationEnabled, for: .checkvistIntegrationEnabled)
+      onCheckvistIntegrationEnabledChanged?()
+    }
+  }
+  @ObservationIgnored var onCheckvistIntegrationEnabledChanged: (() -> Void)?
 
   // MARK: - UI State
 
@@ -82,6 +93,13 @@ import Observation
   var prioritizedTaskIds: Set<Int> {
     Set(priorityTaskIdsByParentId.values.flatMap { $0 })
   }
+  /// Global absolute-priority queue across all tasks in the list.
+  var absolutePriorityTaskIds: [Int] {
+    didSet { onCacheRelevantChange?() }
+  }
+  var absolutePrioritizedTaskIds: Set<Int> {
+    Set(absolutePriorityTaskIds)
+  }
 
   // MARK: - Offline State
 
@@ -99,7 +117,7 @@ import Observation
   var hasListSelection: Bool {
     !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
-  var isUsingOfflineStore: Bool { !hasListSelection }
+  var isUsingOfflineStore: Bool { !checkvistIntegrationEnabled || !hasListSelection }
   var offlineOpenTaskCount: Int { localTaskStore.load().openTasks.count }
   var activeCredentials: CheckvistCredentials {
     CheckvistCredentials(username: username, remoteKey: remoteKey)
@@ -124,6 +142,9 @@ import Observation
     self.priorityQueueStore = ListScopedPriorityStore(
       defaultsKey: Self.scopedPriorityQueuesDefaultsKey
     )
+    self.absolutePriorityQueueStore = ListScopedTaskIDStore(
+      defaultsKey: Self.absolutePriorityQueuesDefaultsKey
+    )
     self.legacyPriorityQueueStore = ListScopedTaskIDStore(
       defaultsKey: Self.priorityQueuesDefaultsKey,
       maximumCount: Self.maxPriorityRank
@@ -133,17 +154,26 @@ import Observation
     let storedUsername = preferencesStore.string(.checkvistUsername)
     let storedListId = preferencesStore.string(.checkvistListId)
 
+    let hasLegacyCheckvist =
+      !storedUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !storedListId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let storedIntegrationEnabled = preferencesStore.optionalBool(.checkvistIntegrationEnabled)
+    let resolvedIntegrationEnabled = storedIntegrationEnabled ?? hasLegacyCheckvist
+
+    self.checkvistIntegrationEnabled = resolvedIntegrationEnabled
     self.username = storedUsername
     self.listId = storedListId
     self.remoteKey = initialRemoteKey
-    self.tasks =
-      storedListId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      ? offlinePayload.openTasks : []
+    let isOfflineAtLaunch =
+      !resolvedIntegrationEnabled
+      || storedListId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    self.tasks = isOfflineAtLaunch ? offlinePayload.openTasks : []
     self.priorityTaskIdsByParentId = Self.loadScopedPriorities(
       scoped: priorityQueueStore,
       legacy: legacyPriorityQueueStore,
       listId: storedListId
     )
+    self.absolutePriorityTaskIds = absolutePriorityQueueStore.load(for: storedListId)
   }
   // swiftlint:enable function_body_length
 }
@@ -244,6 +274,31 @@ extension TaskRepository {
     priorityQueueStore.save(normalized, for: listId)
   }
 
+  func loadAbsolutePriorityQueue(for listId: String) {
+    absolutePriorityTaskIds = absolutePriorityQueueStore.load(for: listId)
+  }
+
+  func saveAbsolutePriorityQueue(_ queue: [Int]) {
+    let normalized = Self.normalizedTaskIdQueue(queue)
+    absolutePriorityTaskIds = normalized
+    guard !listId.isEmpty else { return }
+    absolutePriorityQueueStore.save(normalized, for: listId)
+  }
+
+  @MainActor func setAbsolutePriority(taskId: Int, rank: Int) {
+    guard taskId > 0, rank >= 1 else { return }
+    var queue = absolutePriorityTaskIds.filter { $0 != taskId }
+    let insertIndex = min(max(rank - 1, 0), queue.count)
+    queue.insert(taskId, at: insertIndex)
+    saveAbsolutePriorityQueue(queue)
+  }
+
+  @MainActor func clearAbsolutePriority(taskId: Int) {
+    guard taskId > 0 else { return }
+    guard absolutePriorityTaskIds.contains(taskId) else { return }
+    saveAbsolutePriorityQueue(absolutePriorityTaskIds.filter { $0 != taskId })
+  }
+
   @MainActor func removeTasksFromPriorityQueue(_ taskIds: Set<Int>) {
     guard !taskIds.isEmpty else { return }
     var changed = false
@@ -259,8 +314,15 @@ extension TaskRepository {
         }
       }
     }
+    let filteredAbsolute = absolutePriorityTaskIds.filter { !taskIds.contains($0) }
+    if filteredAbsolute.count != absolutePriorityTaskIds.count {
+      changed = true
+    }
     guard changed else { return }
     savePriorityQueue(updated)
+    if filteredAbsolute != absolutePriorityTaskIds {
+      saveAbsolutePriorityQueue(filteredAbsolute)
+    }
   }
 
   @MainActor func reconcilePriorityQueueWithOpenTasks() {
@@ -281,6 +343,11 @@ extension TaskRepository {
     }
     if changed {
       savePriorityQueue(updated)
+    }
+
+    let filteredAbsolute = absolutePriorityTaskIds.filter { openTaskIds.contains($0) }
+    if filteredAbsolute != absolutePriorityTaskIds {
+      saveAbsolutePriorityQueue(filteredAbsolute)
     }
   }
 }

@@ -16,6 +16,7 @@ struct TaskVisibilityEngine {
     let taskById: [Int: CheckvistTask]
     let isDescendant: (CheckvistTask, Int) -> Bool
     let taskMatchesActiveRootScope: (CheckvistTask) -> Bool
+    let isAbsolutePrioritized: (CheckvistTask) -> Bool
     let compareByPriorityThenPosition: (CheckvistTask, CheckvistTask) -> Bool
     let compareByRootDueBucket: (CheckvistTask, CheckvistTask) -> Bool
     let hasAnyTag: (CheckvistTask) -> Bool
@@ -48,11 +49,15 @@ struct TaskVisibilityEngine {
     if context.shouldShowRootScopeSection {
       if context.isRootLevel {
         switch context.rootTaskView {
-        case .all, .due, .tags, .priority:
-          // Always scope to current-level siblings so hierarchy + breadcrumb
-          // navigation behave consistently across all root tabs. Filtered
-          // tabs reorder (matches first, then remainder) rather than flatten.
+        case .all, .due, .tags:
+          // Keep root "All / Due / Tags" scoped to current-level siblings so
+          // hierarchy + breadcrumb navigation stay stable while those tabs
+          // reorder matches ahead of remainder.
           baseTasks = context.currentLevelTasks
+        case .priority:
+          // Priority view should surface prioritised subtasks from anywhere in
+          // the list, even when browsing root.
+          baseTasks = context.tasks
         case .kanban:
           // Kanban has its own per-column task lists via tasksForKanbanColumn;
           // visibleTasks is unused in kanban mode, so return empty to prevent
@@ -91,13 +96,7 @@ struct TaskVisibilityEngine {
           }
           var matching = result.filter(matchesFilter)
           matching.sort(by: context.compareByRootDueBucket)
-          var remainder = result.filter { !matchesFilter($0) }
-          remainder.sort(by: context.compareByPriorityThenPosition)
-          let start = matching.count
-          return Result(
-            tasks: matching + remainder,
-            remainderStartIndex: remainder.isEmpty ? nil : start
-          )
+          return Result(tasks: matching, remainderStartIndex: nil)
         case .tags:
           let matchesFilter: (CheckvistTask) -> Bool = { task in
             if context.selectedRootTag.isEmpty { return context.hasAnyTag(task) }
@@ -105,43 +104,49 @@ struct TaskVisibilityEngine {
           }
           var matching = result.filter(matchesFilter)
           matching.sort(by: context.compareByPriorityThenPosition)
-          var remainder = result.filter { !matchesFilter($0) }
-          remainder.sort(by: context.compareByPriorityThenPosition)
-          let start = matching.count
-          return Result(
-            tasks: matching + remainder,
-            remainderStartIndex: remainder.isEmpty ? nil : start
-          )
+          return Result(tasks: matching, remainderStartIndex: nil)
         case .priority:
           var matching = result.filter { context.taskMatchesActiveRootScope($0) }
+          // When an ancestor is also prioritised, only show the ancestor at root.
+          // Users can drill in to see prioritised descendants in that subtree.
+          let prioritizedIds = Set(matching.map(\.id))
+          matching = matching.filter { task in
+            let taskIsAbsolute = context.isAbsolutePrioritized(task)
+            var parentId = task.parentId ?? 0
+            while parentId != 0 {
+              if prioritizedIds.contains(parentId) {
+                // Absolute priority can break out of a scoped-priority ancestor.
+                if taskIsAbsolute,
+                  let ancestor = context.taskById[parentId],
+                  !context.isAbsolutePrioritized(ancestor)
+                {
+                  parentId = context.taskById[parentId]?.parentId ?? 0
+                  continue
+                }
+                return false
+              }
+              parentId = context.taskById[parentId]?.parentId ?? 0
+            }
+            return true
+          }
           matching.sort(by: context.compareByPriorityThenPosition)
-          var remainder = result.filter { !context.taskMatchesActiveRootScope($0) }
-          remainder.sort(by: context.compareByPriorityThenPosition)
-          let start = matching.count
-          return Result(
-            tasks: matching + remainder,
-            remainderStartIndex: remainder.isEmpty ? nil : start
-          )
+          return Result(tasks: matching, remainderStartIndex: nil)
         case .kanban:
           break  // unreachable — kanban returns [] above
         }
       } else {
-        // Sub-level in a filtered root tab: show matching children first, then
-        // the rest of the siblings as "remainder" so drilling into a subtask
-        // still surfaces its full hierarchy regardless of which tab is active.
+        // Sub-level in a filtered root tab.
         switch context.rootTaskView {
         case .all, .kanban:
           result.sort(by: context.compareByPriorityThenPosition)
-        case .due, .tags, .priority:
+        case .tags:
           var matching = result.filter(context.taskMatchesActiveRootScope)
           matching.sort(by: context.compareByPriorityThenPosition)
-          var remainder = result.filter { !context.taskMatchesActiveRootScope($0) }
-          remainder.sort(by: context.compareByPriorityThenPosition)
-          let start = matching.count
-          return Result(
-            tasks: matching + remainder,
-            remainderStartIndex: remainder.isEmpty ? nil : start
-          )
+          return Result(tasks: matching, remainderStartIndex: nil)
+        case .due, .priority:
+          var matching = result.filter(context.taskMatchesActiveRootScope)
+          matching.sort(by: context.compareByPriorityThenPosition)
+          return Result(tasks: matching, remainderStartIndex: nil)
         }
       }
     } else {
