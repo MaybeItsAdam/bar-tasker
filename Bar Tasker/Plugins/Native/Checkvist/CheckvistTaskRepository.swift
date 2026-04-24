@@ -20,10 +20,13 @@ struct CheckvistTaskRepository {
         (String) throws -> URLRequest
       ) async throws -> (Data, HTTPURLResponse)
   ) async throws -> [CheckvistTask] {
-    var components = URLComponents(string: "https://checkvist.com/checklists/\(listId)/tasks.json")
-    components?.queryItems = [URLQueryItem(name: "with_notes", value: "true")]
-
-    guard let url = components?.url else {
+    guard let baseURL = CheckvistEndpoints.tasks(listId: listId),
+      var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+    else {
+      throw CheckvistTaskRepositoryError.invalidListURL
+    }
+    components.queryItems = [URLQueryItem(name: "with_notes", value: "true")]
+    guard let url = components.url else {
       throw CheckvistTaskRepositoryError.invalidListURL
     }
 
@@ -94,6 +97,8 @@ struct CheckvistTaskRepository {
   }
 
   private static func depthFirstTasks(from allTasks: [CheckvistTask]) -> [CheckvistTask] {
+    let taskById = Dictionary(uniqueKeysWithValues: allTasks.map { ($0.id, $0) })
+
     func depthFirst(parentId: Int) -> [CheckvistTask] {
       let children =
         allTasks
@@ -102,7 +107,17 @@ struct CheckvistTaskRepository {
       return children.flatMap { [$0] + depthFirst(parentId: $0.id) }
     }
 
-    return depthFirst(parentId: 0)
+    var result = depthFirst(parentId: 0)
+
+    // Include orphan tasks (whose parent is missing) but preserve their original parentId
+    let missingParentIds = Set(allTasks.compactMap { $0.parentId }).filter {
+      $0 != 0 && taskById[$0] == nil
+    }
+    for missingId in missingParentIds.sorted() {
+      result.append(contentsOf: depthFirst(parentId: missingId))
+    }
+
+    return result
   }
 }
 

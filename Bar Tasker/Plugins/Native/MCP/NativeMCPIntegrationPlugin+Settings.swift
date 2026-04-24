@@ -4,23 +4,24 @@ import SwiftUI
 extension NativeMCPIntegrationPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "link" }
 
-  func makeSettingsView(manager: BarTaskerManager) -> AnyView {
+  func makeSettingsView(manager: AppCoordinator) -> AnyView {
     AnyView(MCPIntegrationPluginSettingsView(manager: manager))
   }
 }
 
 private struct MCPIntegrationPluginSettingsView: View {
-  @ObservedObject var manager: BarTaskerManager
+  var manager: AppCoordinator
 
   var body: some View {
+    @Bindable var manager = manager
     Section(header: Text("MCP Plugin")) {
-      Toggle("Enable MCP integration", isOn: $manager.mcpIntegrationEnabled)
+      Toggle("Enable MCP integration", isOn: $manager.integrations.mcpIntegrationEnabled)
 
-      if manager.mcpIntegrationEnabled {
+      if manager.integrations.mcpIntegrationEnabled {
         VStack(alignment: .leading, spacing: 8) {
           Text("MCP Server")
           if manager.hasResolvedMCPServerCommand {
-            Text(manager.mcpServerCommandPath)
+            Text(manager.integrations.mcpServerCommandPath)
               .font(.caption)
               .textSelection(.enabled)
           } else {
@@ -31,13 +32,13 @@ private struct MCPIntegrationPluginSettingsView: View {
 
           HStack {
             Button("Refresh Path") {
-              manager.refreshMCPServerCommandPath()
+              manager.integrations.refreshMCPServerCommandPath()
             }
             Button("Copy Client Config") {
-              manager.copyMCPClientConfigurationToClipboard()
+              manager.integrations.copyMCPClientConfigurationToClipboard()
             }
             Button("Open Guide") {
-              manager.openMCPServerGuide()
+              manager.integrations.openMCPServerGuide()
             }
             Spacer()
           }

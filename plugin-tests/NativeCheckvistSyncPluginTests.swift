@@ -149,6 +149,60 @@ final class NativeCheckvistSyncPluginTests: XCTestCase {
     XCTAssertEqual(session.performRequestCallCount, 0)
   }
 
+  func testUpdateTaskWithDueOnlyOmitsParseFlag() async throws {
+    let session = CheckvistSession()
+    let repository = CheckvistTaskRepository()
+    let plugin = NativeCheckvistSyncPlugin(session: session, taskRepository: repository)
+    session.nextResponseStatusCode = 200
+    let credentials = CheckvistCredentials(username: "user@example.com", remoteKey: "key")
+
+    let success = try await plugin.updateTask(
+      listId: "12",
+      taskId: 5,
+      content: nil,
+      due: "tomorrow",
+      credentials: credentials
+    )
+
+    XCTAssertTrue(success)
+    let request = try XCTUnwrap(session.recordedRequests.first)
+    XCTAssertEqual(request.httpMethod, "PUT")
+    XCTAssertEqual(request.url?.path, "/checklists/12/tasks/5.json")
+    // parse=true must NOT be sent for due-only updates — it causes the
+    // server to re-parse the content and overwrite the explicit due_date.
+    XCTAssertNil(request.url?.query)
+    XCTAssertEqual(
+      request.value(forHTTPHeaderField: "Content-Type"),
+      "application/x-www-form-urlencoded"
+    )
+    let body = String(data: request.httpBody ?? Data(), encoding: .utf8)
+    XCTAssertEqual(body, "task[due_date]=tomorrow")
+  }
+
+  func testUpdateTaskWithContentAndDueOmitsParseFlag() async throws {
+    let session = CheckvistSession()
+    let repository = CheckvistTaskRepository()
+    let plugin = NativeCheckvistSyncPlugin(session: session, taskRepository: repository)
+    session.nextResponseStatusCode = 200
+    let credentials = CheckvistCredentials(username: "user@example.com", remoteKey: "key")
+
+    let success = try await plugin.updateTask(
+      listId: "12",
+      taskId: 5,
+      content: "Updated task",
+      due: "tomorrow",
+      credentials: credentials
+    )
+
+    XCTAssertTrue(success)
+    let request = try XCTUnwrap(session.recordedRequests.first)
+    // parse=true must never be sent — it strips inline #tags from content
+    // and can overwrite explicit due_date values.
+    XCTAssertNil(request.url?.query)
+    let body = String(data: request.httpBody ?? Data(), encoding: .utf8)
+    XCTAssertEqual(body, "task[content]=Updated%20task&task[due_date]=tomorrow")
+  }
+
   func testPersistAndLoadTaskCacheDelegatesToRepository() {
     let session = CheckvistSession()
     let repository = CheckvistTaskRepository()

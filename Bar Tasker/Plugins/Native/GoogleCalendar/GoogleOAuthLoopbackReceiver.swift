@@ -21,7 +21,7 @@ enum GoogleOAuthLoopbackError: LocalizedError {
   }
 }
 
-final class GoogleOAuthLoopbackReceiver {
+final class GoogleOAuthLoopbackReceiver: @unchecked Sendable {
   private let callbackPath: String
   private let maxConnections = 10
   private let queue = DispatchQueue(label: "uk.co.maybeitsadam.bar-tasker.google-oauth-loopback")

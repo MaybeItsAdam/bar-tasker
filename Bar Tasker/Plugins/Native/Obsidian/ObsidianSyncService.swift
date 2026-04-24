@@ -346,7 +346,7 @@ final class ObsidianSyncService {
     if listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       lines.append("Task ID: \(task.id)")
     } else {
-      lines.append("Checkvist Link: https://checkvist.com/checklists/\(listId)#t\(task.id)")
+      lines.append("Checkvist Link: \(CheckvistEndpoints.taskPermalink(listId: listId, taskId: task.id))")
     }
     lines.append("")
     lines.append("Sync Date: \(iso.string(from: syncDate))")

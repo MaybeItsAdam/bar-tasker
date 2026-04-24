@@ -80,9 +80,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   }
 
   func fetchLists(credentials: CheckvistCredentials) async throws -> [CheckvistList] {
-    guard let url = URL(string: "https://checkvist.com/checklists.json") else {
-      return []
-    }
+    let url = CheckvistEndpoints.lists
 
     let (data, response) = try await performAuthenticatedRequest(credentials: credentials) {
       validToken in
@@ -105,9 +103,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   func createList(name: String, credentials: CheckvistCredentials) async throws -> CheckvistList? {
     let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedName.isEmpty else { return nil }
-    guard let url = URL(string: "https://checkvist.com/checklists.json") else {
-      return nil
-    }
+    let url = CheckvistEndpoints.lists
 
     let (data, response) = try await performAuthenticatedRequest(credentials: credentials) {
       validToken in
@@ -141,11 +137,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     action: CheckvistTaskAction,
     credentials: CheckvistCredentials
   ) async throws -> Bool {
-    guard
-      let url = URL(
-        string: "https://checkvist.com/checklists/\(listId)/tasks/\(taskId)/\(action.rawValue).json"
-      )
-    else {
+    guard let url = CheckvistEndpoints.taskAction(listId: listId, taskId: taskId, action: action.rawValue) else {
       return false
     }
 
@@ -168,18 +160,23 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     due: String?,
     credentials: CheckvistCredentials
   ) async throws -> Bool {
-    var taskDict: [String: Any] = [:]
+    var bodyParts: [String] = []
     if let content {
-      taskDict["content"] = content
+      bodyParts.append("task[content]=\(Self.percentEncodeFormValue(content))")
     }
     if let due {
-      taskDict["due"] = due
+      bodyParts.append("task[due_date]=\(Self.percentEncodeFormValue(due))")
     }
-    guard !taskDict.isEmpty else { return true }
-    return try await putTask(
+    guard !bodyParts.isEmpty else { return true }
+    // Never send parse=true for updates.  Checkvist's server-side parser
+    // extracts inline #tags and due markers from the content text, which
+    // conflicts with our client-side tag/due management — it strips tags
+    // from the stored content and can overwrite explicitly-set due dates.
+    return try await putTaskFormEncoded(
       listId: listId,
       taskId: taskId,
-      bodyTaskPayload: taskDict,
+      bodyParts: bodyParts,
+      includeParseFlag: false,
       credentials: credentials
     )
   }
@@ -193,7 +190,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   ) async throws -> CheckvistTask? {
     let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedContent.isEmpty else { return nil }
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks.json") else {
+    guard let url = CheckvistEndpoints.tasks(listId: listId) else {
       return nil
     }
 
@@ -240,8 +237,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   func deleteTask(listId: String, taskId: Int, credentials: CheckvistCredentials) async throws
     -> Bool
   {
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(taskId).json")
-    else {
+    guard let url = CheckvistEndpoints.task(listId: listId, taskId: taskId) else {
       return false
     }
 
@@ -304,11 +300,20 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     listId: String,
     taskId: Int,
     bodyTaskPayload: [String: Any],
+    includeParseFlag: Bool = false,
     credentials: CheckvistCredentials
   ) async throws -> Bool {
-    guard let url = URL(string: "https://checkvist.com/checklists/\(listId)/tasks/\(taskId).json")
-    else {
+    guard let baseURL = CheckvistEndpoints.task(listId: listId, taskId: taskId) else {
       return false
+    }
+    let url: URL
+    if includeParseFlag, var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) {
+      var items = components.queryItems ?? []
+      items.append(URLQueryItem(name: "parse", value: "true"))
+      components.queryItems = items
+      url = components.url ?? baseURL
+    } else {
+      url = baseURL
     }
 
     let (_, response) = try await performAuthenticatedRequest(credentials: credentials) {
@@ -318,7 +323,46 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-      request.httpBody = try? JSONSerialization.data(withJSONObject: ["task": bodyTaskPayload])
+      var requestPayload: [String: Any] = ["task": bodyTaskPayload]
+      if includeParseFlag {
+        requestPayload["parse"] = true
+      }
+      request.httpBody = try? JSONSerialization.data(withJSONObject: requestPayload)
+      return request
+    }
+
+    return (200...299).contains(response.statusCode)
+  }
+
+  private func putTaskFormEncoded(
+    listId: String,
+    taskId: Int,
+    bodyParts: [String],
+    includeParseFlag: Bool = false,
+    credentials: CheckvistCredentials
+  ) async throws -> Bool {
+    guard let baseURL = CheckvistEndpoints.task(listId: listId, taskId: taskId) else {
+      return false
+    }
+    let url: URL
+    if includeParseFlag, var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) {
+      var items = components.queryItems ?? []
+      items.append(URLQueryItem(name: "parse", value: "true"))
+      components.queryItems = items
+      url = components.url ?? baseURL
+    } else {
+      url = baseURL
+    }
+
+    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) {
+      validToken in
+      var request = URLRequest(url: url)
+      request.httpMethod = "PUT"
+      request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
+      request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+      request.setValue("application/json", forHTTPHeaderField: "Accept")
+      request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+      request.httpBody = bodyParts.joined(separator: "&").data(using: .utf8)
       return request
     }
 

@@ -1,11 +1,16 @@
 # <img src="Bar%20Tasker/Assets.xcassets/AppIcon.appiconset/ios-1024.png" alt="Bar Tasker logo" width="28" /> Bar Tasker
 
-Bar Tasker is a keyboard-first macOS menu bar app for working Checkvist lists fast, with quick navigation, due/priority workflows, timers, and plugin-based integrations.
+Bar Tasker is a keyboard-first macOS menu bar app for working Checkvist lists fast, with quick navigation, due/priority workflows, timers, kanban board, and plugin-based integrations.
 
 ## What You Get
 
 - Fast menu bar workflow with minimal mouse usage.
-- Root views for `All`, `Due`, `Tags`, and `Priority`.
+- Root views for `All`, `Due`, `Tags`, `Priority`, and `Kanban`.
+- Customisable kanban board with drag-to-reorder columns and tag/due-date conditions.
+- Priority badges and due-date awareness surfaced directly on kanban cards.
+- Task start dates with natural language parsing.
+- Named time preferences for reusable time expressions.
+- Recurring task rules.
 - Due-time aware commands (for example `due today 14:30`, `due tomorrow 9am`).
 - Quick-add from keybind to either:
   - list root, or
@@ -53,6 +58,12 @@ Each box is dismissable so the app remains usable in offline-first mode.
 | `k` / `↑` | Previous task |
 | `l` / `→` | Enter subtasks |
 | `h` / `←` | Exit to parent |
+| `Ctrl+←` / `Ctrl+→` | Cycle root view |
+| `q` | Jump to All view |
+| `w` | Jump to Due view |
+| `e` | Jump to Tags view |
+| `r` | Jump to Priority view |
+| `t` | Jump to Kanban view |
 | `Esc` | Cancel input / close popover |
 
 ### Task actions
@@ -66,6 +77,20 @@ Each box is dismissable so the app remains usable in offline-first mode.
 | `Shift+Tab` | Unindent |
 | `Shift+A` | Quick-add (configured location) |
 | `Cmd+↑` / `Cmd+↓` | Move task |
+| `1`–`9` | Set scoped priority rank (within parent) |
+| `Hyper+1`–`Hyper+9` | Set absolute priority rank (`Ctrl+Cmd+Option+Shift`) |
+| `=` | Send to priority back |
+| `-` | Clear priority |
+
+### Kanban
+
+| Key | Action |
+| --- | --- |
+| `h` / `←` | Focus previous column |
+| `l` / `→` | Focus next column |
+| `Cmd+←` | Move task to previous column |
+| `Cmd+→` | Move task to next column |
+| `f` | Show selected task in All view (enters subtasks if present) |
 
 ### Integrations
 
@@ -83,10 +108,25 @@ Supported command families:
 
 - Status: `done`, `undone`, `invalidate`
 - Due: `due <value>`, `clear due`
+- Start date: `start <value>`
+- Repeat: `repeat <rule>`
 - Tags: `tag <name>`, `untag <name>`
 - Priority: `priority <1-9>`, `priority back`, `clear priority`
 - Obsidian: `sync obsidian`, `open obsidian new window`, `link/create/clear obsidian folder`
 - Calendar: `sync google calendar`
+
+## Kanban Board
+
+The kanban view is accessible via the `Kanban` root tab. Columns are configurable in Preferences and can be filtered by tag or scoped to subtasks of the current task.
+
+Cards show:
+- Task text (tags stripped from display)
+- Priority badge (`P1`–`P9`) when prioritised
+- Due date with overdue/today highlighting
+- Inline tags
+- Subtask count
+
+Press `f` on any selected card to jump to it in the All view, with the cursor positioned inside its subtasks if it has any.
 
 ## Plugin System
 

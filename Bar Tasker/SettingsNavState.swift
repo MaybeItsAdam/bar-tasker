@@ -1,12 +1,13 @@
 import AppKit
-import Combine
+import Observation
 
-final class SettingsNavState: NSObject, ObservableObject {
+@Observable final class SettingsNavState: NSObject {
   enum Pane: String {
     case preferences
     case keybindings
     case theme
     case plugins
+    case kanban
     #if DEBUG
       case debug
     #endif
@@ -17,6 +18,7 @@ final class SettingsNavState: NSObject, ObservableObject {
       case .keybindings: "Keybindings"
       case .theme: "Theme"
       case .plugins: "Plugins"
+      case .kanban: "Kanban"
       #if DEBUG
         case .debug: "Debug"
       #endif
@@ -29,6 +31,7 @@ final class SettingsNavState: NSObject, ObservableObject {
       case .keybindings: "keyboard"
       case .theme: "paintpalette"
       case .plugins: "puzzlepiece.extension"
+      case .kanban: "rectangle.split.3x1"
       #if DEBUG
         case .debug: "ladybug"
       #endif
@@ -36,7 +39,7 @@ final class SettingsNavState: NSObject, ObservableObject {
     }
 
     static var allPanes: [Pane] {
-      var panes: [Pane] = [.preferences, .keybindings, .theme, .plugins]
+      var panes: [Pane] = [.preferences, .keybindings, .theme, .plugins, .kanban]
       #if DEBUG
         panes.append(.debug)
       #endif
@@ -44,8 +47,13 @@ final class SettingsNavState: NSObject, ObservableObject {
     }
   }
 
-  @Published var selectedPane: Pane = .preferences
-  weak var toolbar: NSToolbar?
+  var selectedPane: Pane = .preferences
+  @ObservationIgnored weak var toolbar: NSToolbar?
+
+  func select(pane: Pane) {
+    selectedPane = pane
+    toolbar?.selectedItemIdentifier = NSToolbarItem.Identifier(pane.rawValue)
+  }
 }
 
 extension SettingsNavState: NSToolbarDelegate {

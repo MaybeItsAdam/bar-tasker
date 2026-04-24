@@ -3,9 +3,17 @@ import SwiftUI
 
 // swiftlint:disable file_length
 enum PopoverLayout {
-  static let width: CGFloat = 360
+  static let width: CGFloat = 400
+  static let kanbanColumnWidth: CGFloat = 100
   static let minHeight: CGFloat = 220
   static let maxHeight: CGFloat = 520
+
+  @MainActor
+  static func preferredWidth(for manager: AppCoordinator) -> CGFloat {
+    guard manager.rootTaskView == .kanban else { return width }
+    let count = max(1, manager.kanban.kanbanColumns.count)
+    return CGFloat(count) * kanbanColumnWidth
+  }
   static let cornerRadius: CGFloat = 10
   static let topStripHeight: CGFloat = 6
   static let rootScopeHorizontalInset: CGFloat = 8
@@ -17,7 +25,7 @@ enum PopoverLayout {
   static let inlineEntryVerticalPadding: CGFloat = 7
 
   @MainActor
-  static func preferredHeight(for manager: BarTaskerManager) -> CGFloat {
+  static func preferredHeight(for manager: AppCoordinator) -> CGFloat {
     if manager.needsInitialSetup {
       return 430
     }
@@ -33,36 +41,36 @@ enum PopoverLayout {
     if manager.shouldShowRootScopeSection {
       fixedHeight += (manager.rootScopeShowsFilterControls ? 72 : 40) + dividerHeight
     }
-    if manager.showTaskBreadcrumbContext {
+    if manager.preferences.showTaskBreadcrumbContext {
       fixedHeight += 24 + dividerHeight
     }
     if manager.hideFuture {
       fixedHeight += 24 + dividerHeight
     }
-    if manager.pendingDeleteConfirmation {
+    if manager.quickEntry.pendingDeleteConfirmation {
       fixedHeight += 40
     }
     let showsSearchPrompt =
-      !manager.pendingDeleteConfirmation
-      && manager.quickEntryMode == .search
-      && (manager.isQuickEntryFocused || !manager.searchText.isEmpty)
-      && (!manager.visibleTasks.isEmpty || !manager.searchText.isEmpty)
+      !manager.quickEntry.pendingDeleteConfirmation
+      && manager.quickEntry.quickEntryMode == .search
+      && (manager.quickEntry.isQuickEntryFocused || !manager.quickEntry.searchText.isEmpty)
+      && (!manager.visibleTasks.isEmpty || !manager.quickEntry.searchText.isEmpty)
     let showsQuickAddPrompt =
-      !manager.pendingDeleteConfirmation
-      && (manager.quickEntryMode == .quickAddDefault
-        || manager.quickEntryMode == .quickAddSpecific)
-      && (manager.isQuickEntryFocused || !manager.quickEntryText.isEmpty)
+      !manager.quickEntry.pendingDeleteConfirmation
+      && (manager.quickEntry.quickEntryMode == .quickAddDefault
+        || manager.quickEntry.quickEntryMode == .quickAddSpecific)
+      && (manager.quickEntry.isQuickEntryFocused || !manager.quickEntry.quickEntryText.isEmpty)
     if showsSearchPrompt || showsQuickAddPrompt {
       fixedHeight += 40
     }
-    if !manager.pendingDeleteConfirmation
-      && (manager.quickEntryMode == .command
-        && (manager.isQuickEntryFocused || !manager.quickEntryText.isEmpty))
+    if !manager.quickEntry.pendingDeleteConfirmation
+      && (manager.quickEntry.quickEntryMode == .command
+        && (manager.quickEntry.isQuickEntryFocused || !manager.quickEntry.quickEntryText.isEmpty))
     {
       // Input row + autocomplete list block.
       fixedHeight += 220
     }
-    if !manager.pendingDeleteConfirmation,
+    if !manager.quickEntry.pendingDeleteConfirmation,
       let activeOnboardingDialog = manager.activeOnboardingDialog
     {
       switch activeOnboardingDialog {
@@ -74,6 +82,10 @@ enum PopoverLayout {
     }
     if manager.errorMessage != nil {
       fixedHeight += 20
+    }
+
+    if manager.rootTaskView == .kanban {
+      return maxHeight
     }
 
     let taskAreaHeight: CGFloat
@@ -115,8 +127,8 @@ private struct MarqueeTextLine<Content: View>: View {
       ZStack(alignment: .leading) {
         if shouldMarquee {
           HStack(spacing: 28) {
-            marqueeContent
-            marqueeContent
+            scrollingContent
+            scrollingContent
           }
           .offset(x: xOffset)
           .onAppear {
@@ -124,14 +136,12 @@ private struct MarqueeTextLine<Content: View>: View {
             startMarqueeIfNeeded()
           }
         } else {
-          marqueeContent
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, alignment: .leading)
+          truncatingContent
         }
       }
       .mask(fadeMask)
       .contentShape(Rectangle())
+      .clipped()
       .onAppear {
         containerWidth = width
       }
@@ -146,8 +156,7 @@ private struct MarqueeTextLine<Content: View>: View {
     }
     .frame(height: 22)
     .background(
-      marqueeContent
-        .fixedSize(horizontal: true, vertical: false)
+      scrollingContent
         .hidden()
         .background(
           GeometryReader { proxy in
@@ -162,10 +171,19 @@ private struct MarqueeTextLine<Content: View>: View {
     )
   }
 
-  private var marqueeContent: some View {
+  // Used for marquee animation and background width measurement — unconstrained width.
+  private var scrollingContent: some View {
     content()
       .lineLimit(1)
       .fixedSize(horizontal: true, vertical: false)
+  }
+
+  // Used for static display — respects the container width and truncates with a tail.
+  private var truncatingContent: some View {
+    content()
+      .lineLimit(1)
+      .truncationMode(.tail)
+      .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private var fadeMask: some View {
@@ -226,7 +244,7 @@ struct QuickEntryField: NSViewRepresentable {
   @Binding var text: String
   @Binding var isFocused: Bool
   var cursorAtEnd: Bool = true  // true = append (cursor at end), false = insert (cursor at start)
-  var font: NSFont = BarTaskerTypography.interfaceNSFont(ofSize: 13)
+  var font: NSFont = Typography.interfaceNSFont(ofSize: 13)
   var placeholder: String
   var onSubmit: () -> Void  // Enter
   var onTab: () -> Void  // Tab → add as child
@@ -274,7 +292,7 @@ struct QuickEntryField: NSViewRepresentable {
           }
         }
       } else {
-        DispatchQueue.main.async {
+        Task { @MainActor in
           tf.window?.makeFirstResponder(tf)
           if self.cursorAtEnd {
             tf.currentEditor()?.moveToEndOfDocument(nil)
@@ -297,11 +315,11 @@ struct QuickEntryField: NSViewRepresentable {
     init(_ quickEntryField: QuickEntryField) { parent = quickEntryField }
 
     func controlTextDidBeginEditing(_ obj: Notification) {
-      DispatchQueue.main.async { self.parent.isFocused = true }
+      Task { @MainActor in self.parent.isFocused = true }
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-      DispatchQueue.main.async { self.parent.isFocused = false }
+      Task { @MainActor in self.parent.isFocused = false }
     }
 
     func controlTextDidChange(_ obj: Notification) {
@@ -338,14 +356,15 @@ struct QuickEntryField: NSViewRepresentable {
 
 // swiftlint:disable type_body_length function_body_length
 struct PopoverView: View {
-  @EnvironmentObject var manager: BarTaskerManager
+  @Environment(AppCoordinator.self) var manager
 
-  private func themeColor(_ token: BarTaskerThemeColorToken) -> Color {
-    manager.themeColor(for: token)
+  private func themeColor(_ token: AppThemeColorToken) -> Color {
+    manager.preferences.themeColor(for: token)
   }
 
   var body: some View {
     let panelHeight = PopoverLayout.preferredHeight(for: manager)
+    let panelWidth = PopoverLayout.preferredWidth(for: manager)
 
     VStack(alignment: .leading, spacing: 0) {
       topBevelArea
@@ -366,18 +385,23 @@ struct PopoverView: View {
         Divider()
       }
 
-      // Task list — keyboard navigable
-      taskList
-        .frame(maxHeight: .infinity, alignment: .top)
+      // Task list / Kanban board — keyboard navigable
+      if manager.rootTaskView == .kanban {
+        KanbanBoardView()
+          .frame(maxHeight: .infinity, alignment: .top)
+      } else {
+        taskList
+          .frame(maxHeight: .infinity, alignment: .top)
+      }
       Divider()
 
       // Delete confirmation banner
-      if manager.pendingDeleteConfirmation {
+      if manager.quickEntry.pendingDeleteConfirmation {
         deleteConfirmationBar
       }
 
       // Prompt + autocomplete at bottom so tasks remain visible above.
-      if !manager.pendingDeleteConfirmation {
+      if !manager.quickEntry.pendingDeleteConfirmation {
         if manager.activeOnboardingDialog != nil {
           onboardingInlineBar()
         } else {
@@ -388,26 +412,46 @@ struct PopoverView: View {
       }
 
     }
-    .frame(width: PopoverLayout.width, height: panelHeight, alignment: .top)
+    .frame(width: panelWidth, height: panelHeight, alignment: .top)
     .background(themeColor(.panelBackground))
-    .tint(manager.themeAccentColor)
+    .tint(manager.preferences.themeAccentColor)
     .clipShape(RoundedRectangle(cornerRadius: PopoverLayout.cornerRadius))
     .onAppear {
       manager.presentOnboardingDialogIfNeeded()
     }
+    // Watch the composer visibility from a persistent parent so that when navigating
+    // out of an empty scope (which unmounts `emptyStateView`), we still get a chance
+    // to drop the auto-activated .addSibling mode. Otherwise the empty-list add bar
+    // persists into scopes that already have tasks.
+    .onChange(of: shouldShowEmptyListComposer) { _, isVisible in
+      if isVisible {
+        activateEmptyListComposerModeIfNeeded()
+      } else {
+        deactivateEmptyListComposerModeIfNeeded()
+      }
+    }
   }
 
   private var isAddMode: Bool {
-    manager.quickEntryMode == .addSibling || manager.quickEntryMode == .addChild
+    manager.quickEntry.quickEntryMode == .addSibling || manager.quickEntry.quickEntryMode == .addChild
   }
 
   private var isRootFilteredView: Bool {
     manager.isRootLevel && manager.shouldShowRootScopeSection && manager.rootTaskView != .all
   }
 
+  /// True when the user has zero tasks anywhere — distinct from "filter excludes all tasks".
+  private var hasNoTasksAtAll: Bool {
+    manager.tasks.isEmpty
+  }
+
   private var emptyStateTitle: String {
     if manager.isSearchFilterActive {
       return "No matches"
+    }
+
+    if hasNoTasksAtAll {
+      return "No tasks yet"
     }
 
     if isRootFilteredView {
@@ -422,6 +466,8 @@ struct PopoverView: View {
           ? "No tagged tasks" : "No #\(manager.selectedRootTag) tasks"
       case .priority:
         return "No priority tasks"
+      case .kanban:
+        return "No tasks"
       case .all:
         break
       }
@@ -433,6 +479,12 @@ struct PopoverView: View {
   private var emptyStateMessage: String? {
     if manager.isSearchFilterActive {
       return "Refine or clear your search to see tasks."
+    }
+
+    if hasNoTasksAtAll {
+      return manager.listId.isEmpty
+        ? "Connect Checkvist in Preferences, then add your first task below."
+        : "Add your first task below."
     }
 
     guard isRootFilteredView else { return nil }
@@ -450,64 +502,71 @@ struct PopoverView: View {
       return "No tasks match this tag filter."
     case .priority:
       return "You have tasks, but none are currently prioritised."
+    case .kanban:
+      return nil
     case .all:
       return nil
     }
   }
 
   private var shouldShowEmptyListComposer: Bool {
-    manager.visibleTasks.isEmpty
-      && !isRootFilteredView
+    let baseConditions =
+      manager.visibleTasks.isEmpty
       && !manager.isLoading
-      && !manager.pendingDeleteConfirmation
+      && !manager.quickEntry.pendingDeleteConfirmation
       && manager.activeOnboardingDialog == nil
       && !manager.isSearchFilterActive
-      && manager.quickEntryMode != .command
-      && manager.quickEntryMode != .quickAddDefault
-      && manager.quickEntryMode != .quickAddSpecific
+      && manager.quickEntry.quickEntryMode != .command
+      && manager.quickEntry.quickEntryMode != .quickAddDefault
+      && manager.quickEntry.quickEntryMode != .quickAddSpecific
+
+    guard baseConditions else { return false }
+    // Always offer the composer when there are zero tasks — otherwise the user
+    // gets stranded on a filtered tab (default is .due) with no way in.
+    return !isRootFilteredView || hasNoTasksAtAll
   }
 
   private var shouldShowBottomPrompt: Bool {
     let showsSearchPrompt =
-      manager.quickEntryMode == .search
-      && (manager.isQuickEntryFocused || !manager.searchText.isEmpty)
-      && (!manager.visibleTasks.isEmpty || !manager.searchText.isEmpty)
+      manager.quickEntry.quickEntryMode == .search
+      && (manager.quickEntry.isQuickEntryFocused || !manager.quickEntry.searchText.isEmpty)
+      && (!manager.visibleTasks.isEmpty || !manager.quickEntry.searchText.isEmpty)
     let showsQuickAddPrompt =
-      (manager.quickEntryMode == .quickAddDefault || manager.quickEntryMode == .quickAddSpecific)
-      && (manager.isQuickEntryFocused || !manager.quickEntryText.isEmpty)
+      (manager.quickEntry.quickEntryMode == .quickAddDefault || manager.quickEntry.quickEntryMode == .quickAddSpecific)
+      && (manager.quickEntry.isQuickEntryFocused || !manager.quickEntry.quickEntryText.isEmpty)
     let showsCommandPrompt =
-      manager.quickEntryMode == .command
-      && (manager.isQuickEntryFocused || !manager.quickEntryText.isEmpty)
+      manager.quickEntry.quickEntryMode == .command
+      && (manager.quickEntry.isQuickEntryFocused || !manager.quickEntry.quickEntryText.isEmpty)
     return showsSearchPrompt || showsQuickAddPrompt || showsCommandPrompt
   }
 
   private var activePromptTextBinding: Binding<String> {
-    switch manager.quickEntryMode {
+    switch manager.quickEntry.quickEntryMode {
     case .search:
-      return $manager.searchText
+      return Bindable(manager).quickEntry.searchText
     case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
-      return $manager.quickEntryText
+      return Bindable(manager).quickEntry.quickEntryText
     }
   }
 
   private var activePromptText: String {
-    switch manager.quickEntryMode {
+    switch manager.quickEntry.quickEntryMode {
     case .search:
-      return manager.searchText
+      return manager.quickEntry.searchText
     case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
-      return manager.quickEntryText
+      return manager.quickEntry.quickEntryText
     }
   }
 
   private func clearPrompt() {
-    manager.isQuickEntryFocused = false
-    switch manager.quickEntryMode {
+    manager.quickEntry.isQuickEntryFocused = false
+    switch manager.quickEntry.quickEntryMode {
     case .search:
-      manager.searchText = ""
+      manager.quickEntry.searchText = ""
     case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
-      manager.quickEntryText = ""
-      manager.quickEntryMode = .search
-      manager.commandSuggestionIndex = 0
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.quickEntryMode = .search
+      manager.quickEntry.commandSuggestionIndex = 0
     }
   }
 
@@ -560,25 +619,55 @@ struct PopoverView: View {
   }
 
   private var pluginSelectionOnboardingBar: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 10) {
       Text("Choose integrations")
         .font(.system(size: 12, weight: .semibold))
 
-      Text("Enable or disable native plugins now. You can change this anytime in Preferences.")
+      Text("Enable integrations below. You can change these anytime in Preferences.")
         .font(.caption2)
         .foregroundColor(themeColor(.textSecondary))
         .fixedSize(horizontal: false, vertical: true)
 
-      HStack(spacing: 10) {
-        Toggle("Obsidian", isOn: $manager.obsidianIntegrationEnabled)
-        Toggle("Google Calendar", isOn: $manager.googleCalendarIntegrationEnabled)
-        Toggle("MCP", isOn: $manager.mcpIntegrationEnabled)
+      VStack(alignment: .leading, spacing: 6) {
+        pluginToggleRow(
+          label: "Checkvist",
+          isOn: Binding(
+            get: { manager.checkvistIntegrationEnabled },
+            set: { on in
+              manager.checkvistIntegrationEnabled = on
+              if on && manager.username.isEmpty {
+                AppDelegate.shared.menuSettings(pane: .plugins)
+              }
+            }
+          ),
+          prompt: manager.checkvistIntegrationEnabled && manager.username.isEmpty
+            ? "Connect to sync tasks" : nil,
+          onPromptTap: { AppDelegate.shared.menuSettings(pane: .plugins) }
+        )
+        pluginToggleRow(
+          label: "Obsidian",
+          isOn: Bindable(manager).integrations.obsidianIntegrationEnabled,
+          prompt: manager.integrations.obsidianIntegrationEnabled && manager.integrations.obsidianInboxPath.isEmpty
+            ? "Choose inbox folder" : nil,
+          onPromptTap: { _ = manager.integrations.chooseObsidianInboxFolder() }
+        )
+        pluginToggleRow(
+          label: "Google Calendar",
+          isOn: Bindable(manager).integrations.googleCalendarIntegrationEnabled,
+          prompt: nil,
+          onPromptTap: {}
+        )
+        pluginToggleRow(
+          label: "MCP",
+          isOn: Bindable(manager).integrations.mcpIntegrationEnabled,
+          prompt: nil,
+          onPromptTap: {}
+        )
       }
       .font(.caption)
-      .toggleStyle(.switch)
 
       HStack(spacing: 8) {
-        Button("Continue") {
+        Button("Done") {
           manager.completePluginSelectionOnboarding()
         }
         .buttonStyle(.borderedProminent)
@@ -598,8 +687,28 @@ struct PopoverView: View {
     .background(themeColor(.panelSurface))
   }
 
+  private func pluginToggleRow(
+    label: String,
+    isOn: Binding<Bool>,
+    prompt: String?,
+    onPromptTap: @escaping () -> Void
+  ) -> some View {
+    HStack(spacing: 8) {
+      Toggle(label, isOn: isOn)
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+      if let prompt {
+        Button(prompt) { onPromptTap() }
+          .font(.caption2)
+          .buttonStyle(.plain)
+          .foregroundColor(themeColor(.link))
+      }
+      Spacer(minLength: 0)
+    }
+  }
+
   // swiftlint:disable:next large_tuple
-  private func onboardingInlineContent(for dialog: BarTaskerManager.OnboardingDialog) -> (
+  private func onboardingInlineContent(for dialog: OnboardingDialog) -> (
     title: String, message: String, actionTitle: String, action: () -> Void
   ) {
     switch dialog {
@@ -616,10 +725,10 @@ struct PopoverView: View {
     case .checkvist:
       return (
         "Connect Checkvist",
-        "Optional. You can keep using Bar Tasker offline and connect anytime in Preferences.",
-        "Preferences",
+        "Sync your tasks to Checkvist, or keep working offline.",
+        "Set Up",
         {
-          AppDelegate.shared.menuSettings()
+          AppDelegate.shared.menuSettings(pane: .plugins)
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
@@ -629,7 +738,7 @@ struct PopoverView: View {
         "Obsidian integration is enabled. Pick an inbox folder to finish setup.",
         "Choose Folder",
         {
-          _ = manager.chooseObsidianInboxFolder()
+          _ = manager.integrations.chooseObsidianInboxFolder()
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
@@ -639,7 +748,7 @@ struct PopoverView: View {
         "Optional event handoff from task due details.",
         "Enable",
         {
-          manager.googleCalendarIntegrationEnabled = true
+          manager.integrations.googleCalendarIntegrationEnabled = true
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
@@ -649,8 +758,8 @@ struct PopoverView: View {
         "Optional AI integrations using the built-in MCP server.",
         "Enable",
         {
-          manager.mcpIntegrationEnabled = true
-          manager.refreshMCPServerCommandPath()
+          manager.integrations.mcpIntegrationEnabled = true
+          manager.integrations.refreshMCPServerCommandPath()
           manager.dismissActiveOnboardingDialog(permanently: true)
         }
       )
@@ -682,7 +791,7 @@ struct PopoverView: View {
               themeColor(.textSecondary))
             Button(crumb.content) { manager.navigateTo(task: crumb) }
               .buttonStyle(PlainButtonStyle())
-              .font(BarTaskerTypography.taskFont(size: 11))
+              .font(Typography.taskFont(size: 11))
               .foregroundColor(themeColor(.link))
               .lineLimit(1)
           }
@@ -710,10 +819,10 @@ struct PopoverView: View {
   }
 
   var rootScopeSection: some View {
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 0) {
         ForEach(
-          Array(BarTaskerManager.RootTaskView.allCases.enumerated()),
+          Array(manager.orderedRootTaskViews.enumerated()),
           id: \.element.rawValue
         ) { index, scope in
           if index > 0 {
@@ -722,21 +831,21 @@ struct PopoverView: View {
           rootScopeTabButton(scope)
         }
       }
+      .frame(maxWidth: .infinity)
       .background(themeColor(.panelSurface))
       .overlay {
         Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
       }
-      .overlay {
-        Rectangle()
-          .stroke(
-            manager.rootScopeFocusLevel == 1 ? themeColor(.focusRing) : Color.clear,
-            lineWidth: 1
-          )
+      .overlay(alignment: .bottom) {
+        if manager.rootScopeFocusLevel == 1 {
+          Rectangle()
+            .fill(themeColor(.focusRing))
+            .frame(height: 2)
+        }
       }
-      .padding(.horizontal, PopoverLayout.rootScopeHorizontalInset)
 
       if manager.rootTaskView == .due {
-        let dueBuckets = BarTaskerManager.RootDueBucket.allCases.filter { $0 != .noDueDate }
+        let dueBuckets = RootDueBucket.allCases.filter { $0 != .noDueDate }
         ScrollViewReader { proxy in
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
@@ -781,14 +890,43 @@ struct PopoverView: View {
         .overlay {
           Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
         }
-        .overlay {
-          Rectangle()
-            .stroke(
-              manager.rootScopeFocusLevel == 2 ? themeColor(.focusRing) : Color.clear,
-              lineWidth: 1
-            )
+        .overlay(alignment: .bottom) {
+          if manager.rootScopeFocusLevel == 2 {
+            Rectangle()
+              .fill(themeColor(.focusRing))
+              .frame(height: 2)
+          }
         }
-        .padding(.horizontal, PopoverLayout.rootScopeHorizontalInset)
+      } else if manager.rootTaskView == .kanban {
+        let tags = manager.rootLevelTagNames(limit: 30)
+        if !tags.isEmpty {
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+              ForEach(Array(tags.enumerated()), id: \.element) { index, tag in
+                if index > 0 {
+                  rootScopeSeparator()
+                }
+                rootScopeChip(
+                  title: tag,
+                  isSelected: manager.kanban.kanbanFilterTag == tag
+                ) {
+                  manager.kanban.kanbanFilterTag = manager.kanban.kanbanFilterTag == tag ? "" : tag
+                }
+              }
+            }
+          }
+          .background(themeColor(.panelSurface))
+          .overlay {
+            Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
+          }
+          .overlay(alignment: .bottom) {
+            if manager.rootScopeFocusLevel == 2 {
+              Rectangle()
+                .fill(themeColor(.focusRing))
+                .frame(height: 2)
+            }
+          }
+        }
       } else if manager.rootTaskView == .tags {
         let tags = manager.rootLevelTagNames(limit: 30)
         ScrollViewReader { proxy in
@@ -835,18 +973,18 @@ struct PopoverView: View {
         .overlay {
           Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
         }
-        .overlay {
-          Rectangle()
-            .stroke(
-              manager.rootScopeFocusLevel == 2 ? themeColor(.focusRing) : Color.clear,
-              lineWidth: 1
-            )
+        .overlay(alignment: .bottom) {
+          if manager.rootScopeFocusLevel == 2 {
+            Rectangle()
+              .fill(themeColor(.focusRing))
+              .frame(height: 2)
+          }
         }
-        .padding(.horizontal, PopoverLayout.rootScopeHorizontalInset)
       }
     }
     .onAppear {
-      if manager.currentParentId == 0
+      if manager.rootTaskView != .kanban
+        && manager.currentParentId == 0
         && manager.visibleTasks.isEmpty
         && manager.rootScopeFocusLevel == 0
       {
@@ -854,7 +992,8 @@ struct PopoverView: View {
       }
     }
     .onChange(of: manager.visibleTasks.count) { _, count in
-      if manager.currentParentId == 0
+      if manager.rootTaskView != .kanban
+        && manager.currentParentId == 0
         && count == 0
         && manager.rootScopeFocusLevel == 0
       {
@@ -864,7 +1003,7 @@ struct PopoverView: View {
   }
 
   @ViewBuilder
-  func rootScopeTabButton(_ scope: BarTaskerManager.RootTaskView) -> some View {
+  func rootScopeTabButton(_ scope: RootTaskView) -> some View {
     let selected = manager.rootTaskView == scope
     Button {
       manager.setRootTaskView(scope)
@@ -873,7 +1012,7 @@ struct PopoverView: View {
       Text(scope.title)
         .font(.system(size: 12, weight: .semibold))
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
         .background(selected ? themeColor(.selectionBackground) : Color.clear)
         .foregroundColor(selected ? themeColor(.selectionForeground) : themeColor(.textSecondary))
     }
@@ -946,6 +1085,9 @@ struct PopoverView: View {
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(Array(visibleTasks.enumerated()), id: \.element.id) { index, task in
+                if let remainderHeader = manager.remainderSectionHeader(atVisibleIndex: index) {
+                  dueSectionHeader(remainderHeader)
+                }
                 if let sectionHeader = manager.rootDueSectionHeader(
                   atVisibleIndex: index, visibleTasks: visibleTasks)
                 {
@@ -961,11 +1103,11 @@ struct PopoverView: View {
                 .id(task.id)
 
                 if manager.currentSiblingIndex == index,
-                  manager.quickEntryMode == .addSibling || manager.quickEntryMode == .addChild
+                  manager.quickEntry.quickEntryMode == .addSibling || manager.quickEntry.quickEntryMode == .addChild
                 {
                   quickEntryBar(
                     verticalPadding: PopoverLayout.inlineEntryVerticalPadding,
-                    leadingInset: manager.quickEntryMode == .addChild ? 20 : 0
+                    leadingInset: manager.quickEntry.quickEntryMode == .addChild ? 20 : 0
                   )
                   .background(Color(NSColor.textBackgroundColor).opacity(0.3))
                   .overlay(alignment: .leading) {
@@ -982,9 +1124,10 @@ struct PopoverView: View {
               proxy.scrollTo(currentTask.id, anchor: .center)
             }
           }
-          .onChange(of: manager.isQuickEntryFocused) { _, focused in
-            if focused && [.addSibling, .addChild].contains(manager.quickEntryMode) {
-              DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+          .onChange(of: manager.quickEntry.isQuickEntryFocused) { _, focused in
+            if focused && [.addSibling, .addChild].contains(manager.quickEntry.quickEntryMode) {
+              Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(100))
                 // Keep the inline composer visually attached to its task row.
                 proxy.scrollTo("quickEntry", anchor: .center)
               }
@@ -1024,11 +1167,6 @@ struct PopoverView: View {
     .onAppear {
       activateEmptyListComposerModeIfNeeded()
     }
-    .onChange(of: shouldShowEmptyListComposer) { _, isVisible in
-      if isVisible {
-        activateEmptyListComposerModeIfNeeded()
-      }
-    }
   }
 
   @ViewBuilder
@@ -1041,9 +1179,9 @@ struct PopoverView: View {
           .frame(width: PopoverLayout.rowIconWidth, height: 20, alignment: .center)
 
         QuickEntryField(
-          text: $manager.quickEntryText,
-          isFocused: $manager.isQuickEntryFocused,
-          font: BarTaskerTypography.taskNSFont(ofSize: 13),
+          text: Bindable(manager).quickEntry.quickEntryText,
+          isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
+          font: Typography.taskNSFont(ofSize: 13),
           placeholder: "Add first task",
           onSubmit: { submitEmptyStateAdd() },
           onTab: { submitEmptyStateAdd() },
@@ -1051,7 +1189,7 @@ struct PopoverView: View {
         )
         .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20, alignment: .leading)
 
-        if !manager.quickEntryText.isEmpty || manager.isQuickEntryFocused {
+        if !manager.quickEntry.quickEntryText.isEmpty || manager.quickEntry.isQuickEntryFocused {
           Button {
             escapeEmptyStateAdd()
           } label: {
@@ -1106,7 +1244,7 @@ struct PopoverView: View {
 
         QuickEntryField(
           text: activePromptTextBinding,
-          isFocused: $manager.isQuickEntryFocused,
+          isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
           font: quickEntryNSFont,
           placeholder: placeholderText,
           onSubmit: { submitAction() },
@@ -1114,14 +1252,14 @@ struct PopoverView: View {
           onEscape: { escapeAction() }
         )
         .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20, alignment: .leading)
-        .onChange(of: manager.searchText) { _, _ in
-          if manager.quickEntryMode == .search { manager.currentSiblingIndex = 0 }
+        .onChange(of: manager.quickEntry.searchText) { _, _ in
+          if manager.quickEntry.quickEntryMode == .search { manager.currentSiblingIndex = 0 }
         }
-        .onChange(of: manager.quickEntryText) { _, _ in
-          if manager.quickEntryMode == .command { manager.commandSuggestionIndex = 0 }
+        .onChange(of: manager.quickEntry.quickEntryText) { _, _ in
+          if manager.quickEntry.quickEntryMode == .command { manager.quickEntry.commandSuggestionIndex = 0 }
         }
 
-        if !activePromptText.isEmpty || manager.isQuickEntryFocused {
+        if !activePromptText.isEmpty || manager.quickEntry.isQuickEntryFocused {
           Button {
             clearPrompt()
           } label: {
@@ -1136,21 +1274,21 @@ struct PopoverView: View {
         }
       }
 
-      if manager.quickEntryMode == .command && manager.isQuickEntryFocused {
+      if manager.quickEntry.quickEntryMode == .command && manager.quickEntry.isQuickEntryFocused {
         ScrollViewReader { proxy in
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(Array(filteredCommandSuggestions.enumerated()), id: \.element.label) {
                 idx, suggestion in
                 Button {
-                  manager.quickEntryText = suggestion.command
+                  manager.quickEntry.quickEntryText = suggestion.command
                   if suggestion.submitImmediately {
-                    manager.isQuickEntryFocused = false
-                    manager.quickEntryMode = .search
-                    manager.quickEntryText = ""
+                    manager.quickEntry.isQuickEntryFocused = false
+                    manager.quickEntry.quickEntryMode = .search
+                    manager.quickEntry.quickEntryText = ""
                     Task { await manager.executeCommandInput(suggestion.command) }
                   } else {
-                    manager.isQuickEntryFocused = true
+                    manager.quickEntry.isQuickEntryFocused = true
                   }
                 } label: {
                   HStack(spacing: 8) {
@@ -1177,7 +1315,7 @@ struct PopoverView: View {
                   .padding(.vertical, 7)
                   .frame(maxWidth: .infinity, alignment: .leading)
                   .background(
-                    idx == manager.commandSuggestionIndex
+                    idx == manager.quickEntry.commandSuggestionIndex
                       ? themeColor(.selectionBackground) : Color.clear
                   )
                 }
@@ -1189,14 +1327,14 @@ struct PopoverView: View {
               }
             }
           }
-          .onChange(of: manager.commandSuggestionIndex) { _, idx in
+          .onChange(of: manager.quickEntry.commandSuggestionIndex) { _, idx in
             withAnimation(.easeInOut(duration: 0.12)) {
               proxy.scrollTo("cmd-suggestion-\(idx)", anchor: .center)
             }
           }
-          .onChange(of: manager.quickEntryText) { _, _ in
+          .onChange(of: manager.quickEntry.quickEntryText) { _, _ in
             withAnimation(.easeInOut(duration: 0.12)) {
-              proxy.scrollTo("cmd-suggestion-\(manager.commandSuggestionIndex)", anchor: .center)
+              proxy.scrollTo("cmd-suggestion-\(manager.quickEntry.commandSuggestionIndex)", anchor: .center)
             }
           }
         }
@@ -1239,39 +1377,16 @@ struct PopoverView: View {
     let listFocusIsActive = manager.rootScopeFocusLevel == 0
     let showsSelectedStyling = isSelected && !showsInlineComposer && listFocusIsActive
     let showsInactiveSelection = isSelected && !showsInlineComposer && !listFocusIsActive
-    let isCompleting = manager.completingTaskId == task.id
-    let hasObsidianNoteLink = manager.hasObsidianSyncedNote(task: task)
-    let hasGoogleCalendarLink = manager.hasGoogleCalendarEventLink(taskId: task.id)
+    let isCompleting = manager.quickEntry.completingTaskId == task.id
+    let hasObsidianNoteLink = manager.integrations.hasObsidianSyncedNote(task: task, tasks: manager.tasks)
+    let hasGoogleCalendarLink = manager.integrations.hasGoogleCalendarEventLink(taskId: task.id, listId: manager.listId)
 
     HStack(alignment: .top, spacing: PopoverLayout.rowContentSpacing) {
-      Image(
-        systemName: isCompleting
-          ? "checkmark.circle.fill" : showsSelectedStyling ? "largecircle.fill.circle" : "circle"
-      )
-      .foregroundColor(
-        isCompleting
-          ? themeColor(.success)
-          : showsSelectedStyling ? themeColor(.selectionForeground) : themeColor(.textSecondary)
-      )
-      .font(.system(size: 14))
-      .frame(width: PopoverLayout.rowIconWidth, alignment: .center)
-      .padding(.top, 1)
-      .scaleEffect(isCompleting ? 1.35 : 1.0)
-      .animation(.spring(response: 0.28, dampingFraction: 0.45), value: isCompleting)
-      .symbolEffect(.bounce, value: isCompleting)
-      .onTapGesture {
-        Task {
-          manager.rootScopeFocusLevel = 0
-          manager.currentSiblingIndex = index
-          await manager.markCurrentTaskDone()
-        }
-      }
-
       VStack(alignment: .leading, spacing: 3) {
         if manager.shouldShowBreadcrumbPath(for: task) {
           let includeCurrentParent =
-            manager.showTaskBreadcrumbContext
-            && !(manager.quickEntryMode == .search && !manager.searchText.isEmpty)
+            manager.preferences.showTaskBreadcrumbContext
+            && !(manager.quickEntry.quickEntryMode == .search && !manager.quickEntry.searchText.isEmpty)
           let path = breadcrumbPath(
             for: task,
             includeCurrentParent: includeCurrentParent
@@ -1283,12 +1398,12 @@ struct PopoverView: View {
         }
 
         // Inline edit: replace text with editable field when editing this task
-        if isSelected && manager.quickEntryMode == .editTask && manager.isQuickEntryFocused {
+        if isSelected && manager.quickEntry.quickEntryMode == .editTask && manager.quickEntry.isQuickEntryFocused {
           QuickEntryField(
-            text: $manager.quickEntryText,
-            isFocused: $manager.isQuickEntryFocused,
-            cursorAtEnd: manager.editCursorAtEnd,
-            font: BarTaskerTypography.taskNSFont(ofSize: 13),
+            text: Bindable(manager).quickEntry.quickEntryText,
+            isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
+            cursorAtEnd: manager.quickEntry.editCursorAtEnd,
+            font: Typography.taskNSFont(ofSize: 13),
             placeholder: "Edit task…",
             onSubmit: { submitAction() },
             onTab: {},
@@ -1312,9 +1427,9 @@ struct PopoverView: View {
                 manager.currentSiblingIndex = index
                 Task {
                   if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
-                    await manager.openCurrentTaskInNewObsidianWindow(taskId: task.id)
+                    await manager.integrations.syncTaskToObsidian(taskId: task.id, openMode: .newWindow)
                   } else {
-                    await manager.syncCurrentTaskToObsidian(taskId: task.id)
+                    await manager.integrations.syncTaskToObsidian(taskId: task.id, openMode: .standard)
                   }
                 }
               } label: {
@@ -1333,7 +1448,7 @@ struct PopoverView: View {
               Button {
                 manager.rootScopeFocusLevel = 0
                 manager.currentSiblingIndex = index
-                manager.openSavedGoogleCalendarEventLink(taskId: task.id)
+                manager.integrations.openSavedGoogleCalendarEventLink(taskId: task.id)
               } label: {
                 Image(systemName: "calendar.badge.checkmark")
                   .font(.system(size: 10, weight: .semibold))
@@ -1359,10 +1474,10 @@ struct PopoverView: View {
         Button {
           manager.currentSiblingIndex = index
           manager.enterChildren()
-          if !manager.searchText.isEmpty {
-            manager.searchText = ""
-            manager.quickEntryMode = .search
-            manager.isQuickEntryFocused = false
+          if !manager.quickEntry.searchText.isEmpty {
+            manager.quickEntry.searchText = ""
+            manager.quickEntry.quickEntryMode = .search
+            manager.quickEntry.isQuickEntryFocused = false
           }
         } label: {
           HStack(spacing: 3) {
@@ -1402,9 +1517,9 @@ struct PopoverView: View {
   // MARK: - Helpers
 
   var iconForMode: String {
-    switch manager.quickEntryMode {
+    switch manager.quickEntry.quickEntryMode {
     case .search:
-      return manager.searchText.isEmpty
+      return manager.quickEntry.searchText.isEmpty
         ? "magnifyingglass" : "line.3.horizontal.decrease.circle.fill"
     case .addSibling: return "plus.square"
     case .addChild: return "arrow.turn.down.right"
@@ -1416,7 +1531,7 @@ struct PopoverView: View {
   }
 
   var placeholderText: String {
-    switch manager.quickEntryMode {
+    switch manager.quickEntry.quickEntryMode {
     case .search: return "Search tasks…"
     case .addSibling: return "Add task"
     case .addChild: return "Add task"
@@ -1435,34 +1550,34 @@ struct PopoverView: View {
   }
 
   var quickEntryNSFont: NSFont {
-    switch manager.quickEntryMode {
+    switch manager.quickEntry.quickEntryMode {
     case .addSibling, .addChild, .editTask, .quickAddDefault, .quickAddSpecific:
-      return BarTaskerTypography.taskNSFont(ofSize: 13)
+      return Typography.taskNSFont(ofSize: 13)
     case .search, .command:
-      return BarTaskerTypography.interfaceNSFont(ofSize: 13)
+      return Typography.interfaceNSFont(ofSize: 13)
     }
   }
 
-  var filteredCommandSuggestions: [BarTaskerManager.CommandSuggestion] {
-    manager.filteredCommandSuggestions(query: manager.quickEntryText)
+  var filteredCommandSuggestions: [CommandSuggestion] {
+    manager.quickEntry.filteredCommandSuggestions(query: manager.quickEntry.quickEntryText)
   }
 
   func submitAction() {
-    switch manager.quickEntryMode {
+    switch manager.quickEntry.quickEntryMode {
     case .search:
-      manager.isQuickEntryFocused = false
+      manager.quickEntry.isQuickEntryFocused = false
     case .addSibling: submitSibling()
     case .addChild: submitChild()
     case .editTask:
-      guard !manager.quickEntryText.isEmpty else { return }
+      guard !manager.quickEntry.quickEntryText.isEmpty else { return }
       if let task = manager.currentTask {
-        let newContent = manager.quickEntryText
+        let newContent = manager.quickEntry.quickEntryText
         escapeAction()
         Task { await manager.updateTask(task: task, content: newContent) }
       }
     case .command:
-      guard !manager.quickEntryText.isEmpty else { return }
-      let cmd = manager.quickEntryText
+      guard !manager.quickEntry.quickEntryText.isEmpty else { return }
+      let cmd = manager.quickEntry.quickEntryText
       escapeAction()
       Task { await manager.executeCommandInput(cmd) }
     case .quickAddDefault:
@@ -1473,11 +1588,11 @@ struct PopoverView: View {
   }
 
   func tabAction() {
-    switch manager.quickEntryMode {
+    switch manager.quickEntry.quickEntryMode {
     case .addSibling, .addChild:
-      if manager.quickEntryText.isEmpty {
-        manager.quickEntryMode = .addChild
-        manager.isQuickEntryFocused = true
+      if manager.quickEntry.quickEntryText.isEmpty {
+        manager.quickEntry.quickEntryMode = .addChild
+        manager.quickEntry.isQuickEntryFocused = true
         return
       }
       submitChild()
@@ -1487,33 +1602,44 @@ struct PopoverView: View {
   }
 
   func escapeAction() {
-    manager.isQuickEntryFocused = false
-    switch manager.quickEntryMode {
+    manager.quickEntry.isQuickEntryFocused = false
+    switch manager.quickEntry.quickEntryMode {
     case .search:
-      manager.searchText = ""
+      manager.quickEntry.searchText = ""
     case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
-      manager.quickEntryMode = .search
-      manager.quickEntryText = ""
-      manager.commandSuggestionIndex = 0
+      manager.quickEntry.quickEntryMode = .search
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.commandSuggestionIndex = 0
     }
   }
 
   func escapeEmptyStateAdd() {
-    manager.isQuickEntryFocused = false
-    manager.quickEntryText = ""
+    manager.quickEntry.isQuickEntryFocused = false
+    manager.quickEntry.quickEntryText = ""
     activateEmptyListComposerModeIfNeeded()
   }
 
   func submitEmptyStateAdd() {
-    manager.quickEntryMode = .addSibling
+    manager.quickEntry.quickEntryMode = .addSibling
     submitSibling()
   }
 
   func activateEmptyListComposerModeIfNeeded() {
     guard shouldShowEmptyListComposer else { return }
-    if manager.quickEntryMode == .search {
-      manager.quickEntryMode = .addSibling
+    if manager.quickEntry.quickEntryMode == .search {
+      manager.quickEntry.quickEntryMode = .addSibling
     }
+  }
+
+  /// When the empty-list composer becomes inactive (e.g., user switches to a tab that
+  /// has tasks), drop the .addSibling mode we activated for it so the quick-entry bar
+  /// doesn't stay open with empty text.
+  func deactivateEmptyListComposerModeIfNeeded() {
+    guard manager.quickEntry.quickEntryMode == .addSibling,
+      manager.quickEntry.quickEntryText.isEmpty
+    else { return }
+    manager.quickEntry.quickEntryMode = .search
+    manager.quickEntry.isQuickEntryFocused = false
   }
 
   func breadcrumbPath(for task: CheckvistTask, includeCurrentParent: Bool = false) -> String {
@@ -1534,56 +1660,53 @@ struct PopoverView: View {
   }
 
   func submitSibling() {
-    guard !manager.quickEntryText.isEmpty else {
-      // Dismiss if empty
-      manager.quickEntryText = ""
-      manager.quickEntryMode = .search
-      manager.isQuickEntryFocused = false
+    guard !manager.quickEntry.quickEntryText.isEmpty else {
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.quickEntryMode = .search
+      manager.quickEntry.isQuickEntryFocused = false
       return
     }
-    let content = manager.quickEntryText
+    let content = manager.quickEntry.quickEntryText
     let targetTask = manager.currentTask
-    let shouldPreserveAddMode = manager.quickEntryMode == .addSibling
-    manager.quickEntryText = ""
+    manager.quickEntry.quickEntryText = ""
+    manager.quickEntry.quickEntryMode = .search
+    manager.quickEntry.isQuickEntryFocused = false
     manager.errorMessage = nil
-    if shouldPreserveAddMode {
-      manager.isQuickEntryFocused = true
-    }
     Task { await manager.addTask(content: content, insertAfterTask: targetTask) }
   }
 
   func submitTopLevelAdd() {
-    guard !manager.quickEntryText.isEmpty else {
-      manager.isQuickEntryFocused = false
+    guard !manager.quickEntry.quickEntryText.isEmpty else {
+      manager.quickEntry.isQuickEntryFocused = false
       return
     }
-    let content = manager.quickEntryText
-    manager.quickEntryText = ""
+    let content = manager.quickEntry.quickEntryText
+    manager.quickEntry.quickEntryText = ""
     manager.errorMessage = nil
-    manager.isQuickEntryFocused = true
+    manager.quickEntry.isQuickEntryFocused = true
     Task { await manager.addTask(content: content, insertAtTopOfCurrentLevel: true) }
   }
 
   func submitChild() {
-    guard !manager.quickEntryText.isEmpty, let parent = manager.currentTask else {
-      // Dismiss if empty
-      if manager.quickEntryText.isEmpty {
-        manager.quickEntryText = ""
-        manager.quickEntryMode = .search
-        manager.isQuickEntryFocused = false
+    guard !manager.quickEntry.quickEntryText.isEmpty, let parent = manager.currentTask else {
+      if manager.quickEntry.quickEntryText.isEmpty {
+        manager.quickEntry.quickEntryText = ""
+        manager.quickEntry.quickEntryMode = .search
+        manager.quickEntry.isQuickEntryFocused = false
       }
       return
     }
-    let content = manager.quickEntryText
-    manager.quickEntryText = ""
+    let content = manager.quickEntry.quickEntryText
+    manager.quickEntry.quickEntryText = ""
+    manager.quickEntry.quickEntryMode = .search
+    manager.quickEntry.isQuickEntryFocused = false
     manager.errorMessage = nil
-    manager.isQuickEntryFocused = true
     Task { await manager.addTaskAsChild(content: content, parentId: parent.id) }
   }
 
   func submitQuickAdd(useSpecificLocation: Bool) {
-    guard !manager.quickEntryText.isEmpty else { return }
-    let content = manager.quickEntryText
+    guard !manager.quickEntry.quickEntryText.isEmpty else { return }
+    let content = manager.quickEntry.quickEntryText
     Task {
       await manager.submitQuickAddTask(content: content, useSpecificLocation: useSpecificLocation)
     }
@@ -1604,7 +1727,7 @@ struct PopoverView: View {
   }
 
   func formattedTimer(_ elapsed: TimeInterval) -> String {
-    BarTaskerManager.formattedTimer(elapsed)
+    TimerManager.formattedTimer(elapsed)
   }
 
   @ViewBuilder
@@ -1647,24 +1770,37 @@ struct PopoverView: View {
   @ViewBuilder
   func taskInlineMetadata(task: CheckvistTask, elapsed: TimeInterval) -> some View {
     let metadataTokens = taskMetadataTokens(task.content)
+    let startLabel = manager.startDates.startDateLabel(for: task)
+    let recurrenceRule = manager.recurrenceRule(for: task)
+    let priorityLabel = manager.priorityBadgeLabel(for: task)
     if !metadataTokens.isEmpty
-      || manager.priorityRank(for: task) != nil
-      || (manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id))
+      || priorityLabel != nil
+      || (manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id))
       || task.due != nil
+      || startLabel != nil
+      || recurrenceRule != nil
     {
       HStack(spacing: 4) {
         ForEach(metadataTokens, id: \.self) { token in
           metadataTokenBadge(token)
         }
-        if let priority = manager.priorityRank(for: task) {
-          priorityBadge(priority)
+        if let priorityLabel {
+          priorityBadge(priorityLabel)
         }
-        if manager.timerIsVisible && (elapsed > 0 || manager.timedTaskId == task.id) {
+        if manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id) {
           timerBadge(
-            elapsed: elapsed, running: manager.timedTaskId == task.id && manager.timerRunning)
+            elapsed: elapsed,
+            running: manager.timer.timedTaskId == task.id && manager.timer.timerRunning
+          )
+        }
+        if let label = startLabel {
+          startBadge(label: label, isFuture: manager.startDates.startDateIsInFuture(for: task))
         }
         if let due = task.due {
           dueBadge(due: due, overdue: task.isOverdue, today: task.isDueToday)
+        }
+        if let rule = recurrenceRule {
+          recurrenceBadge(rule: rule)
         }
       }
       .fixedSize(horizontal: true, vertical: false)
@@ -1672,19 +1808,55 @@ struct PopoverView: View {
   }
 
   @ViewBuilder
-  func priorityBadge(_ priority: Int) -> some View {
-    Text("P\(priority)")
+  func priorityBadge(_ priorityLabel: String) -> some View {
+    let isAbsolute = priorityLabel.hasPrefix("A")
+    Text(priorityLabel)
       .font(.system(size: 10, weight: .semibold, design: .monospaced))
       .padding(.horizontal, 5)
       .padding(.vertical, 2)
-      .background(themeColor(.selectionBackground))
-      .foregroundColor(themeColor(.selectionForeground))
+      .background(isAbsolute ? themeColor(.danger) : themeColor(.selectionBackground))
+      .foregroundColor(isAbsolute ? Color.white : themeColor(.selectionForeground))
       .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 
   @ViewBuilder
+  func startBadge(label: String, isFuture: Bool) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: "play.fill")
+        .font(.system(size: 8))
+      Text(label)
+        .font(.caption2)
+    }
+    .padding(.horizontal, 5).padding(.vertical, 2)
+    .background(
+      isFuture
+        ? themeColor(.link).opacity(0.12)
+        : themeColor(.panelSurfaceElevated)
+    )
+    .foregroundColor(
+      isFuture ? themeColor(.link) : themeColor(.textSecondary)
+    )
+    .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+
+  @ViewBuilder
+  func recurrenceBadge(rule: RecurrenceRule) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: "repeat")
+        .font(.system(size: 8))
+      Text(rule.displayLabel)
+        .font(.caption2)
+    }
+    .padding(.horizontal, 5).padding(.vertical, 2)
+    .background(themeColor(.panelSurfaceElevated))
+    .foregroundColor(themeColor(.textSecondary))
+    .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+
+  @ViewBuilder
   func dueBadge(due: String, overdue: Bool, today: Bool) -> some View {
-    Text(due).font(.caption2)
+    let displayText = due == "asap" ? "ASAP" : naturalDateString(from: due)
+    Text(displayText).font(.caption2)
       .padding(.horizontal, 5).padding(.vertical, 2)
       .background(
         overdue
@@ -1697,6 +1869,46 @@ struct PopoverView: View {
           : today ? themeColor(.warning) : themeColor(.textSecondary)
       )
       .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+  
+  private func naturalDateString(from dueString: String) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    // Try date-only format first
+    formatter.dateFormat = "yyyy-MM-dd"
+    if let date = formatter.date(from: dueString) {
+      return naturalDateString(from: date)
+    }
+    // Try datetime format
+    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+    if let date = formatter.date(from: dueString) {
+      return naturalDateString(from: date)
+    }
+    return dueString
+  }
+  
+  private func naturalDateString(from date: Date) -> String {
+    let calendar = Calendar.current
+    let now = Date()
+    let today = calendar.startOfDay(for: now)
+    let targetDay = calendar.startOfDay(for: date)
+    let dayDiff = calendar.dateComponents([.day], from: today, to: targetDay).day ?? 0
+    
+    switch dayDiff {
+    case 0: return "Today"
+    case 1: return "Tomorrow"
+    case -1: return "Yesterday"
+    case 2...6:
+      let formatter = DateFormatter()
+      formatter.dateFormat = "EEEE"  // Day name
+      return formatter.string(from: date)
+    case 7...13: return "Next week"
+    case -7...(-2): return "Last week"
+    default:
+      let formatter = DateFormatter()
+      formatter.dateFormat = "MMM d"
+      return formatter.string(from: date)
+    }
   }
 
   @ViewBuilder
@@ -1715,13 +1927,13 @@ struct PopoverView: View {
   func formatTaskContent(_ text: String) -> Text {
     let pattern = "([@#][a-zA-Z0-9_\\-]+)"
     guard let regex = try? NSRegularExpression(pattern: pattern) else {
-      return Text(text).font(BarTaskerTypography.taskFont(size: 13)).foregroundColor(
+      return Text(text).font(Typography.taskFont(size: 13)).foregroundColor(
         themeColor(.textPrimary))
     }
 
     let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
     guard !matches.isEmpty else {
-      return Text(text).font(BarTaskerTypography.taskFont(size: 13)).foregroundColor(
+      return Text(text).font(Typography.taskFont(size: 13)).foregroundColor(
         themeColor(.textPrimary))
     }
 
@@ -1736,7 +1948,7 @@ struct PopoverView: View {
         let preceding = String(text[lastEnd..<matchRange.lowerBound])
         resultText =
           resultText
-          + Text(preceding).font(BarTaskerTypography.taskFont(size: 13))
+          + Text(preceding).font(Typography.taskFont(size: 13))
           .foregroundColor(themeColor(.textPrimary))
       }
 
@@ -1746,7 +1958,7 @@ struct PopoverView: View {
       // Markdown trick: We can't actually nest complex View backgrounds inside a concatenated Text in standard SwiftUI without iOS 15 AttributedString APIs,
       // but we CAN use basic inline styling like bolding and foreground colors.
       let tagText = Text(tagStr)
-        .font(BarTaskerTypography.taskFont(size: 12, weight: .bold))
+        .font(Typography.taskFont(size: 12, weight: .bold))
         .foregroundColor(themeColor(.link))
 
       resultText = resultText + tagText
@@ -1758,7 +1970,7 @@ struct PopoverView: View {
       let trailing = String(text[lastEnd..<text.endIndex])
       resultText =
         resultText
-        + Text(trailing).font(BarTaskerTypography.taskFont(size: 13))
+        + Text(trailing).font(Typography.taskFont(size: 13))
         .foregroundColor(themeColor(.textPrimary))
     }
 
