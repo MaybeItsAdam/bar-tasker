@@ -58,7 +58,7 @@ struct TaskVisibilityEngine {
           // Priority view should surface prioritised subtasks from anywhere in
           // the list, even when browsing root.
           baseTasks = context.tasks
-        case .kanban:
+        case .kanban, .eisenhower:
           // Kanban has its own per-column task lists via tasksForKanbanColumn;
           // visibleTasks is unused in kanban mode, so return empty to prevent
           // any stale-index interaction with currentSiblingIndex.
@@ -131,13 +131,13 @@ struct TaskVisibilityEngine {
           }
           matching.sort(by: context.compareByPriorityThenPosition)
           return Result(tasks: matching, remainderStartIndex: nil)
-        case .kanban:
+        case .kanban, .eisenhower:
           break  // unreachable — kanban returns [] above
         }
       } else {
         // Sub-level in a filtered root tab.
         switch context.rootTaskView {
-        case .all, .kanban:
+        case .all, .kanban, .eisenhower:
           result.sort(by: context.compareByPriorityThenPosition)
         case .tags:
           var matching = result.filter(context.taskMatchesActiveRootScope)

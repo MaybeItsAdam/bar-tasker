@@ -52,6 +52,38 @@ struct KeyboardShortcutRouter {
       }
       return false
     }
+    if manager.rootTaskView == .kanban && !isFocused, manager.kanban.focusSession != nil {
+      if event.keyCode == 53 {  // Escape
+        manager.kanban.cancelFocusSession()
+        manager.timer.pauseTimer()
+        updateTitle()
+      }
+      return true
+    }
+    if manager.rootTaskView == .kanban && !isFocused, let focusTaskId = manager.kanban.focusPromptTaskId
+    {
+      if event.keyCode == 36 {  // Enter
+        let baselineElapsed = manager.timer.timerByTaskId[focusTaskId, default: 0]
+        if !manager.timer.timerIsEnabled {
+          manager.timer.timerMode = .visible
+        }
+        if manager.timer.timedTaskId == focusTaskId {
+          if !manager.timer.timerRunning {
+            manager.timer.resumeTimer()
+          }
+        } else {
+          manager.timer.toggleTimer(forTaskId: focusTaskId)
+        }
+        manager.kanban.startFocusSession(baselineElapsed: baselineElapsed)
+        updateTitle()
+        return true
+      }
+      if event.keyCode == 53 {  // Escape
+        manager.kanban.dismissFocusPrompt()
+        return true
+      }
+      return true
+    }
     let isRepeat = event.isARepeat
     let chars = event.charactersIgnoringModifiers ?? ""
     if !manager.shouldShowRootScopeSection && manager.rootScopeFocusLevel != 0 {
@@ -204,6 +236,13 @@ struct KeyboardShortcutRouter {
             manager.quickEntry.isQuickEntryFocused = false
           }
         }
+        updateTitle()
+      }
+      return true
+    }
+    if !isFocused && !rootScopeFocused && matches(.kanbanFocusMode) {
+      if !isRepeat && manager.rootTaskView == .kanban {
+        manager.kanban.presentFocusPromptForCurrentTask()
         updateTitle()
       }
       return true
@@ -509,6 +548,11 @@ struct KeyboardShortcutRouter {
         updateTitle()
         return true
       }
+      if matches(.rootTabMatrix) {
+        manager.setRootTaskView(.eisenhower)
+        updateTitle()
+        return true
+      }
     }
 
     // z/x/c/v/b/n/m - lower root filter shortcuts (Due/Tags row options).
@@ -527,13 +571,20 @@ struct KeyboardShortcutRouter {
     // Two-key sequences.
     let sequenceActions: [ConfigurableShortcutAction] = [
       .sequenceDue, .sequenceDueToday, .sequenceStart, .sequenceRepeat, .sequenceOpenLink,
-      .sequenceGoogleCalendar, .sequenceTag, .sequenceUntag, .sequenceToggleContext,
+      .sequenceGoogleCalendar, .sequenceTag, .sequenceUntag, .sequenceToggleContext, .sequenceUrgency, .sequenceImportance, .sequenceMatrixCoord,
     ]
     let sequenceTokens = sequenceActions.flatMap {
       manager.preferences.shortcutBinding(for: $0).split(separator: ",").map {
         String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
       }
     }
+    let matrixSequenceStarters: Set<String> = Set(
+      manager.preferences.shortcutBinding(for: .sequenceMatrixCoord).split(separator: ",").compactMap {
+        let token = String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard token.count >= 2 else { return nil }
+        return String(token.prefix(1))
+      }
+    )
     let sequenceStarters: Set<String> = Set(
       sequenceTokens.compactMap { token in
         guard token.count >= 2 else { return nil }
@@ -541,7 +592,45 @@ struct KeyboardShortcutRouter {
       }
     )
     if !manager.quickEntry.keyBuffer.isEmpty {
-      let sequence = manager.quickEntry.keyBuffer + chars
+      let normalizedChars = chars.lowercased()
+      let bufferedSequence = manager.quickEntry.keyBuffer.lowercased()
+
+      // Matrix quick-entry: m + <urgency 0-9> + <importance 0-9>
+      if !isFocused,
+        bufferedSequence.count == 1,
+        matrixSequenceStarters.contains(bufferedSequence),
+        normalizedChars.count == 1,
+        normalizedChars.first?.isNumber == true
+      {
+        manager.quickEntry.keyBuffer = bufferedSequence + normalizedChars
+        manager.statusMessage = "Matrix: (\(normalizedChars), _)"
+        return true
+      }
+      if !isFocused,
+        bufferedSequence.count == 2,
+        let starter = bufferedSequence.first.map(String.init),
+        matrixSequenceStarters.contains(starter),
+        let urgencyDigit = bufferedSequence.last,
+        urgencyDigit.isNumber,
+        normalizedChars.count == 1,
+        normalizedChars.first?.isNumber == true,
+        let urgency = Double(String(urgencyDigit)),
+        let importance = Double(normalizedChars)
+      {
+        manager.quickEntry.keyBuffer = ""
+        if let task = manager.currentTask {
+          manager.repository.setUrgency(taskId: task.id, level: urgency)
+          manager.repository.setImportance(taskId: task.id, level: importance)
+          manager.errorMessage = nil
+          manager.statusMessage = "Matrix: (\(Int(urgency)), \(Int(importance)))"
+          updateTitle()
+        } else {
+          manager.errorMessage = "No task selected."
+        }
+        return true
+      }
+
+      let sequence = bufferedSequence + normalizedChars
       manager.quickEntry.keyBuffer = ""
       if !isFocused {
         if manager.preferences.shortcutMatchesSequence(action: .sequenceDue, sequence: sequence) {
@@ -592,6 +681,28 @@ struct KeyboardShortcutRouter {
           manager.quickEntry.isQuickEntryFocused = true
           return true
         }
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceMatrixCoord, sequence: sequence)
+        {
+          manager.quickEntry.quickEntryMode = .command
+          manager.quickEntry.commandSuggestionIndex = 0
+          manager.quickEntry.quickEntryText = "matrix "
+          manager.quickEntry.isQuickEntryFocused = true
+          return true
+        }
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceUrgency, sequence: sequence) {
+          manager.quickEntry.quickEntryMode = .command
+          manager.quickEntry.commandSuggestionIndex = 0
+          manager.quickEntry.quickEntryText = "urgency "
+          manager.quickEntry.isQuickEntryFocused = true
+          return true
+        }
+        if manager.preferences.shortcutMatchesSequence(action: .sequenceImportance, sequence: sequence) {
+          manager.quickEntry.quickEntryMode = .command
+          manager.quickEntry.commandSuggestionIndex = 0
+          manager.quickEntry.quickEntryText = "importance "
+          manager.quickEntry.isQuickEntryFocused = true
+          return true
+        }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceUntag, sequence: sequence) {
           manager.quickEntry.quickEntryMode = .command
           manager.quickEntry.commandSuggestionIndex = 0
@@ -609,8 +720,8 @@ struct KeyboardShortcutRouter {
       }
       return false
     }
-    if sequenceStarters.contains(chars) && !shift && !ctrl && !isFocused {
-      manager.quickEntry.keyBuffer = chars
+    if sequenceStarters.contains(chars.lowercased()) && !shift && !ctrl && !isFocused {
+      manager.quickEntry.keyBuffer = chars.lowercased()
       return true
     }
 

@@ -44,6 +44,9 @@ extension AppCoordinator {
           !latestOpenTaskIDs.contains(filterParentId)
         {
           self.kanban.kanbanFilterParentId = nil
+          if self.rootTaskView == .kanban {
+            self.currentParentId = 0
+          }
         }
         if !self.listId.isEmpty && self.canAttemptLogin {
           self.onboardingCompleted = true

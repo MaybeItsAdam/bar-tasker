@@ -38,6 +38,16 @@ import SwiftUI
     get { repository.listId }
     set { repository.listId = newValue }
   }
+    var statusMessage: String? = nil {
+    didSet {
+      if statusMessage != nil {
+        Task { @MainActor in
+          try? await Task.sleep(for: .seconds(3))
+          self.statusMessage = nil
+        }
+      }
+    }
+  }
   var errorMessage: String? {
     get { repository.errorMessage }
     set { repository.errorMessage = newValue }
@@ -127,6 +137,10 @@ import SwiftUI
     taskListViewModel.cache
   }
 
+  var taskEisenhowerLevels: [Int: EisenhowerLevel] {
+    repository.taskEisenhowerLevels
+  }
+
   @ObservationIgnored var isApplyingLaunchAtLoginChange = false
   @ObservationIgnored let preferencesStore = PreferencesStore()
   let userPluginManager: UserPluginManager
@@ -148,6 +162,8 @@ import SwiftUI
     get { repository.username }
     set { repository.username = newValue }
   }
+  var usernameLower: String { username.lowercased() }
+
   var remoteKey: String {
     get { repository.remoteKey }
     set { repository.remoteKey = newValue }

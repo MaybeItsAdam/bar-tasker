@@ -10,6 +10,7 @@ enum PopoverLayout {
 
   @MainActor
   static func preferredWidth(for manager: AppCoordinator) -> CGFloat {
+    if manager.rootTaskView == .eisenhower { return width }
     guard manager.rootTaskView == .kanban else { return width }
     let count = max(1, manager.kanban.kanbanColumns.count)
     return CGFloat(count) * kanbanColumnWidth
@@ -80,12 +81,16 @@ enum PopoverLayout {
         fixedHeight += 72
       }
     }
-    if manager.errorMessage != nil {
+    if manager.errorMessage != nil || manager.statusMessage != nil {
       fixedHeight += 20
     }
 
     if manager.rootTaskView == .kanban {
       return maxHeight
+    }
+
+    if manager.rootTaskView == .eisenhower {
+      return min(maxHeight, fixedHeight + width)
     }
 
     let taskAreaHeight: CGFloat
@@ -389,6 +394,9 @@ struct PopoverView: View {
       if manager.rootTaskView == .kanban {
         KanbanBoardView()
           .frame(maxHeight: .infinity, alignment: .top)
+      } else if manager.rootTaskView == .eisenhower {
+        EisenhowerMatrixView()
+          .frame(maxHeight: .infinity, alignment: .top)
       } else {
         taskList
           .frame(maxHeight: .infinity, alignment: .top)
@@ -468,6 +476,8 @@ struct PopoverView: View {
         return "No priority tasks"
       case .kanban:
         return "No tasks"
+      case .eisenhower:
+        return "No tasks"
       case .all:
         break
       }
@@ -503,6 +513,8 @@ struct PopoverView: View {
     case .priority:
       return "You have tasks, but none are currently prioritised."
     case .kanban:
+      return nil
+    case .eisenhower:
       return nil
     case .all:
       return nil
@@ -776,7 +788,11 @@ struct PopoverView: View {
   var breadcrumbBar: some View {
     HStack(spacing: 4) {
       Button {
-        manager.exitToParent()
+        if manager.rootTaskView == .kanban {
+          manager.kanban.exitToParentScope()
+        } else {
+          manager.exitToParent()
+        }
       } label: {
         Image(systemName: "chevron.left").font(.caption).foregroundColor(themeColor(.link))
       }.buttonStyle(PlainButtonStyle())
@@ -785,6 +801,10 @@ struct PopoverView: View {
           Button("All Tasks") {
             manager.currentParentId = 0
             manager.currentSiblingIndex = 0
+            if manager.rootTaskView == .kanban {
+              manager.kanban.kanbanFilterSubtasks = false
+              manager.kanban.kanbanFilterParentId = nil
+            }
           }.buttonStyle(PlainButtonStyle()).font(.caption2).foregroundColor(themeColor(.link))
           ForEach(manager.breadcrumbs) { crumb in
             Image(systemName: "chevron.right").font(.system(size: 8)).foregroundColor(
@@ -895,36 +915,6 @@ struct PopoverView: View {
             Rectangle()
               .fill(themeColor(.focusRing))
               .frame(height: 2)
-          }
-        }
-      } else if manager.rootTaskView == .kanban {
-        let tags = manager.rootLevelTagNames(limit: 30)
-        if !tags.isEmpty {
-          ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-              ForEach(Array(tags.enumerated()), id: \.element) { index, tag in
-                if index > 0 {
-                  rootScopeSeparator()
-                }
-                rootScopeChip(
-                  title: tag,
-                  isSelected: manager.kanban.kanbanFilterTag == tag
-                ) {
-                  manager.kanban.kanbanFilterTag = manager.kanban.kanbanFilterTag == tag ? "" : tag
-                }
-              }
-            }
-          }
-          .background(themeColor(.panelSurface))
-          .overlay {
-            Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
-          }
-          .overlay(alignment: .bottom) {
-            if manager.rootScopeFocusLevel == 2 {
-              Rectangle()
-                .fill(themeColor(.focusRing))
-                .frame(height: 2)
-            }
           }
         }
       } else if manager.rootTaskView == .tags {
@@ -1214,6 +1204,12 @@ struct PopoverView: View {
           .font(.caption2)
           .foregroundColor(themeColor(.danger))
           .frame(maxWidth: .infinity, alignment: .leading)
+      } else if let status = manager.statusMessage {
+        Text(status)
+          .font(.caption2)
+          .foregroundColor(themeColor(.link))
+          .padding(.horizontal, 14)
+          .padding(.bottom, 6)
       }
     }
     .frame(maxWidth: 240)
@@ -1348,8 +1344,23 @@ struct PopoverView: View {
     .padding(.vertical, verticalPadding)
 
     if let error = manager.errorMessage {
-      Text(error).font(.caption2).foregroundColor(themeColor(.danger))
-        .padding(.horizontal, 14).padding(.bottom, 6)
+      Text(error)
+        .font(.caption2)
+        .foregroundColor(themeColor(.danger))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
+    } else if let status = manager.statusMessage {
+      Text(status)
+        .font(.caption2)
+        .foregroundColor(themeColor(.link))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
+    } else if let sequenceHint = sequenceInputHint {
+      Text(sequenceHint)
+        .font(.caption2)
+        .foregroundColor(themeColor(.textSecondary))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
     }
   }
 
@@ -1560,6 +1571,41 @@ struct PopoverView: View {
 
   var filteredCommandSuggestions: [CommandSuggestion] {
     manager.quickEntry.filteredCommandSuggestions(query: manager.quickEntry.quickEntryText)
+  }
+
+  var sequenceInputHint: String? {
+    let buffer = manager.quickEntry.keyBuffer.lowercased()
+    guard !buffer.isEmpty else { return nil }
+
+    let matrixStarters: Set<String> = Set(
+      manager.preferences.shortcutBinding(for: .sequenceMatrixCoord).split(separator: ",").compactMap {
+        let token = String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard token.count >= 2 else { return nil }
+        return String(token.prefix(1))
+      })
+    if buffer.count == 2,
+      let starter = buffer.first.map(String.init),
+      matrixStarters.contains(starter),
+      let urgency = buffer.last,
+      urgency.isNumber
+    {
+      return "Matrix input: (\(urgency), _)"
+    }
+    if buffer.count == 1, matrixStarters.contains(buffer) {
+      return "Matrix input: (_, _)"
+    }
+
+    let tagStarters: Set<String> = Set(
+      manager.preferences.shortcutBinding(for: .sequenceTag).split(separator: ",").compactMap {
+        let token = String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard token.count >= 2 else { return nil }
+        return String(token.prefix(1))
+      })
+    if buffer.count == 1, tagStarters.contains(buffer) {
+      return "Tag sequence…"
+    }
+
+    return "Sequence: \(buffer)…"
   }
 
   func submitAction() {
@@ -1773,8 +1819,10 @@ struct PopoverView: View {
     let startLabel = manager.startDates.startDateLabel(for: task)
     let recurrenceRule = manager.recurrenceRule(for: task)
     let priorityLabel = manager.priorityBadgeLabel(for: task)
+    let matrixLabel = manager.eisenhowerBadgeLabel(for: task)
     if !metadataTokens.isEmpty
       || priorityLabel != nil
+      || matrixLabel != nil
       || (manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id))
       || task.due != nil
       || startLabel != nil
@@ -1786,6 +1834,9 @@ struct PopoverView: View {
         }
         if let priorityLabel {
           priorityBadge(priorityLabel)
+        }
+        if let matrixLabel {
+          matrixBadge(matrixLabel)
         }
         if manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id) {
           timerBadge(
@@ -1817,6 +1868,21 @@ struct PopoverView: View {
       .background(isAbsolute ? themeColor(.danger) : themeColor(.selectionBackground))
       .foregroundColor(isAbsolute ? Color.white : themeColor(.selectionForeground))
       .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+
+  @ViewBuilder
+  func matrixBadge(_ label: String) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: "square.grid.2x2")
+        .font(.system(size: 8))
+      Text(label)
+        .font(.system(size: 10, weight: .medium, design: .monospaced))
+    }
+    .padding(.horizontal, 5)
+    .padding(.vertical, 2)
+    .background(themeColor(.panelSurfaceElevated))
+    .foregroundColor(themeColor(.textSecondary))
+    .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 
   @ViewBuilder

@@ -89,9 +89,13 @@ enum Command: Equatable, Sendable {
   case kanbanShowInAll
   case kanbanDrillIn
   case kanbanPopOut
+  case kanbanFocusMode
   case toggleContext
   case editAtStart
   case openCommandPalette
+  case setUrgency(Double)
+  case setImportance(Double)
+  case matrix(Double, Double)
   case unknown(String)
 }
 
@@ -144,6 +148,18 @@ enum CommandEngine {
       submitImmediately: false),
     .init(
       label: "Remove tag", command: "untag ", preview: "Remove #tag from task", keybind: "gu",
+      submitImmediately: false),
+    .init(
+      label: "Set matrix coordinates", command: "matrix ",
+      preview: "Set urgency and importance (-9 to 9, e.g. matrix 5 -2)", keybind: nil,
+      submitImmediately: false),
+    .init(
+      label: "Set urgency", command: "urgency ",
+      preview: "Set Eisenhower urgency (-9 to 9, 0 is middle)", keybind: nil,
+      submitImmediately: false),
+    .init(
+      label: "Set importance", command: "importance ",
+      preview: "Set Eisenhower importance (-9 to 9, 0 is middle)", keybind: nil,
       submitImmediately: false),
     .init(
       label: "Set priority", command: "priority ",
@@ -278,11 +294,12 @@ enum CommandEngine {
       label: "Move task down", command: "move down", preview: "Reorder current task downward",
       keybind: "Cmd+↓", submitImmediately: true),
     .init(
-      label: "Enter subtasks", command: "enter children", preview: "Go to child level",
-      keybind: "l / →", submitImmediately: true),
+      label: "Enter subtasks (tree)", command: "enter children", preview: "Go to child level",
+      keybind: nil, submitImmediately: true, boundActionRawValue: "enterChildren"),
     .init(
-      label: "Exit to parent", command: "exit parent", preview: "Go up one level",
-      keybind: "h / ←", submitImmediately: true),
+      label: "Exit to parent (tree)", command: "exit parent",
+      preview: "Go up one level in list/tree views", keybind: nil, submitImmediately: true,
+      boundActionRawValue: "exitToParent"),
     .init(
       label: "Switch to All tab", command: "tab all",
       preview: "Show all tasks", keybind: nil, submitImmediately: true,
@@ -356,9 +373,13 @@ enum CommandEngine {
       preview: "Filter kanban to the selected task's children", keybind: nil,
       submitImmediately: true, boundActionRawValue: "kanbanEnterTaskChildren"),
     .init(
-      label: "Kanban: pop scope to parent", command: "kanban pop out",
+      label: "Kanban: exit to parent scope", command: "kanban pop out",
       preview: "Move kanban scope up one level", keybind: nil, submitImmediately: true,
       boundActionRawValue: "kanbanExitToTaskParent"),
+    .init(
+      label: "Kanban: focus selected task", command: "kanban focus mode",
+      preview: "Open focus panel and press Enter to start timing", keybind: nil,
+      submitImmediately: true, boundActionRawValue: "kanbanFocusMode"),
   ]
 
   static func filteredSuggestions(query: String, limit: Int? = nil) -> [CommandPaletteSuggestion]
@@ -429,6 +450,27 @@ enum CommandEngine {
     }
     if cmd.hasPrefix("list ") {
       return .list(String(cmd.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+    }
+    if cmd.hasPrefix("matrix ") {
+      let raw = String(cmd.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+      let parts = raw.split(separator: " ")
+      if parts.count >= 2,
+         let u = Double(parts[0]), u >= -9 && u <= 9,
+         let i = Double(parts[1]), i >= -9 && i <= 9 {
+        return .matrix(u, i)
+      }
+    }
+    if cmd.hasPrefix("urgency ") {
+      let raw = String(cmd.dropFirst(8)).trimmingCharacters(in: .whitespaces)
+      if let level = Double(raw), level >= -9 && level <= 9 {
+        return .setUrgency(level)
+      }
+    }
+    if cmd.hasPrefix("importance ") {
+      let raw = String(cmd.dropFirst(11)).trimmingCharacters(in: .whitespaces)
+      if let level = Double(raw), level >= -9 && level <= 9 {
+        return .setImportance(level)
+      }
     }
     if cmd.hasPrefix("priority ") {
       let raw = String(cmd.dropFirst(9)).trimmingCharacters(in: .whitespaces)
@@ -505,6 +547,7 @@ enum CommandEngine {
     if cmd == "kanban pop out" || cmd == "kanban pop" || cmd == "kanban exit" {
       return .kanbanPopOut
     }
+    if cmd == "kanban focus mode" || cmd == "focus mode" { return .kanbanFocusMode }
     if cmd == "toggle context" { return .toggleContext }
     if cmd == "edit start" { return .editAtStart }
     if cmd == "command palette" || cmd == "open palette" || cmd == "palette" {

@@ -6,6 +6,7 @@ enum RootTaskView: Int, CaseIterable {
   case tags
   case priority
   case kanban
+  case eisenhower
 
   var title: String {
     switch self {
@@ -14,6 +15,7 @@ enum RootTaskView: Int, CaseIterable {
     case .tags: return "Tags"
     case .priority: return "Priority"
     case .kanban: return "Kanban"
+    case .eisenhower: return "Matrix"
     }
   }
 }
