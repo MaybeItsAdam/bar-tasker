@@ -188,6 +188,8 @@ import Observation
       return cache.absolutePriorityRank[task.id] != nil || cache.priorityRank[task.id] != nil
     case .kanban:
       return true
+    case .eisenhower:
+      return true
     }
   }
 

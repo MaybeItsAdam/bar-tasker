@@ -7,7 +7,8 @@ import OSLog
 @MainActor
 protocol KanbanTaskDataSource: AnyObject {
   var tasks: [CheckvistTask] { get }
-  var currentParentId: Int { get }
+  var currentParentId: Int { get set }
+  var hideFuture: Bool { get }
   var currentSiblingIndex: Int { get set }
   var rootTaskView: RootTaskView { get }
   var cache: CacheState { get }
@@ -26,6 +27,17 @@ enum KanbanMoveOutcome {
 
 @MainActor
 @Observable class KanbanManager {
+  enum FocusDurationPreset: String {
+    case long
+    case short
+  }
+
+  struct FocusSessionState {
+    let taskId: Int
+    let durationSeconds: Int
+    let baselineElapsed: TimeInterval
+  }
+
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "kanban")
   @ObservationIgnored private let preferencesStore: PreferencesStore
   @ObservationIgnored weak var dataSource: KanbanTaskDataSource?
@@ -42,17 +54,14 @@ enum KanbanMoveOutcome {
   /// Task ID of the selected card in kanban view. Decoupled from currentSiblingIndex
   /// so selection survives task-list refreshes and view switches.
   var kanbanSelectedTaskId: Int? = nil {
-    didSet { syncFilterToSelection() }
-  }
-  /// Active tag filter in kanban view (empty = no filter)
-  var kanbanFilterTag: String = "" {
     didSet { onCacheRelevantChange?() }
   }
   /// When true, kanban shows only subtasks of `currentParentId`
   var kanbanFilterSubtasks: Bool = false {
     didSet { onCacheRelevantChange?() }
   }
-  /// When set, kanban shows only direct children of this task ID (overrides kanbanFilterSubtasks)
+  /// When set, kanban shows the full subtree under this task ID (excluding the root task itself).
+  /// This overrides `kanbanFilterSubtasks`.
   var kanbanFilterParentId: Int? = nil {
     didSet { onCacheRelevantChange?() }
   }
@@ -60,6 +69,22 @@ enum KanbanMoveOutcome {
   var addingToColumnId: UUID? = nil
   /// Text for the inline add field.
   var addText: String = ""
+  /// When set, a focus-start overlay is shown for this task.
+  var focusPromptTaskId: Int? = nil {
+    didSet { onCacheRelevantChange?() }
+  }
+  var focusLongMinutes: Int = 25 {
+    didSet { onCacheRelevantChange?() }
+  }
+  var focusShortMinutes: Int = 5 {
+    didSet { onCacheRelevantChange?() }
+  }
+  var focusDurationPreset: FocusDurationPreset = .long {
+    didSet { onCacheRelevantChange?() }
+  }
+  var focusSession: FocusSessionState? = nil {
+    didSet { onCacheRelevantChange?() }
+  }
 
   @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
 
@@ -71,7 +96,17 @@ enum KanbanMoveOutcome {
       let decoded = try? JSONDecoder().decode([KanbanColumn].self, from: data),
       !decoded.isEmpty
     {
-      self.kanbanColumns = decoded
+      // Migration: Change Backlog .catchAll to .tag("backlog")
+      var migrated = decoded
+      for i in 0..<migrated.count {
+        if migrated[i].name.lowercased() == "backlog" {
+          migrated[i].conditions = migrated[i].conditions.map { cond in
+            if case .catchAll = cond { return .tag("backlog") }
+            return cond
+          }
+        }
+      }
+      self.kanbanColumns = migrated
     } else {
       self.kanbanColumns = KanbanColumn.defaults
     }
@@ -79,7 +114,7 @@ enum KanbanMoveOutcome {
 
   // MARK: - Task filtering for kanban columns
 
-  /// Returns root-level tasks that belong to the given column.
+  /// Returns tasks that belong to the given column within the active kanban scope.
   /// Column membership uses first-match semantics: a task belongs to the first column
   /// (in `allColumns` order) whose conditions it satisfies.
   func tasksForKanbanColumn(_ column: KanbanColumn, allColumns: [KanbanColumn]) -> [CheckvistTask] {
@@ -87,30 +122,42 @@ enum KanbanMoveOutcome {
     ds.ensureVisibleTasksCacheValid()
     var pool: [CheckvistTask]
     if let parentId = kanbanFilterParentId {
-      pool = ds.tasks.filter { ($0.parentId ?? 0) == parentId }
+      pool = subtreeTasks(in: ds.tasks, rootId: parentId, taskById: ds.cache.taskById)
     } else if kanbanFilterSubtasks && ds.currentParentId != 0 {
-      pool = ds.tasks.filter { ($0.parentId ?? 0) == ds.currentParentId }
+      pool = subtreeTasks(in: ds.tasks, rootId: ds.currentParentId, taskById: ds.cache.taskById)
     } else {
-      pool = ds.tasks.filter { $0.parentId == nil || $0.parentId == 0 }
+      // Root kanban scope shows all tasks in the tree; column rules decide visibility.
+      pool = ds.tasks
     }
-    if !kanbanFilterTag.isEmpty {
-      pool = pool.filter { hasTag($0, tag: kanbanFilterTag) }
-    }
+
+    // Discriminate: exclude completed tasks
+    pool = pool.filter { $0.status == 0 }
+    
+    if ds.hideFuture {
+      pool = pool.filter { task in
+        guard let dueDate = task.dueDate else { return true }
+        guard let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) else { return true }
+        return Calendar.current.startOfDay(for: dueDate) <= Calendar.current.startOfDay(for: tomorrow)
+      }
+    }    
     let eligible = pool.filter { task in
       columnForTask(task, in: allColumns)?.id == column.id
     }
     return sortedForKanban(eligible, sortOrder: column.sortOrder)
   }
 
+  private func subtreeTasks(in tasks: [CheckvistTask], rootId: Int, taskById: [Int: CheckvistTask])
+    -> [CheckvistTask]
+  {
+    tasks.filter { task in
+      task.id != rootId && TaskFilterEngine.isDescendant(task, of: rootId, taskById: taskById)
+    }
+  }
+
   /// Returns the first column (in order) that a task matches.
   func columnForTask(_ task: CheckvistTask, in columns: [KanbanColumn]) -> KanbanColumn? {
-    // Always evaluate non-catch-all conditions first so fallback columns don't
-    // shadow more specific due/tag columns when ordering is customized.
-    for column in columns where column.conditions.contains(where: { $0 != .catchAll }) {
-      if taskMatchesKanbanColumn(task, column: column, includeCatchAll: false) {
-        return column
-      }
-    }
+    // Only return a column if the task matches a SPECIFIC requirement (Tag or Due Bucket).
+    // The .catchAll condition is effectively disabled by taskMatchesCondition returning false.
     for column in columns {
       if taskMatchesKanbanColumn(task, column: column) {
         return column
@@ -142,7 +189,7 @@ enum KanbanMoveOutcome {
       guard let bucket = RootDueBucket(rawValue: raw) else { return false }
       return ds.rootDueBucket(for: task) == bucket
     case .catchAll:
-      return true
+      return false
     }
   }
 
@@ -207,7 +254,7 @@ enum KanbanMoveOutcome {
       return tasks.sorted { lhs, rhs in
         let la = ds.absolutePriorityRank(for: lhs)
         let ra = ds.absolutePriorityRank(for: rhs)
-        if let la, let ra, la != ra { return la < ra }
+        if let la, let ra, la != la { return la < ra }
         if la != nil && ra == nil { return true }
         if la == nil && ra != nil { return false }
         let lp = ds.priorityRank(for: lhs)
@@ -488,28 +535,16 @@ enum KanbanMoveOutcome {
     return kanbanFocusedColumnIndex
   }
 
-  // MARK: - Auto-sync filter with selection
-
-  /// Keeps `kanbanFilterParentId` in step with the selected task's parent, so the
-  /// visible cards always represent siblings of whatever is currently selected.
-  private func syncFilterToSelection() {
-    guard let ds = dataSource, let selectedId = kanbanSelectedTaskId else { return }
-    guard let task = ds.cache.taskById[selectedId] else { return }
-    let parentId = task.parentId ?? 0
-    let desired: Int? = parentId == 0 ? nil : parentId
-    if kanbanFilterParentId != desired {
-      kanbanFilterParentId = desired
-    }
-  }
-
   // MARK: - Scope drill in/out
 
   /// Drills the kanban into the selected task's subtree so its children become
   /// the new sibling-pool. Selection moves to the first child if any.
   @MainActor func enterSelectedTaskAsScope() {
+    focusPromptTaskId = nil
     guard let task = currentKanbanTask else { return }
     let columns = kanbanColumns
     kanbanFilterParentId = task.id
+    dataSource?.currentParentId = task.id
     // Pick the first task in the first non-empty column for the new scope.
     for (idx, col) in columns.enumerated() {
       let colTasks = tasksForKanbanColumn(col, allColumns: columns)
@@ -528,11 +563,17 @@ enum KanbanMoveOutcome {
   /// Pops the kanban scope up one level. If we're at root, restores selection to
   /// what was previously the parent task (so navigation feels reversible).
   @MainActor func exitToParentScope() {
+    focusPromptTaskId = nil
     guard let ds = dataSource else { return }
-    guard let currentFilterId = kanbanFilterParentId else { return }
+    let currentScopeId: Int? =
+      kanbanFilterParentId
+      ?? (ds.currentParentId == 0 ? nil : ds.currentParentId)
+    guard let currentFilterId = currentScopeId else { return }
     let parentTask = ds.cache.taskById[currentFilterId]
     let newParentId = parentTask?.parentId ?? 0
+    kanbanFilterSubtasks = false
     kanbanFilterParentId = newParentId == 0 ? nil : newParentId
+    ds.currentParentId = newParentId
 
     let columns = kanbanColumns
     // Re-select the task we just popped out of so the user has context.
@@ -580,6 +621,16 @@ enum KanbanMoveOutcome {
   /// focused column so the selection doesn't jump to an unrelated task.
   @MainActor func clampKanbanSelection() {
     guard let ds = dataSource else { return }
+    if let promptId = focusPromptTaskId,
+      !ds.tasks.contains(where: { $0.id == promptId && $0.status == 0 })
+    {
+      focusPromptTaskId = nil
+    }
+    if let sessionId = focusSession?.taskId,
+      !ds.tasks.contains(where: { $0.id == sessionId && $0.status == 0 })
+    {
+      focusSession = nil
+    }
     let columns = kanbanColumns
     // Check whether the current selection is still valid.
     if let selectedId = kanbanSelectedTaskId {
@@ -604,6 +655,57 @@ enum KanbanMoveOutcome {
       kanbanSelectedTaskId = colTasks[idx].id
       ds.currentSiblingIndex = idx
     }
+  }
+
+  // MARK: - Focus mode
+
+  @MainActor func presentFocusPromptForCurrentTask() {
+    guard let task = currentKanbanTask else { return }
+    focusSession = nil
+    focusPromptTaskId = task.id
+    focusDurationPreset = .long
+    kanbanSelectedTaskId = task.id
+  }
+
+  @MainActor func dismissFocusPrompt() {
+    focusPromptTaskId = nil
+  }
+
+  @MainActor func setFocusDurationPreset(_ preset: FocusDurationPreset) {
+    focusDurationPreset = preset
+  }
+
+  @MainActor func adjustFocusLongMinutes(by delta: Int) {
+    focusLongMinutes = min(180, max(1, focusLongMinutes + delta))
+  }
+
+  @MainActor func adjustFocusShortMinutes(by delta: Int) {
+    focusShortMinutes = min(60, max(1, focusShortMinutes + delta))
+  }
+
+  var configuredFocusDurationMinutes: Int {
+    focusDurationPreset == .long ? focusLongMinutes : focusShortMinutes
+  }
+
+  @MainActor func startFocusSession(baselineElapsed: TimeInterval) {
+    guard let ds = dataSource else { return }
+    guard let promptId = focusPromptTaskId, ds.cache.taskById[promptId] != nil else {
+      focusPromptTaskId = nil
+      return
+    }
+    let durationSeconds = max(60, configuredFocusDurationMinutes * 60)
+    focusSession = FocusSessionState(
+      taskId: promptId,
+      durationSeconds: durationSeconds,
+      baselineElapsed: baselineElapsed
+    )
+    kanbanSelectedTaskId = promptId
+    focusPromptTaskId = nil
+  }
+
+  @MainActor func cancelFocusSession() {
+    focusSession = nil
+    focusPromptTaskId = nil
   }
 
   // MARK: - Kanban column persistence

@@ -62,6 +62,11 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
   case kanbanShowInAll
   case kanbanEnterTaskChildren
   case kanbanExitToTaskParent
+  case kanbanFocusMode
+  case rootTabMatrix
+  case sequenceUrgency
+  case sequenceImportance
+  case sequenceMatrixCoord
 
   var id: String { rawValue }
 
@@ -115,8 +120,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .toggleHideFuture: return "Toggle hide future"
     case .quickListSwitch: return "Quick list switch"
     case .quickAdd: return "Quick add"
-    case .focusSearch: return "Focus search"
-    case .clearPriority: return "Clear priority"
+    case .focusSearch: return "/"
+    case .clearPriority: return "-"
     case .pushPriorityBack: return "Send priority to back"
     case .setPriorityRank: return "Set priority rank"
     case .setAbsolutePriorityRank: return "Set absolute priority rank"
@@ -128,6 +133,11 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .kanbanShowInAll: return "Kanban: show task in All view"
     case .kanbanEnterTaskChildren: return "Kanban: drill into selected task's subtasks"
     case .kanbanExitToTaskParent: return "Kanban: pop up to parent scope"
+    case .kanbanFocusMode: return "Kanban: focus selected task"
+    case .rootTabMatrix: return "Jump to root tab: Matrix"
+    case .sequenceUrgency: return "Sequence: urgency"
+    case .sequenceImportance: return "Sequence: importance"
+    case .sequenceMatrixCoord: return "Sequence: matrix coordinates"
     }
   }
 
@@ -138,7 +148,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
       .rootTabTags, .rootTabPriority, .rootFilter1, .rootFilter2, .rootFilter3, .rootFilter4,
       .rootFilter5, .rootFilter6, .rootFilter7, .rootTabKanban,
       .kanbanFocusLeft, .kanbanFocusRight, .kanbanShowInAll,
-      .kanbanEnterTaskChildren, .kanbanExitToTaskParent:
+      .kanbanEnterTaskChildren, .kanbanExitToTaskParent, .kanbanFocusMode, .rootTabMatrix:
       return "Navigation"
     case .markDone, .invalidateTask, .addSibling, .addChild, .unindentTask, .editTaskAtEnd,
       .editTaskAtStart, .deleteTask, .moveTaskUp, .moveTaskDown, .undo, .clearPriority,
@@ -146,7 +156,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
       return "Task Actions"
     case .openCommandPalette, .closeOrCancel, .focusSearch, .sequenceDue, .sequenceDueToday,
       .sequenceStart, .sequenceRepeat, .sequenceTag, .sequenceUntag, .sequenceToggleContext,
-      .quickListSwitch, .quickAdd:
+      .quickListSwitch, .quickAdd, .sequenceUrgency, .sequenceImportance, .sequenceMatrixCoord:
       return "Entry & Commands"
     case .openInObsidian, .openInObsidianNewWindow, .sequenceOpenLink, .sequenceGoogleCalendar,
       .toggleTimer, .toggleTimerPause, .toggleHideFuture:
@@ -188,7 +198,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .rootFilter4: return "v"
     case .rootFilter5: return "b"
     case .rootFilter6: return "n"
-    case .rootFilter7: return "m"
+    case .rootFilter7: return "comma"
     case .sequenceDue: return "dd"
     case .sequenceDueToday: return "dt"
     case .sequenceStart: return "ds"
@@ -219,6 +229,11 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .kanbanShowInAll: return "f"
     case .kanbanEnterTaskChildren: return "]"
     case .kanbanExitToTaskParent: return "["
+    case .kanbanFocusMode: return "'"
+    case .rootTabMatrix: return "y"
+    case .sequenceUrgency: return "mu"
+    case .sequenceImportance: return "mi"
+    case .sequenceMatrixCoord: return "mm"
     }
   }
 }

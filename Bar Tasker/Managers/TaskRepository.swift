@@ -18,6 +18,7 @@ import Observation
   @ObservationIgnored let priorityQueueStore: ListScopedPriorityStore
   @ObservationIgnored let absolutePriorityQueueStore: ListScopedTaskIDStore
   @ObservationIgnored let legacyPriorityQueueStore: ListScopedTaskIDStore
+  @ObservationIgnored let eisenhowerStore: ListScopedEisenhowerStore
 
   // MARK: - Callbacks
 
@@ -33,6 +34,7 @@ import Observation
   private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
   private static let scopedPriorityQueuesDefaultsKey = "priorityTaskIdsByParentIdByListId"
   private static let absolutePriorityQueuesDefaultsKey = "absolutePriorityTaskIdsByListId"
+  private static let eisenhowerLevelsDefaultsKey = "eisenhowerLevelsByTaskIdByListId"
 
   // MARK: - Task Data
 
@@ -60,6 +62,7 @@ import Observation
       preferencesStore.set(listId, for: .checkvistListId)
       loadPriorityQueue(for: listId)
       loadAbsolutePriorityQueue(for: listId)
+      loadEisenhowerLevels(for: listId)
       onListIdChanged?(listId)
     }
   }
@@ -97,6 +100,10 @@ import Observation
   var absolutePriorityTaskIds: [Int] {
     didSet { onCacheRelevantChange?() }
   }
+  var taskEisenhowerLevels: [Int: EisenhowerLevel] = [:] {
+    didSet { onCacheRelevantChange?() }
+  }
+
   var absolutePrioritizedTaskIds: Set<Int> {
     Set(absolutePriorityTaskIds)
   }
@@ -149,6 +156,9 @@ import Observation
       defaultsKey: Self.priorityQueuesDefaultsKey,
       maximumCount: Self.maxPriorityRank
     )
+    self.eisenhowerStore = ListScopedEisenhowerStore(
+      defaultsKey: Self.eisenhowerLevelsDefaultsKey
+    )
 
     let offlinePayload = localTaskStore.load()
     let storedUsername = preferencesStore.string(.checkvistUsername)
@@ -174,6 +184,7 @@ import Observation
       listId: storedListId
     )
     self.absolutePriorityTaskIds = absolutePriorityQueueStore.load(for: storedListId)
+    self.taskEisenhowerLevels = eisenhowerStore.load(for: storedListId)
   }
   // swiftlint:enable function_body_length
 }
@@ -323,6 +334,7 @@ extension TaskRepository {
     if filteredAbsolute != absolutePriorityTaskIds {
       saveAbsolutePriorityQueue(filteredAbsolute)
     }
+    reconcileEisenhowerLevels()
   }
 
   @MainActor func reconcilePriorityQueueWithOpenTasks() {
@@ -348,6 +360,47 @@ extension TaskRepository {
     let filteredAbsolute = absolutePriorityTaskIds.filter { openTaskIds.contains($0) }
     if filteredAbsolute != absolutePriorityTaskIds {
       saveAbsolutePriorityQueue(filteredAbsolute)
+    }
+    reconcileEisenhowerLevels()
+  }
+}
+
+
+
+// MARK: - Eisenhower Matrix
+
+extension TaskRepository {
+  func loadEisenhowerLevels(for listId: String) {
+    taskEisenhowerLevels = eisenhowerStore.load(for: listId)
+  }
+
+  func saveEisenhowerLevels(_ levels: [Int: EisenhowerLevel]) {
+    taskEisenhowerLevels = levels
+    guard !listId.isEmpty else { return }
+    eisenhowerStore.save(levels, for: listId)
+  }
+
+  @MainActor func setUrgency(taskId: Int, level: Double) {
+    var updated = taskEisenhowerLevels
+    var current = updated[taskId] ?? .zero
+    current.urgency = level
+    updated[taskId] = current
+    saveEisenhowerLevels(updated)
+  }
+
+  @MainActor func setImportance(taskId: Int, level: Double) {
+    var updated = taskEisenhowerLevels
+    var current = updated[taskId] ?? .zero
+    current.importance = level
+    updated[taskId] = current
+    saveEisenhowerLevels(updated)
+  }
+
+  @MainActor func reconcileEisenhowerLevels() {
+    let openTaskIds = Set(tasks.map(\.id))
+    let filtered = taskEisenhowerLevels.filter { openTaskIds.contains($0.key) }
+    if filtered.count != taskEisenhowerLevels.count {
+      saveEisenhowerLevels(filtered)
     }
   }
 }

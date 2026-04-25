@@ -105,12 +105,13 @@ final class CommandExecutor {
       case "tags": view = .tags
       case "priority", "prio": view = .priority
       case "kanban", "board": view = .kanban
+      case "eisenhower", "matrix": view = .eisenhower
       default: view = nil
       }
       if let view {
         manager.setRootTaskView(view)
       } else {
-        manager.errorMessage = "Unknown tab: \(raw). Try: tab all|due|tags|priority|kanban"
+        manager.errorMessage = "Unknown tab: \(raw). Try: tab all|due|tags|priority|kanban|eisenhower"
       }
       return
     case .cycleTab(let direction):
@@ -152,6 +153,10 @@ final class CommandExecutor {
     case .kanbanPopOut:
       manager.rootTaskView = .kanban
       manager.kanban.exitToParentScope()
+      return
+    case .kanbanFocusMode:
+      manager.rootTaskView = .kanban
+      manager.kanban.presentFocusPromptForCurrentTask()
       return
     case .toggleContext:
       manager.preferences.showTaskBreadcrumbContext.toggle()
@@ -248,6 +253,8 @@ final class CommandExecutor {
       let tagged =
         task.content.contains("#\(tagName)") ? task.content : "\(task.content) #\(tagName)"
       await manager.updateTask(task: task, content: tagged)
+      manager.statusMessage = "Added tag: #\(tagName)"
+      manager.statusMessage = "Added tag: #\(tagName)"
     case .untag(let tagName):
       guard !tagName.isEmpty else {
         manager.errorMessage = "Missing tag name. Try: untag urgent"
@@ -257,6 +264,21 @@ final class CommandExecutor {
         .replacingOccurrences(of: "#\(tagName)", with: "")
         .trimmingCharacters(in: .whitespaces)
       await manager.updateTask(task: task, content: cleaned)
+      manager.statusMessage = "Removed tag: #\(tagName)"
+      manager.statusMessage = "Removed tag: #\(tagName)"
+    case .matrix(let u, let i):
+      manager.repository.setUrgency(taskId: task.id, level: u)
+      manager.repository.setImportance(taskId: task.id, level: i)
+      manager.statusMessage = "Matrix: (\(u), \(i))"
+      manager.statusMessage = "Matrix: (\(u), \(i))"
+    case .setUrgency(let level):
+      manager.repository.setUrgency(taskId: task.id, level: level)
+      manager.statusMessage = "Urgency: \(level)"
+      manager.statusMessage = "Urgency: \(level)"
+    case .setImportance(let level):
+      manager.repository.setImportance(taskId: task.id, level: level)
+      manager.statusMessage = "Importance: \(level)"
+      manager.statusMessage = "Importance: \(level)"
     case .priority(let rank):
       manager.setPriorityForCurrentTask(rank)
     case .priorityBack:

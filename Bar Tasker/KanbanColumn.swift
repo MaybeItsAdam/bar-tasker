@@ -108,7 +108,7 @@ struct KanbanColumn: Identifiable, Codable {
       ),
       KanbanColumn(
         name: "Backlog",
-        conditions: [.catchAll],
+        conditions: [.tag("backlog")],
         sortOrder: .priorityThenDueAscending
       ),
     ]

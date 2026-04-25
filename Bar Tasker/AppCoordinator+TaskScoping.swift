@@ -124,7 +124,7 @@ extension AppCoordinator {
       // Reporting `false` otherwise keeps the height calc and keyboard nav
       // consistent with the actual rendered chrome.
       return !rootLevelTagNames(limit: 1).isEmpty
-    case .all, .priority:
+    case .all, .priority, .eisenhower:
       return false
     }
   }
@@ -179,7 +179,7 @@ extension AppCoordinator {
       return start == 0 ? "Untagged" : "Other tasks"
     case .priority:
       return start == 0 ? "Unprioritised" : "Other tasks"
-    case .all, .kanban:
+    case .all, .kanban, .eisenhower:
       return nil
     }
   }
@@ -228,6 +228,20 @@ extension AppCoordinator {
     return nil
   }
 
+  func eisenhowerBadgeLabel(for task: CheckvistTask) -> String? {
+    guard let level = repository.taskEisenhowerLevels[task.id],
+      level.urgency != 0 || level.importance != 0
+    else { return nil }
+    return "M(\(formatEisenhowerCoordinate(level.urgency)),\(formatEisenhowerCoordinate(level.importance)))"
+  }
+
+  private func formatEisenhowerCoordinate(_ value: Double) -> String {
+    if value.rounded() == value {
+      return String(Int(value))
+    }
+    return String(format: "%.1f", value)
+  }
+
   var isSearchFilterActive: Bool { quickEntry.isSearchFilterActive }
 
   var shouldShowDueSectionHeaders: Bool {
@@ -268,6 +282,8 @@ extension AppCoordinator {
       return absolutePriorityRank(for: task) != nil || priorityRank(for: task) != nil
     case .kanban:
       return true
+    case .eisenhower:
+      return true
     }
   }
 
@@ -300,7 +316,6 @@ extension AppCoordinator {
       selectedRootTag = ""
     }
     if view != .kanban {
-      kanban.kanbanFilterTag = ""
       kanban.kanbanFilterSubtasks = false
       kanban.kanbanFilterParentId = nil
     } else {
@@ -309,7 +324,6 @@ extension AppCoordinator {
       let inheritedParentId: Int? = capturedParentId == 0 ? nil : capturedParentId
       kanban.kanbanFilterParentId = inheritedParentId
       kanban.kanbanFilterSubtasks = false
-      kanban.kanbanFilterTag = ""
       // Seed the kanban selection from the task the user had highlighted.
       if let task = capturedTask {
         kanban.kanbanSelectedTaskId = task.id
@@ -361,23 +375,8 @@ extension AppCoordinator {
   @MainActor func cycleRootScopeFilter(direction: Int) {
     guard shouldShowRootScopeSection else { return }
     switch rootTaskView {
-    case .all, .priority:
+    case .all, .priority, .eisenhower, .kanban:
       return
-    case .kanban:
-      let tags = rootLevelTagNames(limit: 30)
-      // options: "all", each tag (tag filter cycling; subtasks toggled separately)
-      let options = [""] + tags
-      guard let currentIndex = options.firstIndex(of: kanban.kanbanFilterTag) else {
-        kanban.kanbanFilterTag = ""
-        return
-      }
-      let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
-      kanban.kanbanFilterTag = options[nextIndex]
-      if !kanban.kanbanFilterTag.isEmpty {
-        kanban.kanbanFilterSubtasks = false
-        kanban.kanbanFilterParentId = nil
-      }
-      currentSiblingIndex = 0
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
       guard let currentIndex = options.firstIndex(where: { $0 == selectedRootDueBucket }) else {
@@ -406,19 +405,8 @@ extension AppCoordinator {
     guard shouldShowRootScopeSection else { return }
     guard index >= 0 else { return }
     switch rootTaskView {
-    case .all, .priority:
+    case .all, .priority, .eisenhower, .kanban:
       return
-    case .kanban:
-      let tags = rootLevelTagNames(limit: 30)
-      let options = [""] + tags
-      guard options.indices.contains(index) else { return }
-      kanban.kanbanFilterTag = options[index]
-      if !kanban.kanbanFilterTag.isEmpty {
-        kanban.kanbanFilterSubtasks = false
-        kanban.kanbanFilterParentId = nil
-      }
-      currentSiblingIndex = 0
-      rootScopeFocusLevel = 2
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
       guard options.indices.contains(index) else { return }
@@ -530,4 +518,6 @@ extension AppCoordinator {
   func ensureVisibleTasksCacheValid() {
     taskListViewModel.ensureVisibleTasksCacheValid()
   }
+
+
 }

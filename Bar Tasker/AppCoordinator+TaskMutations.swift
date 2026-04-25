@@ -284,23 +284,45 @@ extension AppCoordinator {
     if !isUndo {
       lastUndo = nil  // Clear undo history since we don't support recovering hard-deleted tasks yet
     }
+    guard let optimisticSnapshot = applyOptimisticCompletion(for: task.id) else {
+      errorMessage = "Task not found."
+      return
+    }
+    reconcilePendingObsidianSyncQueueWithOpenTasks()
 
-    beginLoading()
-    defer { endLoading() }
+    let listId = self.listId
+    let credentials = self.activeCredentials
+    let plugin = repository.activeSyncPlugin
+    let taskId = task.id
 
-    await runBooleanMutation(
-      failureMessage: "Failed to delete task.",
-      action: {
-        try await self.repository.activeSyncPlugin.deleteTask(
-          listId: self.listId,
-          taskId: task.id,
-          credentials: self.activeCredentials
+    Task { [weak self] in
+      do {
+        let success = try await plugin.deleteTask(
+          listId: listId,
+          taskId: taskId,
+          credentials: credentials
         )
-      },
-      onSuccess: { [weak self] in
-        await self?.fetchTopTask()
+        if !success {
+          await MainActor.run { [weak self] in
+            guard let self else { return }
+            restoreTasksSnapshot(optimisticSnapshot)
+            self.errorMessage = "Failed to delete task."
+          }
+        }
+      } catch CheckvistSessionError.authenticationUnavailable {
+        await MainActor.run { [weak self] in
+          guard let self else { return }
+          restoreTasksSnapshot(optimisticSnapshot)
+          setAuthenticationRequiredErrorIfNeeded()
+        }
+      } catch {
+        await MainActor.run { [weak self] in
+          guard let self else { return }
+          restoreTasksSnapshot(optimisticSnapshot)
+          self.errorMessage = "Error: \(error.localizedDescription)"
+        }
       }
-    )
+    }
   }
 
   // MARK: - Optimistic Updates
