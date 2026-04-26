@@ -281,7 +281,6 @@ extension TaskRepository {
       if !dedup.isEmpty { normalized[parentId] = dedup }
     }
     priorityTaskIdsByParentId = normalized
-    guard !listId.isEmpty else { return }
     priorityQueueStore.save(normalized, for: listId)
   }
 
@@ -292,7 +291,6 @@ extension TaskRepository {
   func saveAbsolutePriorityQueue(_ queue: [Int]) {
     let normalized = Self.normalizedTaskIdQueue(queue)
     absolutePriorityTaskIds = normalized
-    guard !listId.isEmpty else { return }
     absolutePriorityQueueStore.save(normalized, for: listId)
   }
 
@@ -376,7 +374,6 @@ extension TaskRepository {
 
   func saveEisenhowerLevels(_ levels: [Int: EisenhowerLevel]) {
     taskEisenhowerLevels = levels
-    guard !listId.isEmpty else { return }
     eisenhowerStore.save(levels, for: listId)
   }
 

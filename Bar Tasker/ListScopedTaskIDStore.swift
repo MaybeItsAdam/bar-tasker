@@ -1,6 +1,8 @@
 import Foundation
 
 struct ListScopedTaskIDStore {
+  static let offlineScopeKey = "__offline__"
+
   private let defaults: UserDefaults
   private let defaultsKey: String
   private let maximumCount: Int?
@@ -12,22 +14,25 @@ struct ListScopedTaskIDStore {
   }
 
   func load(for listId: String) -> [Int] {
-    guard !listId.isEmpty else { return [] }
+    let scope = Self.scope(for: listId)
     let allQueues = allQueuesFromDefaults()
-    return normalizedQueue(allQueues[listId] ?? [])
+    return normalizedQueue(allQueues[scope] ?? [])
   }
 
   func save(_ queue: [Int], for listId: String) {
-    guard !listId.isEmpty else { return }
-
+    let scope = Self.scope(for: listId)
     var allQueues = allQueuesFromDefaults()
     let normalized = normalizedQueue(queue)
     if normalized.isEmpty {
-      allQueues.removeValue(forKey: listId)
+      allQueues.removeValue(forKey: scope)
     } else {
-      allQueues[listId] = normalized
+      allQueues[scope] = normalized
     }
     defaults.set(allQueues, forKey: defaultsKey)
+  }
+
+  private static func scope(for listId: String) -> String {
+    listId.isEmpty ? offlineScopeKey : listId
   }
 
   private func allQueuesFromDefaults() -> [String: [Int]] {

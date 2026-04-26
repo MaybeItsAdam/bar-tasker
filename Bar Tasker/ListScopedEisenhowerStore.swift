@@ -10,6 +10,8 @@ struct EisenhowerLevel: Codable, Equatable, Sendable {
 /// Stores per-list urgency and importance levels for tasks.
 /// The outer key is the Checkvist list id, the inner key is the Checkvist task id.
 struct ListScopedEisenhowerStore {
+  static let offlineScopeKey = "__offline__"
+
   private let defaults: UserDefaults
   private let defaultsKey: String
 
@@ -19,21 +21,25 @@ struct ListScopedEisenhowerStore {
   }
 
   func load(for listId: String) -> [Int: EisenhowerLevel] {
-    guard !listId.isEmpty else { return [:] }
+    let scope = Self.scope(for: listId)
     let all = allFromDefaults()
-    return all[listId] ?? [:]
+    return all[scope] ?? [:]
   }
 
   func save(_ levels: [Int: EisenhowerLevel], for listId: String) {
-    guard !listId.isEmpty else { return }
+    let scope = Self.scope(for: listId)
     var all = allFromDefaults()
     let filtered = levels.filter { $0.value.urgency != 0 || $0.value.importance != 0 }
     if filtered.isEmpty {
-      all.removeValue(forKey: listId)
+      all.removeValue(forKey: scope)
     } else {
-      all[listId] = filtered
+      all[scope] = filtered
     }
     writeAll(all)
+  }
+
+  private static func scope(for listId: String) -> String {
+    listId.isEmpty ? offlineScopeKey : listId
   }
 
   private func allFromDefaults() -> [String: [Int: EisenhowerLevel]] {

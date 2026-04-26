@@ -5,6 +5,8 @@ import Foundation
 /// task ids where index 0 corresponds to rank 1 within that parent scope. There is no
 /// cap on the number of priorities per scope.
 struct ListScopedPriorityStore {
+  static let offlineScopeKey = "__offline__"
+
   private let defaults: UserDefaults
   private let defaultsKey: String
 
@@ -14,23 +16,27 @@ struct ListScopedPriorityStore {
   }
 
   func load(for listId: String) -> [Int: [Int]] {
-    guard !listId.isEmpty else { return [:] }
+    let scope = Self.scope(for: listId)
     let all = allFromDefaults()
-    return all[listId] ?? [:]
+    return all[scope] ?? [:]
   }
 
   func save(_ queues: [Int: [Int]], for listId: String) {
-    guard !listId.isEmpty else { return }
+    let scope = Self.scope(for: listId)
     var all = allFromDefaults()
     let normalized = queues
       .mapValues { Self.normalizedQueue($0) }
       .filter { !$0.value.isEmpty }
     if normalized.isEmpty {
-      all.removeValue(forKey: listId)
+      all.removeValue(forKey: scope)
     } else {
-      all[listId] = normalized
+      all[scope] = normalized
     }
     writeAll(all)
+  }
+
+  private static func scope(for listId: String) -> String {
+    listId.isEmpty ? offlineScopeKey : listId
   }
 
   private func allFromDefaults() -> [String: [Int: [Int]]] {
