@@ -11,6 +11,7 @@ struct TaskVisibilityEngine {
     let shouldShowRootScopeSection: Bool
     let isRootLevel: Bool
     let rootTaskView: RootTaskView
+    let showChildrenInMenus: Bool
     let selectedRootDueBucket: RootDueBucket?
     let selectedRootTag: String
     let taskById: [Int: CheckvistTask]
@@ -49,15 +50,22 @@ struct TaskVisibilityEngine {
     if context.shouldShowRootScopeSection {
       if context.isRootLevel {
         switch context.rootTaskView {
-        case .all, .due, .tags:
-          // Keep root "All / Due / Tags" scoped to current-level siblings so
-          // hierarchy + breadcrumb navigation stay stable while those tabs
-          // reorder matches ahead of remainder.
+        case .all:
+          // The "main list" stays scoped to current-level siblings regardless of
+          // the show-children toggle; users rely on it for hierarchical navigation.
           baseTasks = context.currentLevelTasks
+        case .due, .tags:
+          baseTasks =
+            context.showChildrenInMenus
+            ? context.tasks.filter { context.isDescendant($0, context.currentParentId) }
+            : context.currentLevelTasks
         case .priority:
-          // Priority view should surface prioritised subtasks from anywhere in
-          // the list, even when browsing root.
-          baseTasks = context.tasks
+          // Priority view surfaces prioritised subtasks from anywhere in the list
+          // when the show-children toggle is on; otherwise restricts to siblings.
+          baseTasks =
+            context.showChildrenInMenus
+            ? context.tasks
+            : context.currentLevelTasks
         case .kanban, .eisenhower:
           // Kanban has its own per-column task lists via tasksForKanbanColumn;
           // visibleTasks is unused in kanban mode, so return empty to prevent
@@ -65,7 +73,15 @@ struct TaskVisibilityEngine {
           return Result(tasks: [], remainderStartIndex: nil)
         }
       } else {
-        baseTasks = context.currentLevelTasks
+        switch context.rootTaskView {
+        case .all:
+          baseTasks = context.currentLevelTasks
+        case .due, .tags, .priority, .kanban, .eisenhower:
+          baseTasks =
+            context.showChildrenInMenus
+            ? context.tasks.filter { context.isDescendant($0, context.currentParentId) }
+            : context.currentLevelTasks
+        }
       }
     } else {
       baseTasks = context.currentLevelTasks

@@ -26,6 +26,14 @@ import Observation
     didSet { invalidateCaches() }
   }
 
+  /// When true, non-kanban menus (Due, Tags, Priority, Eisenhower) show the entire
+  /// subtree under `currentParentId` (siblings of the selection plus all of their
+  /// descendants), matching kanban filtering. When false, they show only direct
+  /// children of `currentParentId`. The All view is unaffected.
+  var showChildrenInMenus: Bool = true {
+    didSet { invalidateCaches() }
+  }
+
   @ObservationIgnored var cache = CacheState()
 
   init(
@@ -100,6 +108,7 @@ import Observation
         shouldShowRootScopeSection: shouldShowRootScopeSection,
         isRootLevel: isRootLevel,
         rootTaskView: rootTaskView,
+        showChildrenInMenus: showChildrenInMenus,
         selectedRootDueBucket: RootDueBucket(rawValue: selectedRootDueBucketRawValue),
         selectedRootTag: selectedRootTag,
         taskById: cache.taskById,

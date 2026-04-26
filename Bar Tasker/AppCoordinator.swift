@@ -61,6 +61,10 @@ import SwiftUI
     get { taskListViewModel.hideFuture }
     set { taskListViewModel.hideFuture = newValue }
   }
+  var showChildrenInMenus: Bool {
+    get { taskListViewModel.showChildrenInMenus }
+    set { taskListViewModel.showChildrenInMenus = newValue }
+  }
   var rootTaskView: RootTaskView {
     get { taskListViewModel.rootTaskView }
     set {
@@ -296,6 +300,10 @@ import SwiftUI
       self?.refreshOnboardingDialogState()
     }
     setupNetworkMonitor()
+    // Hydrate the remote key from the keychain so the chosen list and
+    // credentials survive across launches without forcing the user back to
+    // offline mode.
+    loadRemoteKeyFromKeychainIfNeeded()
     Task { @MainActor [weak self] in
       self?.presentOnboardingDialogIfNeeded()
     }

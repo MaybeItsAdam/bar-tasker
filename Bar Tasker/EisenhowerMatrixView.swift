@@ -15,7 +15,18 @@ struct EisenhowerMatrixView: View {
 
   var body: some View {
     let levels = manager.repository.taskEisenhowerLevels
-    let tasks = manager.tasks.filter { task in task.status == 0 && levels[task.id] != nil && (levels[task.id]!.urgency != 0.0 || levels[task.id]!.importance != 0.0) }
+    let scopeId = manager.currentParentId
+    let showChildren = manager.showChildrenInMenus
+    let tasks = manager.tasks.filter { task in
+      guard task.status == 0,
+        let level = levels[task.id],
+        level.urgency != 0.0 || level.importance != 0.0
+      else { return false }
+      if showChildren {
+        return manager.isDescendant(task, of: scopeId)
+      }
+      return (task.parentId ?? 0) == scopeId
+    }
     let currentSelectedId = manager.currentTask?.id
 
     GeometryReader { proxy in

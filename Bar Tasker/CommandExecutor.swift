@@ -161,6 +161,11 @@ final class CommandExecutor {
     case .toggleContext:
       manager.preferences.showTaskBreadcrumbContext.toggle()
       return
+    case .toggleChildrenInMenus:
+      manager.showChildrenInMenus.toggle()
+      manager.statusMessage =
+        manager.showChildrenInMenus ? "Showing siblings + children" : "Showing siblings only"
+      return
     case .editAtStart:
       guard let task = manager.currentTask else {
         manager.errorMessage = "No task selected."

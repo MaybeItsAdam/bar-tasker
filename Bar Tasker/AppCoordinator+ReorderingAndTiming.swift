@@ -7,6 +7,11 @@ extension AppCoordinator {
   @MainActor func moveTask(_ task: CheckvistTask, direction: Int) async {
     guard direction == -1 || direction == 1 else { return }
 
+    if rootTaskView == .priority {
+      movePriorityTask(task, direction: direction)
+      return
+    }
+
     let siblings = tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }) else { return }
     let newIdx = idx + direction
@@ -51,6 +56,65 @@ extension AppCoordinator {
     }
 
     enqueueReorderRequest(taskId: task.id, position: targetPosition)
+  }
+
+  /// Reorder within the priority view by swapping the visible neighbour's slot in
+  /// whichever priority queue each task lives in. Falls back to position-based
+  /// reorder when the neighbours don't share a priority storage (e.g. one is in
+  /// the absolute queue and the other is scoped).
+  @MainActor func movePriorityTask(_ task: CheckvistTask, direction: Int) {
+    let visible = visibleTasks
+    guard let idx = visible.firstIndex(where: { $0.id == task.id }) else { return }
+    let newIdx = idx + direction
+    guard visible.indices.contains(newIdx) else { return }
+    let neighbour = visible[newIdx]
+
+    let absoluteQueue = repository.absolutePriorityTaskIds
+    let byParent = repository.priorityTaskIdsByParentId
+
+    let taskAbs = absoluteQueue.firstIndex(of: task.id)
+    let neighbourAbs = absoluteQueue.firstIndex(of: neighbour.id)
+
+    if let i1 = taskAbs, let i2 = neighbourAbs {
+      var queue = absoluteQueue
+      queue.swapAt(i1, i2)
+      repository.saveAbsolutePriorityQueue(queue)
+      currentSiblingIndex = newIdx
+      return
+    }
+
+    let taskScope = priorityScope(for: task.id, in: byParent)
+    let neighbourScope = priorityScope(for: neighbour.id, in: byParent)
+
+    if let (p1, i1) = taskScope, let (p2, i2) = neighbourScope {
+      var updated = byParent
+      if p1 == p2 {
+        var queue = updated[p1] ?? []
+        queue.swapAt(i1, i2)
+        updated[p1] = queue
+      } else {
+        var q1 = updated[p1] ?? []
+        var q2 = updated[p2] ?? []
+        let a = q1[i1]
+        let b = q2[i2]
+        q1[i1] = b
+        q2[i2] = a
+        updated[p1] = q1
+        updated[p2] = q2
+      }
+      savePriorityQueue(updated)
+      currentSiblingIndex = newIdx
+      return
+    }
+  }
+
+  private func priorityScope(
+    for taskId: Int, in byParent: [Int: [Int]]
+  ) -> (parentId: Int, index: Int)? {
+    for (parentId, ids) in byParent {
+      if let idx = ids.firstIndex(of: taskId) { return (parentId, idx) }
+    }
+    return nil
   }
 
   private func taskWithPosition(_ task: CheckvistTask, position: Int?) -> CheckvistTask {

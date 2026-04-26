@@ -91,6 +91,7 @@ enum Command: Equatable, Sendable {
   case kanbanPopOut
   case kanbanFocusMode
   case toggleContext
+  case toggleChildrenInMenus
   case editAtStart
   case openCommandPalette
   case setUrgency(Double)
@@ -349,6 +350,10 @@ enum CommandEngine {
       preview: "Show or hide the breadcrumb path on tasks", keybind: nil,
       submitImmediately: true, boundActionRawValue: "sequenceToggleContext"),
     .init(
+      label: "Toggle children in menus", command: "toggle children",
+      preview: "Show siblings + descendants (default) or just siblings in non-All views",
+      keybind: nil, submitImmediately: true),
+    .init(
       label: "Kanban: move task to next column", command: "kanban move right",
       preview: "Push the selected task one column right", keybind: nil,
       submitImmediately: true, boundActionRawValue: "kanbanMoveRight"),
@@ -549,6 +554,7 @@ enum CommandEngine {
     }
     if cmd == "kanban focus mode" || cmd == "focus mode" { return .kanbanFocusMode }
     if cmd == "toggle context" { return .toggleContext }
+    if cmd == "toggle children" || cmd == "toggle subtree" { return .toggleChildrenInMenus }
     if cmd == "edit start" { return .editAtStart }
     if cmd == "command palette" || cmd == "open palette" || cmd == "palette" {
       return .openCommandPalette
