@@ -22,8 +22,19 @@ final class CheckvistCredentialStore {
       // Never read keychain during app bootstrap; defer until explicit login/action.
       return ""
     }
-    return defaults.string(forKey: Self.remoteKeyDefaultsKey)?
+    let stored = defaults.string(forKey: Self.remoteKeyDefaultsKey)?
       .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !stored.isEmpty { return stored }
+    // One-time migration off keychain: if a prior install stashed the key in
+    // the keychain, copy it into UserDefaults and delete the keychain copy so
+    // future launches never trigger a keychain access prompt.
+    guard let migrated = keychainValue(forKey: Self.remoteKeyDefaultsKey)?
+      .trimmingCharacters(in: .whitespacesAndNewlines),
+      !migrated.isEmpty
+    else { return "" }
+    defaults.set(migrated, forKey: Self.remoteKeyDefaultsKey)
+    deleteKeychainValue(forKey: Self.remoteKeyDefaultsKey)
+    return migrated
   }
 
   func persistRemoteKey(_ value: String, useKeychainStorage: Bool) {

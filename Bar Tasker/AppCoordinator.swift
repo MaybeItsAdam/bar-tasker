@@ -150,13 +150,7 @@ import SwiftUI
   let userPluginManager: UserPluginManager
   @ObservationIgnored lazy var commandExecutor = CommandExecutor(manager: self)
   @ObservationIgnored let reachabilityMonitor = NetworkReachabilityMonitor()
-  var usesKeychainStorage: Bool {
-    #if DEBUG
-      !preferences.ignoreKeychainInDebug
-    #else
-      true
-    #endif
-  }
+  var usesKeychainStorage: Bool { false }
 
   var activeCredentials: CheckvistCredentials {
     CheckvistCredentials(username: username, remoteKey: remoteKey)
@@ -207,17 +201,8 @@ import SwiftUI
     )
     self.preferences = PreferencesManager(preferencesStore: preferencesStore)
 
-    // Compute initial remote key before creating repository
-    let useKeychainStorageAtInit: Bool
-    #if DEBUG
-      let ignoreAtInit = preferencesStore.bool(.ignoreKeychainInDebug, default: true)
-      useKeychainStorageAtInit = !ignoreAtInit
-    #else
-      useKeychainStorageAtInit = true
-    #endif
-
     let initialRemoteKey = resolvedCheckvistSyncPlugin.startupRemoteKey(
-      useKeychainStorageAtInit: useKeychainStorageAtInit)
+      useKeychainStorageAtInit: false)
 
     let navigationState = NavigationState()
     self.navigationState = navigationState
@@ -300,10 +285,6 @@ import SwiftUI
       self?.refreshOnboardingDialogState()
     }
     setupNetworkMonitor()
-    // Hydrate the remote key from the keychain so the chosen list and
-    // credentials survive across launches without forcing the user back to
-    // offline mode.
-    loadRemoteKeyFromKeychainIfNeeded()
     Task { @MainActor [weak self] in
       self?.presentOnboardingDialogIfNeeded()
     }
