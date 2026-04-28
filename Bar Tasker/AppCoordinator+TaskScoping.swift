@@ -482,9 +482,7 @@ extension AppCoordinator {
 
   @MainActor func clearPriorityForCurrentTask() {
     guard let task = currentTask else { return }
-    let hasScoped = repository.prioritizedTaskIds.contains(task.id)
-    let hasAbsolute = repository.absolutePrioritizedTaskIds.contains(task.id)
-    guard hasScoped || hasAbsolute else { return }
+    guard repository.prioritizedTaskIds.contains(task.id) else { return }
     var byParent = repository.priorityTaskIdsByParentId
     for (pid, ids) in byParent {
       let filtered = ids.filter { $0 != task.id }
@@ -494,9 +492,19 @@ extension AppCoordinator {
       }
     }
     savePriorityQueue(byParent)
-    if hasAbsolute {
-      repository.clearAbsolutePriority(taskId: task.id)
+    errorMessage = nil
+
+    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      currentSiblingIndex = newIndex
+    } else {
+      clampSelectionToVisibleRange()
     }
+  }
+
+  @MainActor func clearAbsolutePriorityForCurrentTask() {
+    guard let task = currentTask else { return }
+    guard repository.absolutePrioritizedTaskIds.contains(task.id) else { return }
+    repository.clearAbsolutePriority(taskId: task.id)
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {

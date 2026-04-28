@@ -52,17 +52,22 @@ struct KeyboardShortcutRouter {
       }
       return false
     }
-    if manager.rootTaskView == .kanban && !isFocused, manager.kanban.focusSession != nil {
+    if !isFocused, manager.focusSessionManager.session != nil {
       if event.keyCode == 53 {  // Escape
-        manager.kanban.cancelFocusSession()
+        manager.focusSessionManager.cancelSession()
         manager.timer.pauseTimer()
         updateTitle()
       }
       return true
     }
-    if manager.rootTaskView == .kanban && !isFocused, let focusTaskId = manager.kanban.focusPromptTaskId
-    {
-      if event.keyCode == 36 {  // Enter
+    if let focusTaskId = manager.focusSessionManager.promptTaskId {
+      // Esc always cancels.
+      if event.keyCode == 53 {
+        manager.focusSessionManager.dismissPrompt()
+        return true
+      }
+      // Enter starts the session.
+      if event.keyCode == 36 {
         let baselineElapsed = manager.timer.timerByTaskId[focusTaskId, default: 0]
         if !manager.timer.timerIsEnabled {
           manager.timer.timerMode = .visible
@@ -74,15 +79,25 @@ struct KeyboardShortcutRouter {
         } else {
           manager.timer.toggleTimer(forTaskId: focusTaskId)
         }
-        manager.kanban.startFocusSession(baselineElapsed: baselineElapsed)
+        manager.focusSessionManager.startSession(baselineElapsed: baselineElapsed)
         updateTitle()
         return true
       }
-      if event.keyCode == 53 {  // Escape
-        manager.kanban.dismissFocusPrompt()
+      if !isFocused {
+        // Up / Right increases, Down / Left decreases. Shift = step of 5.
+        if event.keyCode == 126 || event.keyCode == 124 {
+          manager.focusSessionManager.adjustDuration(by: shift ? 5 : 1)
+          return true
+        }
+        if event.keyCode == 125 || event.keyCode == 123 {
+          manager.focusSessionManager.adjustDuration(by: shift ? -5 : -1)
+          return true
+        }
+        // Block other keys so they don't mutate the underlying view.
         return true
       }
-      return true
+      // Otherwise let the event through so the TextField can process digits.
+      return false
     }
     let isRepeat = event.isARepeat
     let chars = event.charactersIgnoringModifiers ?? ""
@@ -241,8 +256,8 @@ struct KeyboardShortcutRouter {
       return true
     }
     if !isFocused && !rootScopeFocused && matches(.kanbanFocusMode) {
-      if !isRepeat && manager.rootTaskView == .kanban {
-        manager.kanban.presentFocusPromptForCurrentTask()
+      if !isRepeat, let task = manager.currentTask {
+        manager.focusSessionManager.presentPrompt(forTaskId: task.id)
         updateTitle()
       }
       return true
@@ -264,17 +279,14 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    // Cmd+↑/↓ - reorder (ignore key repeat to prevent rapid-fire API calls).
+    // Cmd+↑/↓ - reorder. Optimistic UI is applied synchronously in moveTask;
+    // the API request is queued so key repeat coalesces into the reorder queue.
     if matches(.moveTaskDown) {
-      if !isRepeat {
-        Task { if let task = manager.currentTask { await manager.moveTask(task, direction: 1) } }
-      }
+      Task { if let task = manager.currentTask { await manager.moveTask(task, direction: 1) } }
       return true
     }
     if matches(.moveTaskUp) {
-      if !isRepeat {
-        Task { if let task = manager.currentTask { await manager.moveTask(task, direction: -1) } }
-      }
+      Task { if let task = manager.currentTask { await manager.moveTask(task, direction: -1) } }
       return true
     }
 
@@ -780,6 +792,11 @@ struct KeyboardShortcutRouter {
     // 1-9 set scoped priority, Hyper+1-9 (Ctrl+Cmd+Option+Shift) set absolute priority,
     // = sends to the back of prioritized tasks, - clears priority.
     if !isFocused && !rootScopeFocused {
+      if matches(.clearAbsolutePriority) {
+        manager.clearAbsolutePriorityForCurrentTask()
+        updateTitle()
+        return true
+      }
       if matches(.clearPriority) {
         manager.clearPriorityForCurrentTask()
         updateTitle()
@@ -854,6 +871,8 @@ struct KeyboardShortcutRouter {
       28: "8",
       25: "9",
       29: "0",
+      27: "-",
+      24: "=",
       49: "space",
       36: "enter",
       48: "tab",

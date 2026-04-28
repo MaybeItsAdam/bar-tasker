@@ -129,6 +129,8 @@ import SwiftUI
 
   let kanban: KanbanManager
 
+  let focusSessionManager: FocusSessionManager
+
   let preferences: PreferencesManager
   var onboardingCompleted: Bool {
     didSet { preferencesStore.set(onboardingCompleted, for: .onboardingCompleted) }
@@ -223,6 +225,7 @@ import SwiftUI
       .pluginSelectionOnboardingCompleted)
 
     self.kanban = KanbanManager(preferencesStore: preferencesStore)
+    self.focusSessionManager = FocusSessionManager(preferencesStore: preferencesStore)
     if let storedOnboarding = storedOnboardingCompletedFlag {
       self.onboardingCompleted = storedOnboarding
     } else {

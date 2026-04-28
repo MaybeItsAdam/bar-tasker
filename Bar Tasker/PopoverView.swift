@@ -10,10 +10,9 @@ enum PopoverLayout {
 
   @MainActor
   static func preferredWidth(for manager: AppCoordinator) -> CGFloat {
-    if manager.rootTaskView == .eisenhower { return width }
-    guard manager.rootTaskView == .kanban else { return width }
-    let count = max(1, manager.kanban.kanbanColumns.count)
-    return CGFloat(count) * kanbanColumnWidth
+    // Keep the popover width constant across views so the root tab bar doesn't
+    // shift horizontally when switching to kanban. Kanban columns flex to fill.
+    width
   }
   static let cornerRadius: CGFloat = 10
   static let topStripHeight: CGFloat = 6
@@ -424,6 +423,7 @@ struct PopoverView: View {
     .background(themeColor(.panelBackground))
     .tint(manager.preferences.themeAccentColor)
     .clipShape(RoundedRectangle(cornerRadius: PopoverLayout.cornerRadius))
+    .overlay(focusOverlay)
     .onAppear {
       manager.presentOnboardingDialogIfNeeded()
     }
@@ -442,6 +442,25 @@ struct PopoverView: View {
 
   private var isAddMode: Bool {
     manager.quickEntry.quickEntryMode == .addSibling || manager.quickEntry.quickEntryMode == .addChild
+  }
+
+  @ViewBuilder
+  private var focusOverlay: some View {
+    if let session = manager.focusSessionManager.session,
+      let task = manager.cache.taskById[session.taskId]
+    {
+      FocusSessionOverlay(task: task, session: session)
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(themeColor(.panelBackground).opacity(0.92))
+    } else if let promptId = manager.focusSessionManager.promptTaskId,
+      let task = manager.cache.taskById[promptId]
+    {
+      FocusPromptOverlay(task: task)
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(themeColor(.panelBackground).opacity(0.92))
+    }
   }
 
   private var isRootFilteredView: Bool {

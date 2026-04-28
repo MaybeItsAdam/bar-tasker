@@ -30,6 +30,7 @@ extension AppCoordinator {
         } else if self.currentSiblingIndex >= fetchedTasks.count {
           self.currentSiblingIndex = 0
         }
+        self.focusSessionManager.clampForTasks(fetchedTasks)
         let latestOpenTaskIDs = Set(fetchedTasks.map(\.id))
         let previousTimerNodes = previousTasks.map {
           TimerNode(id: $0.id, parentId: $0.parentId)

@@ -80,7 +80,9 @@ Each box is dismissable so the app remains usable in offline-first mode.
 | `1`–`9` | Set scoped priority rank (within parent) |
 | `Hyper+1`–`Hyper+9` | Set absolute priority rank (`Ctrl+Cmd+Option+Shift`) |
 | `=` | Send to priority back |
-| `-` | Clear priority |
+| `-` | Clear scoped priority |
+| `Hyper+-` | Clear absolute priority |
+| `'` | Start a focus session on the selected task (any view) |
 
 ### Kanban
 

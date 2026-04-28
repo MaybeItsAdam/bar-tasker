@@ -155,8 +155,11 @@ final class CommandExecutor {
       manager.kanban.exitToParentScope()
       return
     case .kanbanFocusMode:
-      manager.rootTaskView = .kanban
-      manager.kanban.presentFocusPromptForCurrentTask()
+      guard let task = manager.currentTask else {
+        manager.errorMessage = "No task selected."
+        return
+      }
+      manager.focusSessionManager.presentPrompt(forTaskId: task.id)
       return
     case .toggleContext:
       manager.preferences.showTaskBreadcrumbContext.toggle()

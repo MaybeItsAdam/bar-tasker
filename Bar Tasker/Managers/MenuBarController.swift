@@ -23,6 +23,10 @@ class MenuBarController: NSObject {
   private var cachedGradientWidth: CGFloat?
   private var cachedGradientLayer: CAGradientLayer?
   private var lastToggleTime: Date = Date.distantPast
+  /// Top-right anchor (screen coords) captured when the popover is shown.
+  /// Used by re-anchor on tab/column changes so the popover doesn't drift
+  /// horizontally as the menu bar title resizes the status item button.
+  private var pinnedTopRight: NSPoint?
 
   private let manager: AppCoordinator
   private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "keyboard")
@@ -35,6 +39,7 @@ class MenuBarController: NSObject {
     super.init()
     setupStatusItem()
     observeForTitleUpdates()
+    observeForPopoverSizing()
     setupGlobalMonitors()
   }
 
@@ -343,6 +348,7 @@ class MenuBarController: NSObject {
 
   func closeWindow() {
     window?.orderOut(nil)
+    pinnedTopRight = nil
     if [.addSibling, .addChild, .quickAddDefault, .quickAddSpecific].contains(
       manager.quickEntry.quickEntryMode)
     {
@@ -403,8 +409,10 @@ class MenuBarController: NSObject {
     let trX = screenRect.maxX
     let trY = screenRect.minY - paddingY
 
+    let anchor = NSPoint(x: trX, y: trY)
+    pinnedTopRight = anchor
     popoverWindow.setAnchoredTopRight(
-      contentSize: currentPopoverContentSize, topRight: NSPoint(x: trX, y: trY), display: true
+      contentSize: currentPopoverContentSize, topRight: anchor, display: true
     )
     popoverWindow.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
@@ -420,6 +428,39 @@ class MenuBarController: NSObject {
       closeWindow()
     } else {
       showPopoverWindow()
+    }
+  }
+
+  private func reanchorPopoverToStatusItem() {
+    guard let popoverWindow = window, popoverWindow.isVisible else { return }
+    // Use the anchor captured when the popover opened so the title-driven
+    // status item width doesn't shift the popover sideways on tab switches.
+    // Fall back to the live status item rect if the cache is missing.
+    let anchor: NSPoint
+    if let cached = pinnedTopRight {
+      anchor = cached
+    } else if let button = statusItem?.button, let buttonWindow = button.window {
+      let btnRect = button.convert(button.bounds, to: nil)
+      let screenRect = buttonWindow.convertToScreen(btnRect)
+      anchor = NSPoint(x: screenRect.maxX, y: screenRect.minY - 4)
+    } else {
+      return
+    }
+    if let panel = popoverWindow as? BarTaskerPanel {
+      panel.setAnchoredTopRight(
+        contentSize: currentPopoverContentSize, topRight: anchor, display: true
+      )
+    }
+  }
+
+  private func observeForPopoverSizing() {
+    withObservationTracking {
+      _ = self.manager.rootTaskView
+    } onChange: {
+      Task { @MainActor [weak self] in
+        self?.reanchorPopoverToStatusItem()
+        self?.observeForPopoverSizing()
+      }
     }
   }
 

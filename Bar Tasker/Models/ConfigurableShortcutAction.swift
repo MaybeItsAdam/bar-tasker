@@ -51,6 +51,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
   case quickAdd
   case focusSearch
   case clearPriority
+  case clearAbsolutePriority
   case pushPriorityBack
   case setPriorityRank
   case setAbsolutePriorityRank
@@ -122,6 +123,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .quickAdd: return "Quick add"
     case .focusSearch: return "/"
     case .clearPriority: return "-"
+    case .clearAbsolutePriority: return "Clear absolute priority"
     case .pushPriorityBack: return "Send priority to back"
     case .setPriorityRank: return "Set priority rank"
     case .setAbsolutePriorityRank: return "Set absolute priority rank"
@@ -133,7 +135,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .kanbanShowInAll: return "Kanban: show task in All view"
     case .kanbanEnterTaskChildren: return "Kanban: drill into selected task's subtasks"
     case .kanbanExitToTaskParent: return "Kanban: pop up to parent scope"
-    case .kanbanFocusMode: return "Kanban: focus selected task"
+    case .kanbanFocusMode: return "Focus selected task"
     case .rootTabMatrix: return "Jump to root tab: Matrix"
     case .sequenceUrgency: return "Sequence: urgency"
     case .sequenceImportance: return "Sequence: importance"
@@ -152,7 +154,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
       return "Navigation"
     case .markDone, .invalidateTask, .addSibling, .addChild, .unindentTask, .editTaskAtEnd,
       .editTaskAtStart, .deleteTask, .moveTaskUp, .moveTaskDown, .undo, .clearPriority,
-      .pushPriorityBack, .setPriorityRank, .setAbsolutePriorityRank, .kanbanMoveLeft, .kanbanMoveRight:
+      .clearAbsolutePriority, .pushPriorityBack, .setPriorityRank, .setAbsolutePriorityRank,
+      .kanbanMoveLeft, .kanbanMoveRight:
       return "Task Actions"
     case .openCommandPalette, .closeOrCancel, .focusSearch, .sequenceDue, .sequenceDueToday,
       .sequenceStart, .sequenceRepeat, .sequenceTag, .sequenceUntag, .sequenceToggleContext,
@@ -216,6 +219,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .quickAdd: return "shift+a"
     case .focusSearch: return "/"
     case .clearPriority: return "-"
+    case .clearAbsolutePriority: return "ctrl+cmd+option+shift+-"
     case .pushPriorityBack: return "="
     case .setPriorityRank: return "1,2,3,4,5,6,7,8,9"
     case .setAbsolutePriorityRank:

@@ -27,17 +27,6 @@ enum KanbanMoveOutcome {
 
 @MainActor
 @Observable class KanbanManager {
-  enum FocusDurationPreset: String {
-    case long
-    case short
-  }
-
-  struct FocusSessionState {
-    let taskId: Int
-    let durationSeconds: Int
-    let baselineElapsed: TimeInterval
-  }
-
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "kanban")
   @ObservationIgnored private let preferencesStore: PreferencesStore
   @ObservationIgnored weak var dataSource: KanbanTaskDataSource?
@@ -69,22 +58,6 @@ enum KanbanMoveOutcome {
   var addingToColumnId: UUID? = nil
   /// Text for the inline add field.
   var addText: String = ""
-  /// When set, a focus-start overlay is shown for this task.
-  var focusPromptTaskId: Int? = nil {
-    didSet { onCacheRelevantChange?() }
-  }
-  var focusLongMinutes: Int = 25 {
-    didSet { onCacheRelevantChange?() }
-  }
-  var focusShortMinutes: Int = 5 {
-    didSet { onCacheRelevantChange?() }
-  }
-  var focusDurationPreset: FocusDurationPreset = .long {
-    didSet { onCacheRelevantChange?() }
-  }
-  var focusSession: FocusSessionState? = nil {
-    didSet { onCacheRelevantChange?() }
-  }
 
   @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
 
@@ -540,7 +513,6 @@ enum KanbanMoveOutcome {
   /// Drills the kanban into the selected task's subtree so its children become
   /// the new sibling-pool. Selection moves to the first child if any.
   @MainActor func enterSelectedTaskAsScope() {
-    focusPromptTaskId = nil
     guard let task = currentKanbanTask else { return }
     let columns = kanbanColumns
     kanbanFilterParentId = task.id
@@ -563,7 +535,6 @@ enum KanbanMoveOutcome {
   /// Pops the kanban scope up one level. If we're at root, restores selection to
   /// what was previously the parent task (so navigation feels reversible).
   @MainActor func exitToParentScope() {
-    focusPromptTaskId = nil
     guard let ds = dataSource else { return }
     let currentScopeId: Int? =
       kanbanFilterParentId
@@ -621,16 +592,6 @@ enum KanbanMoveOutcome {
   /// focused column so the selection doesn't jump to an unrelated task.
   @MainActor func clampKanbanSelection() {
     guard let ds = dataSource else { return }
-    if let promptId = focusPromptTaskId,
-      !ds.tasks.contains(where: { $0.id == promptId && $0.status == 0 })
-    {
-      focusPromptTaskId = nil
-    }
-    if let sessionId = focusSession?.taskId,
-      !ds.tasks.contains(where: { $0.id == sessionId && $0.status == 0 })
-    {
-      focusSession = nil
-    }
     let columns = kanbanColumns
     // Check whether the current selection is still valid.
     if let selectedId = kanbanSelectedTaskId {
@@ -655,57 +616,6 @@ enum KanbanMoveOutcome {
       kanbanSelectedTaskId = colTasks[idx].id
       ds.currentSiblingIndex = idx
     }
-  }
-
-  // MARK: - Focus mode
-
-  @MainActor func presentFocusPromptForCurrentTask() {
-    guard let task = currentKanbanTask else { return }
-    focusSession = nil
-    focusPromptTaskId = task.id
-    focusDurationPreset = .long
-    kanbanSelectedTaskId = task.id
-  }
-
-  @MainActor func dismissFocusPrompt() {
-    focusPromptTaskId = nil
-  }
-
-  @MainActor func setFocusDurationPreset(_ preset: FocusDurationPreset) {
-    focusDurationPreset = preset
-  }
-
-  @MainActor func adjustFocusLongMinutes(by delta: Int) {
-    focusLongMinutes = min(180, max(1, focusLongMinutes + delta))
-  }
-
-  @MainActor func adjustFocusShortMinutes(by delta: Int) {
-    focusShortMinutes = min(60, max(1, focusShortMinutes + delta))
-  }
-
-  var configuredFocusDurationMinutes: Int {
-    focusDurationPreset == .long ? focusLongMinutes : focusShortMinutes
-  }
-
-  @MainActor func startFocusSession(baselineElapsed: TimeInterval) {
-    guard let ds = dataSource else { return }
-    guard let promptId = focusPromptTaskId, ds.cache.taskById[promptId] != nil else {
-      focusPromptTaskId = nil
-      return
-    }
-    let durationSeconds = max(60, configuredFocusDurationMinutes * 60)
-    focusSession = FocusSessionState(
-      taskId: promptId,
-      durationSeconds: durationSeconds,
-      baselineElapsed: baselineElapsed
-    )
-    kanbanSelectedTaskId = promptId
-    focusPromptTaskId = nil
-  }
-
-  @MainActor func cancelFocusSession() {
-    focusSession = nil
-    focusPromptTaskId = nil
   }
 
   // MARK: - Kanban column persistence

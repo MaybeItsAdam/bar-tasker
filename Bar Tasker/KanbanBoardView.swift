@@ -20,201 +20,29 @@ struct KanbanBoardView: View {
     let childCounts = manager.childCountByTaskId()
     let effectiveSelectedId = manager.kanban.currentKanbanTask?.id
     VStack(spacing: 0) {
-      if let sessionTask = focusSessionTask, let session = manager.kanban.focusSession {
-        focusSessionPanel(task: sessionTask, session: session)
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-      } else if let task = focusPromptTask {
-        focusStartPanel(task: task)
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-      } else {
-        if isFilterActive {
-          kanbanFilterBar
-          Divider()
-        }
-        HStack(alignment: .top, spacing: 0) {
-          ForEach(Array(columns.enumerated().reversed()), id: \.element.id) { colIndex, column in
-            let tasks = manager.kanban.tasksForKanbanColumn(column, allColumns: columns)
-            let isFocused = colIndex == manager.kanban.kanbanFocusedColumnIndex
-            KanbanColumnView(
-              column: column,
-              tasks: tasks,
-              columnIndex: colIndex,
-              isFocused: isFocused,
-              childCounts: childCounts,
-              effectiveSelectedId: effectiveSelectedId
-            )
-            if colIndex > 0 {
-              Divider()
-            }
+      if isFilterActive {
+        kanbanFilterBar
+        Divider()
+      }
+      HStack(alignment: .top, spacing: 0) {
+        ForEach(Array(columns.enumerated().reversed()), id: \.element.id) { colIndex, column in
+          let tasks = manager.kanban.tasksForKanbanColumn(column, allColumns: columns)
+          let isFocused = colIndex == manager.kanban.kanbanFocusedColumnIndex
+          KanbanColumnView(
+            column: column,
+            tasks: tasks,
+            columnIndex: colIndex,
+            isFocused: isFocused,
+            childCounts: childCounts,
+            effectiveSelectedId: effectiveSelectedId
+          )
+          if colIndex > 0 {
+            Divider()
           }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-  }
-
-  private var focusPromptTask: CheckvistTask? {
-    guard let taskId = manager.kanban.focusPromptTaskId else { return nil }
-    return manager.cache.taskById[taskId]
-  }
-
-  private var focusSessionTask: CheckvistTask? {
-    guard let taskId = manager.kanban.focusSession?.taskId else { return nil }
-    return manager.cache.taskById[taskId]
-  }
-
-  private func focusSessionPanel(task: CheckvistTask, session: KanbanManager.FocusSessionState) -> some View {
-    let elapsedTotal = manager.timer.timerByTaskId[task.id, default: 0]
-    let elapsedInSession = max(0, elapsedTotal - session.baselineElapsed)
-    let remaining = max(0, TimeInterval(session.durationSeconds) - elapsedInSession)
-    let subtasks = manager.tasks.filter { candidate in
-      candidate.status == 0 && candidate.id != task.id && manager.isDescendant(candidate, of: task.id)
-    }
-
-    return VStack(alignment: .leading, spacing: 10) {
-      Text("Focus mode")
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundColor(themeColor(.textSecondary))
-      Text(task.content.strippingTags)
-        .font(.system(size: 15, weight: .bold))
-        .foregroundColor(themeColor(.textPrimary))
-        .lineLimit(2)
-      Text(countdownString(remaining))
-        .font(.system(size: 22, weight: .bold, design: .monospaced))
-        .foregroundColor(remaining <= 0 ? themeColor(.danger) : themeColor(.link))
-      Text(remaining <= 0 ? "Time's up" : "Time remaining")
-        .font(.system(size: 11))
-        .foregroundColor(themeColor(.textSecondary))
-
-      Divider()
-
-      Text("Task")
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundColor(themeColor(.textSecondary))
-      Text("• \(task.content.strippingTags)")
-        .font(.system(size: 12))
-        .foregroundColor(themeColor(.textPrimary))
-        .lineLimit(2)
-      if !subtasks.isEmpty {
-        Text("Subtasks")
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundColor(themeColor(.textSecondary))
-          .padding(.top, 2)
-        ForEach(subtasks) { subtask in
-          Text("• \(subtask.content.strippingTags)")
-            .font(.system(size: 12))
-            .foregroundColor(themeColor(.textPrimary))
-            .lineLimit(1)
-        }
-      }
-
-      HStack(spacing: 8) {
-        Button("Cancel focus") {
-          manager.kanban.cancelFocusSession()
-          manager.timer.pauseTimer()
-        }
-        .buttonStyle(.plain)
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundColor(themeColor(.danger))
-        Text("Esc to cancel")
-          .font(.system(size: 10))
-          .foregroundColor(themeColor(.textSecondary))
-      }
-      .padding(.top, 4)
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(themeColor(.panelSurface))
-  }
-
-  private func focusStartPanel(task: CheckvistTask) -> some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("Focus on:")
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundColor(themeColor(.textSecondary))
-      Text(task.content.strippingTags)
-        .font(.system(size: 14, weight: .bold))
-        .foregroundColor(themeColor(.textPrimary))
-        .lineLimit(3)
-      durationPickerRow(
-        title: "Long",
-        minutes: manager.kanban.focusLongMinutes,
-        selected: manager.kanban.focusDurationPreset == .long,
-        onSelect: { manager.kanban.setFocusDurationPreset(.long) },
-        onDecrement: { manager.kanban.adjustFocusLongMinutes(by: -1) },
-        onIncrement: { manager.kanban.adjustFocusLongMinutes(by: 1) }
-      )
-      durationPickerRow(
-        title: "Short",
-        minutes: manager.kanban.focusShortMinutes,
-        selected: manager.kanban.focusDurationPreset == .short,
-        onSelect: { manager.kanban.setFocusDurationPreset(.short) },
-        onDecrement: { manager.kanban.adjustFocusShortMinutes(by: -1) },
-        onIncrement: { manager.kanban.adjustFocusShortMinutes(by: 1) }
-      )
-      Text("Enter to start • Esc to cancel")
-        .font(.system(size: 11))
-        .foregroundColor(themeColor(.textSecondary))
-    }
-    .padding(16)
-    .frame(maxWidth: 320, alignment: .leading)
-    .background(themeColor(.panelSurface))
-    .clipShape(RoundedRectangle(cornerRadius: 10))
-    .overlay(
-      RoundedRectangle(cornerRadius: 10)
-        .stroke(themeColor(.panelDivider), lineWidth: 1)
-    )
-  }
-
-  private func durationPickerRow(
-    title: String,
-    minutes: Int,
-    selected: Bool,
-    onSelect: @escaping () -> Void,
-    onDecrement: @escaping () -> Void,
-    onIncrement: @escaping () -> Void
-  ) -> some View {
-    HStack(spacing: 8) {
-      Button {
-        onSelect()
-      } label: {
-        HStack(spacing: 6) {
-          Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-            .font(.system(size: 9))
-          Text("\(title): \(minutes) min")
-            .font(.system(size: 12, weight: .medium))
-        }
-        .foregroundColor(themeColor(.textPrimary))
-      }
-      .buttonStyle(.plain)
-
-      Spacer()
-
-      Button {
-        onDecrement()
-      } label: {
-        Image(systemName: "minus.circle")
-          .font(.system(size: 12))
-      }
-      .buttonStyle(.plain)
-      .foregroundColor(themeColor(.textSecondary))
-
-      Button {
-        onIncrement()
-      } label: {
-        Image(systemName: "plus.circle")
-          .font(.system(size: 12))
-      }
-      .buttonStyle(.plain)
-      .foregroundColor(themeColor(.textSecondary))
-    }
-  }
-
-  private func countdownString(_ seconds: TimeInterval) -> String {
-    let total = max(0, Int(seconds.rounded()))
-    let minutes = total / 60
-    let remainder = total % 60
-    return String(format: "%02d:%02d", minutes, remainder)
   }
 
   private var kanbanFilterBar: some View {
@@ -285,7 +113,7 @@ private struct KanbanColumnView: View {
       Divider()
       taskListArea
     }
-    .frame(width: PopoverLayout.kanbanColumnWidth)
+    .frame(maxWidth: .infinity)
     .frame(maxHeight: .infinity, alignment: .topLeading)
   }
 
@@ -606,7 +434,7 @@ private struct KanbanTaskCard: View {
 
 extension String {
   /// Returns the content string with inline tags stripped for cleaner display.
-  fileprivate var strippingTags: String {
+  var strippingTags: String {
     let pattern = try? NSRegularExpression(pattern: "\\s*[#@][\\w-]+")
     let range = NSRange(startIndex..., in: self)
     return pattern?.stringByReplacingMatches(in: self, range: range, withTemplate: "") ?? self

@@ -62,6 +62,7 @@ extension AppCoordinator {
     }
     timer.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
     kanban.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
+    focusSessionManager.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
     startDates.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
     startDates.dateResolver = { [weak self] input in
       self?.resolveDueDateWithConfig(input) ?? input

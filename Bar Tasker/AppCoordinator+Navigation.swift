@@ -53,6 +53,7 @@ extension AppCoordinator {
   }
 
   @MainActor func clampSelectionToVisibleRange() {
+    focusSessionManager.clampForTasks(tasks)
     if rootTaskView == .kanban {
       kanban.clampKanbanSelection()
       return

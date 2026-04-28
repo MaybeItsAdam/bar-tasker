@@ -159,7 +159,11 @@ struct TaskVisibilityEngine {
           var matching = result.filter(context.taskMatchesActiveRootScope)
           matching.sort(by: context.compareByPriorityThenPosition)
           return Result(tasks: matching, remainderStartIndex: nil)
-        case .due, .priority:
+        case .due:
+          var matching = result.filter(context.taskMatchesActiveRootScope)
+          matching.sort(by: context.compareByRootDueBucket)
+          return Result(tasks: matching, remainderStartIndex: nil)
+        case .priority:
           var matching = result.filter(context.taskMatchesActiveRootScope)
           matching.sort(by: context.compareByPriorityThenPosition)
           return Result(tasks: matching, remainderStartIndex: nil)

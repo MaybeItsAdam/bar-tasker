@@ -44,6 +44,7 @@ final class PreferencesStore {
     case namedTimeEodHour
     case recurrenceRulesByTaskId
     case rootTaskViewOrder
+    case focusDurationMinutes
   }
 
   private let defaults: UserDefaults
