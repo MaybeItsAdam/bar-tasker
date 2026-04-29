@@ -58,6 +58,17 @@ enum KanbanMoveOutcome {
   var addingToColumnId: UUID? = nil
   /// Text for the inline add field.
   var addText: String = ""
+  /// Per-column manual order overlay. Maps column UUID string → ordered task IDs.
+  /// Tasks listed here are sorted by this list within their column, taking
+  /// precedence over the column's natural sort order. Tasks not in the list
+  /// fall back to the column's natural sort. Lets users nudge cards up/down
+  /// without mutating their underlying date/priority/etc.
+  var manualOrderByColumnId: [String: [Int]] {
+    didSet {
+      saveManualOrders(manualOrderByColumnId)
+      onCacheRelevantChange?()
+    }
+  }
 
   @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
 
@@ -83,6 +94,23 @@ enum KanbanMoveOutcome {
     } else {
       self.kanbanColumns = KanbanColumn.defaults
     }
+
+    let storedManualOrdersJson = preferencesStore.string(.kanbanManualOrderByColumnId)
+    if !storedManualOrdersJson.isEmpty,
+      let data = storedManualOrdersJson.data(using: .utf8),
+      let decoded = try? JSONDecoder().decode([String: [Int]].self, from: data)
+    {
+      self.manualOrderByColumnId = decoded
+    } else {
+      self.manualOrderByColumnId = [:]
+    }
+  }
+
+  private func saveManualOrders(_ orders: [String: [Int]]) {
+    guard let data = try? JSONEncoder().encode(orders),
+      let json = String(data: data, encoding: .utf8)
+    else { return }
+    preferencesStore.set(json, for: .kanbanManualOrderByColumnId)
   }
 
   // MARK: - Task filtering for kanban columns
@@ -116,7 +144,69 @@ enum KanbanMoveOutcome {
     let eligible = pool.filter { task in
       columnForTask(task, in: allColumns)?.id == column.id
     }
-    return sortedForKanban(eligible, sortOrder: column.sortOrder)
+    let naturallySorted = sortedForKanban(eligible, sortOrder: column.sortOrder)
+    return applyManualOrder(naturallySorted, column: column)
+  }
+
+  /// Reorders `tasks` so any task listed in the column's manual override comes
+  /// first in the order specified there. Tasks not present in the override
+  /// retain the natural-sort order they came in with.
+  private func applyManualOrder(_ tasks: [CheckvistTask], column: KanbanColumn)
+    -> [CheckvistTask]
+  {
+    let key = column.id.uuidString
+    guard let order = manualOrderByColumnId[key], !order.isEmpty else { return tasks }
+    var rankById: [Int: Int] = [:]
+    for (idx, id) in order.enumerated() { rankById[id] = idx }
+    var ranked: [CheckvistTask] = []
+    var unranked: [CheckvistTask] = []
+    for task in tasks {
+      if rankById[task.id] != nil {
+        ranked.append(task)
+      } else {
+        unranked.append(task)
+      }
+    }
+    ranked.sort { (rankById[$0.id] ?? .max) < (rankById[$1.id] ?? .max) }
+    return ranked + unranked
+  }
+
+  /// Move `taskId` one slot up or down in the column's manual order. The task
+  /// is added to the override (if not present) using its current visible
+  /// position as the starting rank. No underlying task attribute is changed —
+  /// this is purely a per-user, per-column display preference.
+  @MainActor func nudgeTaskInColumn(taskId: Int, in column: KanbanColumn, direction: Int) {
+    guard direction == -1 || direction == 1 else { return }
+    let key = column.id.uuidString
+    let columnTasks = tasksForKanbanColumn(column, allColumns: kanbanColumns)
+    guard let visibleIdx = columnTasks.firstIndex(where: { $0.id == taskId }) else { return }
+    let newIdx = visibleIdx + direction
+    guard columnTasks.indices.contains(newIdx) else { return }
+    // Anchor the manual order to the current visible order so the override
+    // mirrors what the user sees right before the move.
+    var order = columnTasks.map(\.id)
+    order.swapAt(visibleIdx, newIdx)
+    manualOrderByColumnId[key] = order
+  }
+
+  /// Drop a task from every column's manual order. Used when a task is
+  /// completed/deleted so stale IDs don't accumulate.
+  @MainActor func clearManualOrderEntries(forTaskIds removed: Set<Int>) {
+    guard !removed.isEmpty else { return }
+    var changed = false
+    var updated = manualOrderByColumnId
+    for (key, ids) in updated {
+      let filtered = ids.filter { !removed.contains($0) }
+      if filtered.count != ids.count {
+        if filtered.isEmpty {
+          updated.removeValue(forKey: key)
+        } else {
+          updated[key] = filtered
+        }
+        changed = true
+      }
+    }
+    if changed { manualOrderByColumnId = updated }
   }
 
   private func subtreeTasks(in tasks: [CheckvistTask], rootId: Int, taskById: [Int: CheckvistTask])
@@ -180,34 +270,39 @@ enum KanbanMoveOutcome {
     -> [CheckvistTask]
   {
     guard let ds = dataSource else { return tasks }
+    // Position is the universal tiebreaker so user-driven Cmd+Up/Down reorders
+    // are visible regardless of the column's primary sort order.
+    func byPositionThenContent(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
+      switch (lhs.position, rhs.position) {
+      case (.some(let l), .some(let r)) where l != r: return l < r
+      case (.some, .none): return true
+      case (.none, .some): return false
+      default:
+        return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
+      }
+    }
     switch sortOrder {
     case .position:
-      return tasks.sorted { lhs, rhs in
-        switch (lhs.position, rhs.position) {
-        case (.some(let l), .some(let r)) where l != r: return l < r
-        default:
-          return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
-        }
-      }
+      return tasks.sorted(by: byPositionThenContent)
     case .dueAscending:
       return tasks.sorted { lhs, rhs in
         switch (lhs.dueDate, rhs.dueDate) {
-        case (.some(let l), .some(let r)): return l < r
+        case (.some(let l), .some(let r)) where l != r: return l < r
         case (.some, .none): return true
         case (.none, .some): return false
-        default:
-          return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
+        default: break
         }
+        return byPositionThenContent(lhs, rhs)
       }
     case .dueDescending:
       return tasks.sorted { lhs, rhs in
         switch (lhs.dueDate, rhs.dueDate) {
-        case (.some(let l), .some(let r)): return l > r
+        case (.some(let l), .some(let r)) where l != r: return l > r
         case (.some, .none): return true
         case (.none, .some): return false
-        default:
-          return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
+        default: break
         }
+        return byPositionThenContent(lhs, rhs)
       }
     case .priorityAscending:
       return tasks.sorted { lhs, rhs in
@@ -221,13 +316,13 @@ enum KanbanMoveOutcome {
         if let lp, let rp, lp != rp { return lp < rp }
         if lp != nil && rp == nil { return true }
         if lp == nil && rp != nil { return false }
-        return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
+        return byPositionThenContent(lhs, rhs)
       }
     case .priorityThenDueAscending:
       return tasks.sorted { lhs, rhs in
         let la = ds.absolutePriorityRank(for: lhs)
         let ra = ds.absolutePriorityRank(for: rhs)
-        if let la, let ra, la != la { return la < ra }
+        if let la, let ra, la != ra { return la < ra }
         if la != nil && ra == nil { return true }
         if la == nil && ra != nil { return false }
         let lp = ds.priorityRank(for: lhs)
@@ -241,15 +336,16 @@ enum KanbanMoveOutcome {
         case (.none, .some): return false
         default: break
         }
-        // tagged tasks before untagged
         let lt = ds.cache.tagsByTaskId[lhs.id] != nil
         let rt = ds.cache.tagsByTaskId[rhs.id] != nil
         if lt != rt { return lt }
-        return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
+        return byPositionThenContent(lhs, rhs)
       }
     case .alphabetical:
-      return tasks.sorted {
-        $0.content.localizedCaseInsensitiveCompare($1.content) == .orderedAscending
+      return tasks.sorted { lhs, rhs in
+        let cmp = lhs.content.localizedCaseInsensitiveCompare(rhs.content)
+        if cmp != .orderedSame { return cmp == .orderedAscending }
+        return byPositionThenContent(lhs, rhs)
       }
     }
   }

@@ -7,20 +7,89 @@ extension AppCoordinator {
   @MainActor func moveTask(_ task: CheckvistTask, direction: Int) async {
     guard direction == -1 || direction == 1 else { return }
 
-    if rootTaskView == .priority {
+    switch rootTaskView {
+    case .priority:
       movePriorityTask(task, direction: direction)
-      return
+    case .kanban:
+      moveTaskWithinKanbanColumn(task: task, direction: direction)
+    case .due:
+      moveDueTaskByCopyingDate(task: task, direction: direction)
+    case .all, .tags, .eisenhower:
+      swapWithSiblingNeighbour(task: task, direction: direction)
     }
+  }
 
+  /// Position-based sibling swap. Moves the task one slot up/down within its
+  /// parent's sibling list. Visible immediately in views sorted by position
+  /// (All, Tags, sub-level scopes).
+  @MainActor private func swapWithSiblingNeighbour(task: CheckvistTask, direction: Int) {
     let siblings = tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }) else { return }
     let newIdx = idx + direction
     guard siblings.indices.contains(newIdx) else { return }
     let neighbour = siblings[newIdx]
-    let targetPosition = newIdx + 1
-    let movingOriginalPosition = task.position
+    performSiblingPositionSwap(
+      task: task, neighbour: neighbour, direction: direction, targetPosition: newIdx + 1
+    )
+  }
 
-    // Optimistic UI update: move the task block immediately so the list responds instantly.
+  /// Within kanban, reorder against the visible neighbour in the column that
+  /// hosts the moving task. Purely visual: writes only to the per-column
+  /// manual-order overlay, never to a task's date, priority, or position.
+  @MainActor private func moveTaskWithinKanbanColumn(task: CheckvistTask, direction: Int) {
+    let columns = kanban.kanbanColumns
+    var hostingColumn: KanbanColumn?
+    for column in columns {
+      let colTasks = kanban.tasksForKanbanColumn(column, allColumns: columns)
+      if colTasks.contains(where: { $0.id == task.id }) {
+        hostingColumn = column
+        break
+      }
+    }
+    guard let column = hostingColumn else { return }
+    kanban.nudgeTaskInColumn(taskId: task.id, in: column, direction: direction)
+  }
+
+  /// In the Due view, Cmd+Up/Down copies the visible neighbour's due date so
+  /// the task slides into a new bucket. After copy, also nudges position so the
+  /// task lands above (Cmd+Up) or below (Cmd+Down) the neighbour — otherwise
+  /// they share a bucket+date and the position-tiebreak could place the task
+  /// on the wrong side of the neighbour.
+  @MainActor private func moveDueTaskByCopyingDate(task: CheckvistTask, direction: Int) {
+    let visible = visibleTasks
+    guard let idx = visible.firstIndex(where: { $0.id == task.id }) else { return }
+    let newIdx = idx + direction
+    guard visible.indices.contains(newIdx) else { return }
+    let neighbour = visible[newIdx]
+
+    let neighbourDue = neighbour.due ?? ""
+    let taskDue = task.due ?? ""
+
+    if neighbourDue != taskDue {
+      let neighbourPos = neighbour.position ?? 1
+      let newPosition = direction < 0 ? max(1, neighbourPos - 1) : neighbourPos + 1
+      if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
+        tasks[idx] = taskWithPosition(tasks[idx], position: newPosition)
+      }
+      applyOptimisticMoveAndSync(task: task, content: nil, due: neighbourDue)
+      enqueueReorderRequest(taskId: task.id, position: newPosition)
+    } else if (task.parentId ?? 0) == (neighbour.parentId ?? 0) {
+      swapWithSiblingNeighbour(task: task, direction: direction)
+    }
+  }
+
+  /// Optimistic position swap of `task` and `neighbour` (same parent). Updates
+  /// `tasks` in place and enqueues the server-side reorder.
+  @MainActor private func performSiblingPositionSwap(
+    task: CheckvistTask, neighbour: CheckvistTask, direction: Int, targetPosition: Int
+  ) {
+    // Compute deterministic positions for both tasks. Don't rely on the
+    // moving task's original position — if it was nil/sparse, copying it to
+    // the neighbour would leave the comparator falling back to alphabetical
+    // sort, which often matches the previous order and looks like no move
+    // happened at all.
+    let neighbourTargetPosition = max(1, targetPosition - direction)
+
     if let movingRange = subtreeBlockRange(for: task.id, in: tasks),
       let neighbourRange = subtreeBlockRange(for: neighbour.id, in: tasks)
     {
@@ -43,25 +112,24 @@ extension AppCoordinator {
       }
       if let neighbourIdx = updated.firstIndex(where: { $0.id == neighbour.id }) {
         updated[neighbourIdx] = taskWithPosition(
-          updated[neighbourIdx], position: movingOriginalPosition)
+          updated[neighbourIdx], position: neighbourTargetPosition)
       }
 
       tasks = updated
       // Keep selection anchored to the moved task in the currently visible list.
       if let visibleIdx = visibleTasks.firstIndex(where: { $0.id == task.id }) {
         currentSiblingIndex = visibleIdx
-      } else {
-        currentSiblingIndex = min(newIdx, max(0, visibleTasks.count - 1))
       }
     }
 
     enqueueReorderRequest(taskId: task.id, position: targetPosition)
   }
 
-  /// Reorder within the priority view by swapping the visible neighbour's slot in
-  /// whichever priority queue each task lives in. Falls back to position-based
-  /// reorder when the neighbours don't share a priority storage (e.g. one is in
-  /// the absolute queue and the other is scoped).
+  /// Reorder within the priority view by swapping the visible neighbour's slot
+  /// only when both tasks compete in the same priority queue (both absolute, or
+  /// both scoped under the same parent). Unrelated tasks — different parent
+  /// scopes, or one absolute and one scoped — don't have comparable rankings,
+  /// so we leave them alone instead of stealing each other's slot.
   @MainActor func movePriorityTask(_ task: CheckvistTask, direction: Int) {
     let visible = visibleTasks
     guard let idx = visible.firstIndex(where: { $0.id == task.id }) else { return }
@@ -86,25 +154,13 @@ extension AppCoordinator {
     let taskScope = priorityScope(for: task.id, in: byParent)
     let neighbourScope = priorityScope(for: neighbour.id, in: byParent)
 
-    if let (p1, i1) = taskScope, let (p2, i2) = neighbourScope {
+    if let (p1, i1) = taskScope, let (p2, i2) = neighbourScope, p1 == p2 {
       var updated = byParent
-      if p1 == p2 {
-        var queue = updated[p1] ?? []
-        queue.swapAt(i1, i2)
-        updated[p1] = queue
-      } else {
-        var q1 = updated[p1] ?? []
-        var q2 = updated[p2] ?? []
-        let a = q1[i1]
-        let b = q2[i2]
-        q1[i1] = b
-        q2[i2] = a
-        updated[p1] = q1
-        updated[p2] = q2
-      }
+      var queue = updated[p1] ?? []
+      queue.swapAt(i1, i2)
+      updated[p1] = queue
       savePriorityQueue(updated)
       currentSiblingIndex = newIdx
-      return
     }
   }
 

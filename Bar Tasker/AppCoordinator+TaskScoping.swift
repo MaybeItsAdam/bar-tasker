@@ -105,8 +105,21 @@ extension AppCoordinator {
   }
 
   /// Visible tasks: searches recursively through subtasks when filter active.
-  /// Cached and recomputed only when inputs change (via `objectWillChange`).
+  /// Cached and recomputed only when inputs change.
+  /// Touch the observable inputs explicitly so SwiftUI re-subscribes on every
+  /// read — the cache is `@ObservationIgnored`, so a body that only reads
+  /// `cache.visibleTasks` would lose its observation after the first cache-hit
+  /// render and ignore subsequent task mutations.
   var visibleTasks: [CheckvistTask] {
+    _ = repository.tasks
+    _ = navigationState.currentParentId
+    _ = quickEntry.searchText
+    _ = quickEntry.quickEntryMode
+    _ = taskListViewModel.rootTaskView
+    _ = taskListViewModel.selectedRootDueBucketRawValue
+    _ = taskListViewModel.selectedRootTag
+    _ = taskListViewModel.hideFuture
+    _ = taskListViewModel.showChildrenInMenus
     taskListViewModel.ensureVisibleTasksCacheValid()
     return taskListViewModel.cache.visibleTasks
   }

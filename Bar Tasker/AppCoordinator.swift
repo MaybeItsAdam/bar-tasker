@@ -395,7 +395,7 @@ extension AppCoordinator {
   }
 
   /// Applies the move locally (immediate) and syncs to the server in the background.
-  @MainActor private func applyOptimisticMoveAndSync(
+  @MainActor func applyOptimisticMoveAndSync(
     task: CheckvistTask, content: String?, due: String?
   ) {
     lastUndo = .update(taskId: task.id, oldContent: task.content, oldDue: task.due)
