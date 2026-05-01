@@ -630,7 +630,7 @@ struct SettingsView: View {
     case .disconnected: return "circle.dashed"
     case .connecting: return "arrow.triangle.2.circlepath"
     case .awaitingConnect: return "bolt.horizontal.circle"
-    case .connected: return checkvistManager.isUsingOfflineStore ? "tray" : "checkmark.circle.fill"
+    case .connected: return checkvistManager.canSyncRemotely ? "checkmark.circle.fill" : "tray"
     }
   }
 
@@ -641,8 +641,8 @@ struct SettingsView: View {
     case .connecting: return themeColor(.link)
     case .awaitingConnect: return themeColor(.warning)
     case .connected:
-      return checkvistManager.isUsingOfflineStore
-        ? themeColor(.textSecondary) : themeColor(.success)
+      return checkvistManager.canSyncRemotely
+        ? themeColor(.success) : themeColor(.textSecondary)
     }
   }
 

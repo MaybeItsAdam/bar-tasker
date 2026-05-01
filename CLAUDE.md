@@ -60,7 +60,7 @@ Conventions enforced by `docs/plugins.md`:
 - Plugin settings UI lives in a plugin-local `<PluginName>+Settings.swift` extension that conforms to `PluginSettingsPageProviding`. `SettingsView` enumerates active plugins generically — never add `switch`/`if`-by-plugin logic there.
 - New plugin files that the SPM `BarTaskerPlugins` target needs must be added to the explicit `sources:` list in `Package.swift`; UI/`+Settings.swift` files stay app-only and should be left out (or excluded).
 
-`OfflineTaskSyncPlugin` provides offline storage; `AppCoordinator.taskAction()` currently branches on `isUsingOfflineStore` — a known leaky abstraction flagged in the improvement plan.
+`OfflineTaskSyncPlugin` provides offline storage. `TaskRepository.activeSyncPlugin` resolves to either it or the Checkvist sync plugin based on `repository.canSyncRemotely`, so callers should always go through `repository.activeSyncPlugin` rather than naming the offline plugin directly.
 
 ## Conventions and Tooling
 

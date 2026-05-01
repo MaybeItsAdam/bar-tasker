@@ -22,7 +22,7 @@ extension AppCoordinator {
     !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
-  var isUsingOfflineStore: Bool { !checkvistIntegrationEnabled || !hasListSelection || !hasCredentials }
+  var canSyncRemotely: Bool { repository.canSyncRemotely }
 
   var checkvistIntegrationEnabled: Bool {
     get { repository.checkvistIntegrationEnabled }

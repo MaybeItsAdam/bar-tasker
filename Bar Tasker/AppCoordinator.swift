@@ -154,9 +154,7 @@ import SwiftUI
   @ObservationIgnored let reachabilityMonitor = NetworkReachabilityMonitor()
   var usesKeychainStorage: Bool { false }
 
-  var activeCredentials: CheckvistCredentials {
-    CheckvistCredentials(username: username, remoteKey: remoteKey)
-  }
+  var activeCredentials: CheckvistCredentials { repository.activeCredentials }
 
   var username: String {
     get { repository.username }

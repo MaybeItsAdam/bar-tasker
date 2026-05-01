@@ -270,8 +270,8 @@ private struct CheckvistSyncPluginSettingsView: View {
   }
 
   private func workspaceCaption(listCount: Int) -> String {
-    if manager.isUsingOfflineStore {
-      return "You’re using the offline workspace. Pick a Checkvist list above to start syncing."
+    if manager.listId.isEmpty {
+      return "Pick a Checkvist list above to start syncing."
     }
     if let active = manager.availableLists.first(where: { String($0.id) == manager.listId }) {
       return "Bar Tasker is syncing with “\(active.name)”."

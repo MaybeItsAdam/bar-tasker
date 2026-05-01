@@ -9,7 +9,7 @@ extension AppCoordinator {
   }
 
   @MainActor func fetchTopTask() async {
-    if !isUsingOfflineStore && listId.isEmpty { return }
+    if canSyncRemotely && listId.isEmpty { return }
 
     errorMessage = nil
 

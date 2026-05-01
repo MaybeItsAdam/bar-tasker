@@ -124,13 +124,21 @@ import Observation
   var hasListSelection: Bool {
     !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
-  var isUsingOfflineStore: Bool { !checkvistIntegrationEnabled || !hasListSelection || !hasCredentials }
+  /// True when the Checkvist integration is enabled, credentials are present,
+  /// and the user has chosen a list — i.e. when the remote sync plugin is the
+  /// active route. When false, mutations and fetches go through the offline
+  /// store. This is the single source of truth for plugin-switch state; do not
+  /// re-derive `!checkvistIntegrationEnabled || !hasListSelection || ...`
+  /// elsewhere in the app.
+  var canSyncRemotely: Bool {
+    checkvistIntegrationEnabled && hasListSelection && hasCredentials
+  }
   var offlineOpenTaskCount: Int { localTaskStore.load().openTasks.count }
   var activeCredentials: CheckvistCredentials {
     CheckvistCredentials(username: username, remoteKey: remoteKey)
   }
   var activeSyncPlugin: any CheckvistSyncPlugin {
-    isUsingOfflineStore ? offlineSyncPlugin : checkvistSyncPlugin
+    canSyncRemotely ? checkvistSyncPlugin : offlineSyncPlugin
   }
 
   // MARK: - Init
@@ -140,24 +148,29 @@ import Observation
     preferencesStore: PreferencesStore,
     checkvistSyncPlugin: any CheckvistSyncPlugin,
     localTaskStore: LocalTaskStore,
-    initialRemoteKey: String
+    initialRemoteKey: String,
+    defaults: UserDefaults = .standard
   ) {
     self.preferencesStore = preferencesStore
     self.checkvistSyncPlugin = checkvistSyncPlugin
     self.localTaskStore = localTaskStore
     self.offlineSyncPlugin = OfflineTaskSyncPlugin(localStore: localTaskStore)
     self.priorityQueueStore = ListScopedPriorityStore(
-      defaultsKey: Self.scopedPriorityQueuesDefaultsKey
+      defaultsKey: Self.scopedPriorityQueuesDefaultsKey,
+      defaults: defaults
     )
     self.absolutePriorityQueueStore = ListScopedTaskIDStore(
-      defaultsKey: Self.absolutePriorityQueuesDefaultsKey
+      defaultsKey: Self.absolutePriorityQueuesDefaultsKey,
+      defaults: defaults
     )
     self.legacyPriorityQueueStore = ListScopedTaskIDStore(
       defaultsKey: Self.priorityQueuesDefaultsKey,
-      maximumCount: Self.maxPriorityRank
+      maximumCount: Self.maxPriorityRank,
+      defaults: defaults
     )
     self.eisenhowerStore = ListScopedEisenhowerStore(
-      defaultsKey: Self.eisenhowerLevelsDefaultsKey
+      defaultsKey: Self.eisenhowerLevelsDefaultsKey,
+      defaults: defaults
     )
 
     let offlinePayload = localTaskStore.load()
