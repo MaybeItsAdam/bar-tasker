@@ -1,13 +1,18 @@
 import Foundation
 
-// Plugin protocols and stub models needed by `BarTaskerAppLogic` (TaskRepository,
-// OfflineTaskSyncPlugin, LocalTaskStore). Must stay in sync with:
-//   • Bar Tasker/Plugins/Protocols/PluginProtocols.swift
-//   • plugin-tests-support/PluginModelStubs.swift
+// Plugin protocols and stub models needed by `BarTaskerAppLogic`
+// (`TaskRepository`, `OfflineTaskSyncPlugin`, `LocalTaskStore`).
 //
-// SPM forbids the same file appearing in two targets, so we keep an AppLogic-local
-// copy here. The Xcode app target compiles the originals; this file is excluded
-// from the Xcode target via the project.pbxproj membership.
+// These mirror the canonical types in:
+//   • Bar Tasker/Plugins/Protocols/PluginProtocols.swift
+//   • Bar Tasker/Plugins/Native/Checkvist/CheckvistModels.swift
+//   • Bar Tasker/Plugins/Native/Checkvist/CheckvistTaskCachePayload.swift
+//   • Bar Tasker/Plugins/Native/Checkvist/CheckvistSessionError.swift
+//
+// Deduplicating against `BarTaskerPlugins` would require making every
+// imported type `public`, which is a meaningful broadening of the plugin
+// library's API surface — left as follow-on work. See Phase 5.2 in
+// ARCHITECTURE_IMPROVEMENT_PLAN.md.
 
 protocol Plugin {
   var pluginIdentifier: String { get }

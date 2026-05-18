@@ -132,12 +132,7 @@ extension AppCoordinator {
     switch rootTaskView {
     case .due, .tags:
       return true
-    case .kanban:
-      // The kanban filter row is only rendered when there are root-level tags.
-      // Reporting `false` otherwise keeps the height calc and keyboard nav
-      // consistent with the actual rendered chrome.
-      return !rootLevelTagNames(limit: 1).isEmpty
-    case .all, .priority, .eisenhower:
+    case .all, .priority, .kanban, .eisenhower:
       return false
     }
   }
@@ -305,135 +300,6 @@ extension AppCoordinator {
     return TaskFilterEngine.classifyDueBucket(task: task)
   }
 
-  func setRootTaskView(_ view: RootTaskView) {
-    // Capture tree position BEFORE changing rootTaskView — `currentTask` dispatches
-    // on `rootTaskView` and would otherwise return the kanban selection, not the
-    // task the user had highlighted in the source view.
-    let capturedParentId = currentParentId
-    let capturedTask = currentTask
-    rootTaskView = view
-    // Preserve drill-in across view switches. Previously we reset currentParentId
-    // to 0 which lost the user's subtask scope whenever they flipped tabs.
-    // We also try to keep the same task selected by re-finding it in the new view.
-    if let task = capturedTask,
-      let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id })
-    {
-      currentSiblingIndex = newIndex
-    } else {
-      currentSiblingIndex = 0
-    }
-    if view != .due {
-      selectedRootDueBucket = nil
-    }
-    if view != .tags {
-      selectedRootTag = ""
-    }
-    if view != .kanban {
-      kanban.kanbanFilterSubtasks = false
-      kanban.kanbanFilterParentId = nil
-    } else {
-      // Propagate the user's current tree position into the kanban filter so
-      // switching views shows the same scope the user was browsing.
-      let inheritedParentId: Int? = capturedParentId == 0 ? nil : capturedParentId
-      kanban.kanbanFilterParentId = inheritedParentId
-      kanban.kanbanFilterSubtasks = false
-      // Seed the kanban selection from the task the user had highlighted.
-      if let task = capturedTask {
-        kanban.kanbanSelectedTaskId = task.id
-      }
-      // Ensure a valid selection when entering kanban. Search ALL columns for the
-      // selected task — not just the focused column — since the task may have moved
-      // to a different column while we were in another view.
-      let cols = kanban.kanbanColumns
-      var selectionValidInColumn: Int? = nil
-      if let selectedId = kanban.kanbanSelectedTaskId {
-        for (idx, col) in cols.enumerated() {
-          let colTasks = kanban.tasksForKanbanColumn(col, allColumns: cols)
-          if colTasks.contains(where: { $0.id == selectedId }) {
-            selectionValidInColumn = idx
-            break
-          }
-        }
-      }
-      if let validIdx = selectionValidInColumn {
-        // Task is valid but may be in a different column; update focus to match.
-        kanban.kanbanFocusedColumnIndex = validIdx
-      } else {
-        // Selection is stale — find the first non-empty column and select its first task.
-        kanban.kanbanSelectedTaskId = nil
-        for (idx, col) in cols.enumerated() {
-          let colTasks = kanban.tasksForKanbanColumn(col, allColumns: cols)
-          if let firstTask = colTasks.first {
-            kanban.kanbanFocusedColumnIndex = idx
-            kanban.kanbanSelectedTaskId = firstTask.id
-            currentSiblingIndex = 0
-            break
-          }
-        }
-      }
-    }
-    if !(view == .due || view == .tags || view == .kanban), rootScopeFocusLevel > 1 {
-      rootScopeFocusLevel = 1
-    }
-  }
-
-  @MainActor func cycleRootTaskView(direction: Int) {
-    let allViews = orderedRootTaskViews
-    guard let currentIndex = allViews.firstIndex(of: rootTaskView) else { return }
-    let nextIndex = max(0, min(allViews.count - 1, currentIndex + direction))
-    guard nextIndex != currentIndex else { return }
-    setRootTaskView(allViews[nextIndex])
-  }
-
-  @MainActor func cycleRootScopeFilter(direction: Int) {
-    guard shouldShowRootScopeSection else { return }
-    switch rootTaskView {
-    case .all, .priority, .eisenhower, .kanban:
-      return
-    case .due:
-      let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
-      guard let currentIndex = options.firstIndex(where: { $0 == selectedRootDueBucket }) else {
-        selectedRootDueBucket = nil
-        currentSiblingIndex = 0
-        return
-      }
-      let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
-      selectedRootDueBucket = options[nextIndex]
-      currentSiblingIndex = 0
-    case .tags:
-      let tags = rootLevelTagNames(limit: 30)
-      let options = [""] + tags
-      guard let currentIndex = options.firstIndex(of: selectedRootTag) else {
-        selectedRootTag = ""
-        currentSiblingIndex = 0
-        return
-      }
-      let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
-      selectedRootTag = options[nextIndex]
-      currentSiblingIndex = 0
-    }
-  }
-
-  @MainActor func selectRootScopeFilter(at index: Int) {
-    guard shouldShowRootScopeSection else { return }
-    guard index >= 0 else { return }
-    switch rootTaskView {
-    case .all, .priority, .eisenhower, .kanban:
-      return
-    case .due:
-      let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
-      guard options.indices.contains(index) else { return }
-      selectedRootDueBucket = options[index]
-      currentSiblingIndex = 0
-      rootScopeFocusLevel = 2
-    case .tags:
-      let options = [""] + rootLevelTagNames(limit: 30)
-      guard options.indices.contains(index) else { return }
-      selectedRootTag = options[index]
-      currentSiblingIndex = 0
-      rootScopeFocusLevel = 2
-    }
-  }
 
   @MainActor func setPriorityForCurrentTask(_ rank: Int) {
     guard rank >= 1, let task = currentTask else { return }
@@ -510,7 +376,7 @@ extension AppCoordinator {
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
       currentSiblingIndex = newIndex
     } else {
-      clampSelectionToVisibleRange()
+      taskNavigationService.clampSelectionToVisibleRange()
     }
   }
 
@@ -523,7 +389,7 @@ extension AppCoordinator {
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
       currentSiblingIndex = newIndex
     } else {
-      clampSelectionToVisibleRange()
+      taskNavigationService.clampSelectionToVisibleRange()
     }
   }
 

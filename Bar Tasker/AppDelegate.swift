@@ -84,7 +84,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
           self.menuBarController.showPopoverWindow()
         }
       #endif
-      await self.checkvistManager.fetchTopTask()
+      await self.checkvistManager.syncService.fetchTopTask()
       self.menuBarController.updateTitle()
     }
   }
@@ -188,7 +188,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     else { return }
     lastAutoRefreshTime = now
     Task { [weak self] in
-      await self?.checkvistManager.fetchTopTask()
+      await self?.checkvistManager.syncService.fetchTopTask()
       self?.menuBarController.updateTitle()
     }
   }
@@ -200,7 +200,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   private func triggerQuickAddFromHotkey() {
     menuBarController.showPopoverWindow()
-    _ = checkvistManager.beginQuickAddEntry()
+    _ = checkvistManager.taskMutationService.beginQuickAddEntry()
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

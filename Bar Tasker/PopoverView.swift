@@ -108,7 +108,7 @@ enum PopoverLayout {
   }
 }
 
-private struct MarqueeTextLine<Content: View>: View {
+struct MarqueeTextLine<Content: View>: View {
   let fadeWidth: CGFloat
   let content: () -> Content
 
@@ -362,7 +362,7 @@ struct QuickEntryField: NSViewRepresentable {
 struct PopoverView: View {
   @Environment(AppCoordinator.self) var manager
 
-  private func themeColor(_ token: AppThemeColorToken) -> Color {
+  func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
   }
 
@@ -440,7 +440,7 @@ struct PopoverView: View {
     }
   }
 
-  private var isAddMode: Bool {
+  var isAddMode: Bool {
     manager.quickEntry.quickEntryMode == .addSibling || manager.quickEntry.quickEntryMode == .addChild
   }
 
@@ -540,7 +540,7 @@ struct PopoverView: View {
     }
   }
 
-  private var shouldShowEmptyListComposer: Bool {
+  var shouldShowEmptyListComposer: Bool {
     let baseConditions =
       manager.visibleTasks.isEmpty
       && !manager.isLoading
@@ -571,7 +571,7 @@ struct PopoverView: View {
     return showsSearchPrompt || showsQuickAddPrompt || showsCommandPrompt
   }
 
-  private var activePromptTextBinding: Binding<String> {
+  var activePromptTextBinding: Binding<String> {
     switch manager.quickEntry.quickEntryMode {
     case .search:
       return Bindable(manager).quickEntry.searchText
@@ -580,7 +580,7 @@ struct PopoverView: View {
     }
   }
 
-  private var activePromptText: String {
+  var activePromptText: String {
     switch manager.quickEntry.quickEntryMode {
     case .search:
       return manager.quickEntry.searchText
@@ -589,7 +589,7 @@ struct PopoverView: View {
     }
   }
 
-  private func clearPrompt() {
+  func clearPrompt() {
     manager.quickEntry.isQuickEntryFocused = false
     switch manager.quickEntry.quickEntryMode {
     case .search:
@@ -810,7 +810,7 @@ struct PopoverView: View {
         if manager.rootTaskView == .kanban {
           manager.kanban.exitToParentScope()
         } else {
-          manager.exitToParent()
+          manager.taskNavigationService.exitToParent()
         }
       } label: {
         Image(systemName: "chevron.left").font(.caption).foregroundColor(themeColor(.link))
@@ -828,7 +828,7 @@ struct PopoverView: View {
           ForEach(manager.breadcrumbs) { crumb in
             Image(systemName: "chevron.right").font(.system(size: 8)).foregroundColor(
               themeColor(.textSecondary))
-            Button(crumb.content) { manager.navigateTo(task: crumb) }
+            Button(crumb.content) { manager.taskNavigationService.navigate(to: crumb) }
               .buttonStyle(PlainButtonStyle())
               .font(Typography.taskFont(size: 11))
               .foregroundColor(themeColor(.link))
@@ -1015,7 +1015,7 @@ struct PopoverView: View {
   func rootScopeTabButton(_ scope: RootTaskView) -> some View {
     let selected = manager.rootTaskView == scope
     Button {
-      manager.setRootTaskView(scope)
+      manager.taskNavigationService.setRootTaskView(scope)
       manager.rootScopeFocusLevel = 1
     } label: {
       Text(scope.title)
@@ -1248,465 +1248,6 @@ struct PopoverView: View {
     .background(themeColor(.danger).opacity(0.08))
   }
 
-  @ViewBuilder
-  func quickEntryBar(verticalPadding: CGFloat = 10, leadingInset: CGFloat = 0) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(alignment: .center, spacing: PopoverLayout.rowContentSpacing) {
-        Image(systemName: iconForMode)
-          .foregroundColor(themeColor(.textSecondary))
-          .font(.system(size: 13))
-          .frame(width: PopoverLayout.rowIconWidth, height: 20, alignment: .center)
-
-        QuickEntryField(
-          text: activePromptTextBinding,
-          isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
-          font: quickEntryNSFont,
-          placeholder: placeholderText,
-          onSubmit: { submitAction() },
-          onTab: { tabAction() },
-          onEscape: { escapeAction() }
-        )
-        .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20, alignment: .leading)
-        .onChange(of: manager.quickEntry.searchText) { _, _ in
-          if manager.quickEntry.quickEntryMode == .search { manager.currentSiblingIndex = 0 }
-        }
-        .onChange(of: manager.quickEntry.quickEntryText) { _, _ in
-          if manager.quickEntry.quickEntryMode == .command { manager.quickEntry.commandSuggestionIndex = 0 }
-        }
-
-        if !activePromptText.isEmpty || manager.quickEntry.isQuickEntryFocused {
-          Button {
-            clearPrompt()
-          } label: {
-            Image(systemName: "xmark.circle.fill")
-              .foregroundColor(themeColor(.textSecondary))
-              .frame(width: 16, height: 20)
-          }.buttonStyle(PlainButtonStyle())
-        }
-
-        if manager.isLoading {
-          ProgressView().scaleEffect(0.6).frame(width: 16, height: 20)
-        }
-      }
-
-      if manager.quickEntry.quickEntryMode == .command && manager.quickEntry.isQuickEntryFocused {
-        ScrollViewReader { proxy in
-          ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-              ForEach(Array(filteredCommandSuggestions.enumerated()), id: \.element.label) {
-                idx, suggestion in
-                Button {
-                  manager.quickEntry.quickEntryText = suggestion.command
-                  if suggestion.submitImmediately {
-                    manager.quickEntry.isQuickEntryFocused = false
-                    manager.quickEntry.quickEntryMode = .search
-                    manager.quickEntry.quickEntryText = ""
-                    Task { await manager.executeCommandInput(suggestion.command) }
-                  } else {
-                    manager.quickEntry.isQuickEntryFocused = true
-                  }
-                } label: {
-                  HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 1) {
-                      Text(suggestion.label)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(themeColor(.textPrimary))
-                      Text(suggestion.preview)
-                        .font(.system(size: 10))
-                        .foregroundColor(themeColor(.textSecondary))
-                    }
-                    Spacer(minLength: 8)
-                    if let keybind = suggestion.keybind {
-                      Text(keybind)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(themeColor(.textSecondary))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(themeColor(.panelSurfaceElevated))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                    }
-                  }
-                  .padding(.horizontal, 9)
-                  .padding(.vertical, 7)
-                  .frame(maxWidth: .infinity, alignment: .leading)
-                  .background(
-                    idx == manager.quickEntry.commandSuggestionIndex
-                      ? themeColor(.selectionBackground) : Color.clear
-                  )
-                }
-                .buttonStyle(.plain)
-                .id("cmd-suggestion-\(idx)")
-                if suggestion.label != filteredCommandSuggestions.last?.label {
-                  Divider().opacity(0.35)
-                }
-              }
-            }
-          }
-          .onChange(of: manager.quickEntry.commandSuggestionIndex) { _, idx in
-            withAnimation(.easeInOut(duration: 0.12)) {
-              proxy.scrollTo("cmd-suggestion-\(idx)", anchor: .center)
-            }
-          }
-          .onChange(of: manager.quickEntry.quickEntryText) { _, _ in
-            withAnimation(.easeInOut(duration: 0.12)) {
-              proxy.scrollTo("cmd-suggestion-\(manager.quickEntry.commandSuggestionIndex)", anchor: .center)
-            }
-          }
-        }
-        .frame(maxHeight: 170)
-        .background(themeColor(.panelSurface))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
-      }
-    }
-    .padding(.leading, PopoverLayout.rowHorizontalPadding + leadingInset)
-    .padding(.trailing, PopoverLayout.rowHorizontalPadding)
-    .padding(.vertical, verticalPadding)
-
-    if let error = manager.errorMessage {
-      Text(error)
-        .font(.caption2)
-        .foregroundColor(themeColor(.danger))
-        .padding(.horizontal, 14)
-        .padding(.bottom, 6)
-    } else if let status = manager.statusMessage {
-      Text(status)
-        .font(.caption2)
-        .foregroundColor(themeColor(.link))
-        .padding(.horizontal, 14)
-        .padding(.bottom, 6)
-    } else if let sequenceHint = sequenceInputHint {
-      Text(sequenceHint)
-        .font(.caption2)
-        .foregroundColor(themeColor(.textSecondary))
-        .padding(.horizontal, 14)
-        .padding(.bottom, 6)
-    }
-  }
-
-  // MARK: - Task Rows
-
-  @ViewBuilder
-  func dueSectionHeader(_ title: String) -> some View {
-    HStack {
-      Text(title.uppercased())
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundColor(themeColor(.textSecondary))
-      Spacer(minLength: 0)
-    }
-    .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
-    .padding(.top, 8)
-    .padding(.bottom, 5)
-    .background(themeColor(.panelSurface).opacity(0.7))
-  }
-
-  @ViewBuilder
-  func taskRow(task: CheckvistTask, index: Int, childCount: Int, elapsed: TimeInterval) -> some View
-  {
-    let isSelected = index == manager.currentSiblingIndex
-    let showsInlineComposer = isSelected && isAddMode
-    let listFocusIsActive = manager.rootScopeFocusLevel == 0
-    let showsSelectedStyling = isSelected && !showsInlineComposer && listFocusIsActive
-    let showsInactiveSelection = isSelected && !showsInlineComposer && !listFocusIsActive
-    let isCompleting = manager.quickEntry.completingTaskId == task.id
-    let hasObsidianNoteLink = manager.integrations.hasObsidianSyncedNote(task: task, tasks: manager.tasks)
-    let hasGoogleCalendarLink = manager.integrations.hasGoogleCalendarEventLink(taskId: task.id, listId: manager.listId)
-
-    HStack(alignment: .top, spacing: PopoverLayout.rowContentSpacing) {
-      VStack(alignment: .leading, spacing: 3) {
-        if manager.shouldShowBreadcrumbPath(for: task) {
-          let includeCurrentParent =
-            manager.preferences.showTaskBreadcrumbContext
-            && !(manager.quickEntry.quickEntryMode == .search && !manager.quickEntry.searchText.isEmpty)
-          let path = breadcrumbPath(
-            for: task,
-            includeCurrentParent: includeCurrentParent
-          )
-          if !path.isEmpty {
-            Text(path)
-              .font(.system(size: 10)).foregroundColor(themeColor(.textSecondary)).lineLimit(1)
-          }
-        }
-
-        // Inline edit: replace text with editable field when editing this task
-        if isSelected && manager.quickEntry.quickEntryMode == .editTask && manager.quickEntry.isQuickEntryFocused {
-          QuickEntryField(
-            text: Bindable(manager).quickEntry.quickEntryText,
-            isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
-            cursorAtEnd: manager.quickEntry.editCursorAtEnd,
-            font: Typography.taskNSFont(ofSize: 13),
-            placeholder: "Edit task…",
-            onSubmit: { submitAction() },
-            onTab: {},
-            onEscape: { escapeAction() }
-          )
-          .frame(height: 18)
-          .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-          HStack(alignment: .center, spacing: 6) {
-            fadedTaskTitle(task: task)
-            taskInlineMetadata(task: task, elapsed: elapsed)
-            if task.hasNotes {
-              Image(systemName: "text.alignleft")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(themeColor(.textSecondary))
-                .help("Task has notes")
-            }
-            if hasObsidianNoteLink {
-              Button {
-                manager.rootScopeFocusLevel = 0
-                manager.currentSiblingIndex = index
-                Task {
-                  if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
-                    await manager.integrations.syncTaskToObsidian(taskId: task.id, openMode: .newWindow)
-                  } else {
-                    await manager.integrations.syncTaskToObsidian(taskId: task.id, openMode: .standard)
-                  }
-                }
-              } label: {
-                Image("ObsidianBadge")
-                  .renderingMode(.template)
-                  .resizable()
-                  .interpolation(.high)
-                  .scaledToFit()
-                  .frame(width: 12, height: 12)
-                  .foregroundColor(themeColor(.textSecondary))
-              }
-              .buttonStyle(.plain)
-              .help("Open linked Obsidian note. Shift-click opens in a new window")
-            }
-            if hasGoogleCalendarLink {
-              Button {
-                manager.rootScopeFocusLevel = 0
-                manager.currentSiblingIndex = index
-                manager.integrations.openSavedGoogleCalendarEventLink(taskId: task.id)
-              } label: {
-                Image(systemName: "calendar.badge.checkmark")
-                  .font(.system(size: 10, weight: .semibold))
-                  .foregroundColor(themeColor(.textSecondary))
-              }
-              .buttonStyle(.plain)
-              .help("Open linked Google Calendar event")
-            }
-          }
-        }
-      }
-      .layoutPriority(1)
-      .overlay(alignment: .center) {
-        // Strikethrough line that draws left-to-right when completing
-        Rectangle()
-          .fill(themeColor(.success).opacity(0.65))
-          .frame(height: 1.5)
-          .scaleEffect(x: isCompleting ? 1.0 : 0.001, y: 1, anchor: .leading)
-          .animation(.easeOut(duration: 0.12), value: isCompleting)
-      }
-
-      if childCount > 0 {
-        Button {
-          manager.currentSiblingIndex = index
-          manager.enterChildren()
-          if !manager.quickEntry.searchText.isEmpty {
-            manager.quickEntry.searchText = ""
-            manager.quickEntry.quickEntryMode = .search
-            manager.quickEntry.isQuickEntryFocused = false
-          }
-        } label: {
-          HStack(spacing: 3) {
-            Text("\(childCount)").font(.caption2).foregroundColor(themeColor(.textSecondary))
-            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundColor(
-              themeColor(.textSecondary))
-          }
-        }.buttonStyle(PlainButtonStyle()).help("Enter subtasks (→)")
-      }
-    }
-    .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
-    .padding(.vertical, PopoverLayout.rowVerticalPadding)
-    .scaleEffect(isCompleting ? 1.01 : 1.0)
-    .animation(.spring(response: 0.3, dampingFraction: 0.5), value: isCompleting)
-    .background(
-      isCompleting
-        ? themeColor(.success).opacity(0.12)
-        : showsSelectedStyling
-          ? themeColor(.selectionBackground).opacity(0.7)
-          : showsInactiveSelection ? themeColor(.selectionBackground).opacity(0.28) : Color.clear
-    )
-    .overlay(alignment: .leading) {
-      Rectangle().fill(
-        isCompleting
-          ? themeColor(.success)
-          : showsSelectedStyling ? themeColor(.selectionForeground) : Color.clear
-      )
-      .frame(width: 3)
-    }
-    .contentShape(Rectangle())
-    .onTapGesture {
-      manager.rootScopeFocusLevel = 0
-      manager.currentSiblingIndex = index
-    }
-  }
-
-  // MARK: - Helpers
-
-  var iconForMode: String {
-    switch manager.quickEntry.quickEntryMode {
-    case .search:
-      return manager.quickEntry.searchText.isEmpty
-        ? "magnifyingglass" : "line.3.horizontal.decrease.circle.fill"
-    case .addSibling: return "plus.square"
-    case .addChild: return "arrow.turn.down.right"
-    case .editTask: return "pencil"
-    case .command: return "terminal"
-    case .quickAddDefault: return "plus.circle"
-    case .quickAddSpecific: return "plus.circle.fill"
-    }
-  }
-
-  var placeholderText: String {
-    switch manager.quickEntry.quickEntryMode {
-    case .search: return "Search tasks…"
-    case .addSibling: return "Add task"
-    case .addChild: return "Add task"
-    case .editTask: return "Edit task..."
-    case .command:
-      return
-        "Action… (done, due [date/time], tag [name], priority [1-9], google calendar)"
-    case .quickAddDefault:
-      return "Quick add to list root"
-    case .quickAddSpecific:
-      if let taskId = manager.quickAddSpecificParentTaskIdValue {
-        return "Quick add under task #\(taskId)"
-      }
-      return "Quick add under specific task (set parent ID in Preferences)"
-    }
-  }
-
-  var quickEntryNSFont: NSFont {
-    switch manager.quickEntry.quickEntryMode {
-    case .addSibling, .addChild, .editTask, .quickAddDefault, .quickAddSpecific:
-      return Typography.taskNSFont(ofSize: 13)
-    case .search, .command:
-      return Typography.interfaceNSFont(ofSize: 13)
-    }
-  }
-
-  var filteredCommandSuggestions: [CommandSuggestion] {
-    manager.quickEntry.filteredCommandSuggestions(query: manager.quickEntry.quickEntryText)
-  }
-
-  var sequenceInputHint: String? {
-    let buffer = manager.quickEntry.keyBuffer.lowercased()
-    guard !buffer.isEmpty else { return nil }
-
-    let matrixStarters: Set<String> = Set(
-      manager.preferences.shortcutBinding(for: .sequenceMatrixCoord).split(separator: ",").compactMap {
-        let token = String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard token.count >= 2 else { return nil }
-        return String(token.prefix(1))
-      })
-    if buffer.count == 2,
-      let starter = buffer.first.map(String.init),
-      matrixStarters.contains(starter),
-      let urgency = buffer.last,
-      urgency.isNumber
-    {
-      return "Matrix input: (\(urgency), _)"
-    }
-    if buffer.count == 1, matrixStarters.contains(buffer) {
-      return "Matrix input: (_, _)"
-    }
-
-    let tagStarters: Set<String> = Set(
-      manager.preferences.shortcutBinding(for: .sequenceTag).split(separator: ",").compactMap {
-        let token = String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard token.count >= 2 else { return nil }
-        return String(token.prefix(1))
-      })
-    if buffer.count == 1, tagStarters.contains(buffer) {
-      return "Tag sequence…"
-    }
-
-    return "Sequence: \(buffer)…"
-  }
-
-  func submitAction() {
-    switch manager.quickEntry.quickEntryMode {
-    case .search:
-      manager.quickEntry.isQuickEntryFocused = false
-    case .addSibling: submitSibling()
-    case .addChild: submitChild()
-    case .editTask:
-      guard !manager.quickEntry.quickEntryText.isEmpty else { return }
-      if let task = manager.currentTask {
-        let newContent = manager.quickEntry.quickEntryText
-        escapeAction()
-        Task { await manager.updateTask(task: task, content: newContent) }
-      }
-    case .command:
-      guard !manager.quickEntry.quickEntryText.isEmpty else { return }
-      let cmd = manager.quickEntry.quickEntryText
-      escapeAction()
-      Task { await manager.executeCommandInput(cmd) }
-    case .quickAddDefault:
-      submitQuickAdd(useSpecificLocation: false)
-    case .quickAddSpecific:
-      submitQuickAdd(useSpecificLocation: true)
-    }
-  }
-
-  func tabAction() {
-    switch manager.quickEntry.quickEntryMode {
-    case .addSibling, .addChild:
-      if manager.quickEntry.quickEntryText.isEmpty {
-        manager.quickEntry.quickEntryMode = .addChild
-        manager.quickEntry.isQuickEntryFocused = true
-        return
-      }
-      submitChild()
-    case .search, .editTask, .command, .quickAddDefault, .quickAddSpecific:
-      return
-    }
-  }
-
-  func escapeAction() {
-    manager.quickEntry.isQuickEntryFocused = false
-    switch manager.quickEntry.quickEntryMode {
-    case .search:
-      manager.quickEntry.searchText = ""
-    case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
-      manager.quickEntry.quickEntryMode = .search
-      manager.quickEntry.quickEntryText = ""
-      manager.quickEntry.commandSuggestionIndex = 0
-    }
-  }
-
-  func escapeEmptyStateAdd() {
-    manager.quickEntry.isQuickEntryFocused = false
-    manager.quickEntry.quickEntryText = ""
-    activateEmptyListComposerModeIfNeeded()
-  }
-
-  func submitEmptyStateAdd() {
-    manager.quickEntry.quickEntryMode = .addSibling
-    submitSibling()
-  }
-
-  func activateEmptyListComposerModeIfNeeded() {
-    guard shouldShowEmptyListComposer else { return }
-    if manager.quickEntry.quickEntryMode == .search {
-      manager.quickEntry.quickEntryMode = .addSibling
-    }
-  }
-
-  /// When the empty-list composer becomes inactive (e.g., user switches to a tab that
-  /// has tasks), drop the .addSibling mode we activated for it so the quick-entry bar
-  /// doesn't stay open with empty text.
-  func deactivateEmptyListComposerModeIfNeeded() {
-    guard manager.quickEntry.quickEntryMode == .addSibling,
-      manager.quickEntry.quickEntryText.isEmpty
-    else { return }
-    manager.quickEntry.quickEntryMode = .search
-    manager.quickEntry.isQuickEntryFocused = false
-  }
-
   func breadcrumbPath(for task: CheckvistTask, includeCurrentParent: Bool = false) -> String {
     var parts: [String] = []
     var pid = task.parentId ?? 0
@@ -1724,344 +1265,6 @@ struct PopoverView: View {
     return parts.joined(separator: " › ")
   }
 
-  func submitSibling() {
-    guard !manager.quickEntry.quickEntryText.isEmpty else {
-      manager.quickEntry.quickEntryText = ""
-      manager.quickEntry.quickEntryMode = .search
-      manager.quickEntry.isQuickEntryFocused = false
-      return
-    }
-    let content = manager.quickEntry.quickEntryText
-    let targetTask = manager.currentTask
-    manager.quickEntry.quickEntryText = ""
-    manager.quickEntry.quickEntryMode = .search
-    manager.quickEntry.isQuickEntryFocused = false
-    manager.errorMessage = nil
-    Task { await manager.addTask(content: content, insertAfterTask: targetTask) }
-  }
-
-  func submitTopLevelAdd() {
-    guard !manager.quickEntry.quickEntryText.isEmpty else {
-      manager.quickEntry.isQuickEntryFocused = false
-      return
-    }
-    let content = manager.quickEntry.quickEntryText
-    manager.quickEntry.quickEntryText = ""
-    manager.errorMessage = nil
-    manager.quickEntry.isQuickEntryFocused = true
-    Task { await manager.addTask(content: content, insertAtTopOfCurrentLevel: true) }
-  }
-
-  func submitChild() {
-    guard !manager.quickEntry.quickEntryText.isEmpty, let parent = manager.currentTask else {
-      if manager.quickEntry.quickEntryText.isEmpty {
-        manager.quickEntry.quickEntryText = ""
-        manager.quickEntry.quickEntryMode = .search
-        manager.quickEntry.isQuickEntryFocused = false
-      }
-      return
-    }
-    let content = manager.quickEntry.quickEntryText
-    manager.quickEntry.quickEntryText = ""
-    manager.quickEntry.quickEntryMode = .search
-    manager.quickEntry.isQuickEntryFocused = false
-    manager.errorMessage = nil
-    Task { await manager.addTaskAsChild(content: content, parentId: parent.id) }
-  }
-
-  func submitQuickAdd(useSpecificLocation: Bool) {
-    guard !manager.quickEntry.quickEntryText.isEmpty else { return }
-    let content = manager.quickEntry.quickEntryText
-    Task {
-      await manager.submitQuickAddTask(content: content, useSpecificLocation: useSpecificLocation)
-    }
-  }
-
-  @ViewBuilder
-  func timerBadge(elapsed: TimeInterval, running: Bool) -> some View {
-    HStack(spacing: 3) {
-      Image(systemName: running ? "timer" : "pause.circle")
-        .font(.system(size: 9))
-      Text(formattedTimer(elapsed))
-        .font(.system(size: 10, weight: .medium, design: .monospaced))
-    }
-    .padding(.horizontal, 5).padding(.vertical, 2)
-    .background(running ? themeColor(.link).opacity(0.15) : themeColor(.panelSurfaceElevated))
-    .foregroundColor(running ? themeColor(.link) : themeColor(.textSecondary))
-    .clipShape(RoundedRectangle(cornerRadius: 4))
-  }
-
-  func formattedTimer(_ elapsed: TimeInterval) -> String {
-    TimerManager.formattedTimer(elapsed)
-  }
-
-  @ViewBuilder
-  func fadedTaskTitle(task: CheckvistTask) -> some View {
-    MarqueeTextLine(fadeWidth: PopoverLayout.rowTextFadeWidth) {
-      inlineTaskContent(task: task)
-        .multilineTextAlignment(.leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  func inlineTaskContent(task: CheckvistTask) -> Text {
-    formatTaskContent(taskDisplayTitle(task.content))
-  }
-
-  func taskDisplayTitle(_ text: String) -> String {
-    let pattern = "([@#][a-zA-Z0-9_\\-]+)"
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
-    let range = NSRange(text.startIndex..., in: text)
-    let stripped = regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
-    let normalized =
-      stripped
-      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    return normalized.isEmpty ? text : normalized
-  }
-
-  func taskMetadataTokens(_ text: String) -> [String] {
-    let pattern = "([@#][a-zA-Z0-9_\\-]+)"
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..., in: text)
-    let matches = regex.matches(in: text, range: range)
-    return matches.compactMap { match in
-      guard let matchRange = Range(match.range, in: text) else { return nil }
-      return String(text[matchRange])
-    }
-  }
-
-  @ViewBuilder
-  func taskInlineMetadata(task: CheckvistTask, elapsed: TimeInterval) -> some View {
-    let metadataTokens = taskMetadataTokens(task.content)
-    let startLabel = manager.startDates.startDateLabel(for: task)
-    let recurrenceRule = manager.recurrenceRule(for: task)
-    let priorityLabel = manager.priorityBadgeLabel(for: task)
-    let matrixLabel = manager.eisenhowerBadgeLabel(for: task)
-    if !metadataTokens.isEmpty
-      || priorityLabel != nil
-      || matrixLabel != nil
-      || (manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id))
-      || task.due != nil
-      || startLabel != nil
-      || recurrenceRule != nil
-    {
-      HStack(spacing: 4) {
-        ForEach(metadataTokens, id: \.self) { token in
-          metadataTokenBadge(token)
-        }
-        if let priorityLabel {
-          priorityBadge(priorityLabel)
-        }
-        if let matrixLabel {
-          matrixBadge(matrixLabel)
-        }
-        if manager.timer.timerIsVisible && (elapsed > 0 || manager.timer.timedTaskId == task.id) {
-          timerBadge(
-            elapsed: elapsed,
-            running: manager.timer.timedTaskId == task.id && manager.timer.timerRunning
-          )
-        }
-        if let label = startLabel {
-          startBadge(label: label, isFuture: manager.startDates.startDateIsInFuture(for: task))
-        }
-        if let due = task.due {
-          dueBadge(due: due, overdue: task.isOverdue, today: task.isDueToday)
-        }
-        if let rule = recurrenceRule {
-          recurrenceBadge(rule: rule)
-        }
-      }
-      .fixedSize(horizontal: true, vertical: false)
-    }
-  }
-
-  @ViewBuilder
-  func priorityBadge(_ priorityLabel: String) -> some View {
-    let isAbsolute = priorityLabel.hasPrefix("A")
-    Text(priorityLabel)
-      .font(.system(size: 10, weight: .semibold, design: .monospaced))
-      .padding(.horizontal, 5)
-      .padding(.vertical, 2)
-      .background(isAbsolute ? themeColor(.danger) : themeColor(.selectionBackground))
-      .foregroundColor(isAbsolute ? Color.white : themeColor(.selectionForeground))
-      .clipShape(RoundedRectangle(cornerRadius: 4))
-  }
-
-  @ViewBuilder
-  func matrixBadge(_ label: String) -> some View {
-    HStack(spacing: 3) {
-      Image(systemName: "square.grid.2x2")
-        .font(.system(size: 8))
-      Text(label)
-        .font(.system(size: 10, weight: .medium, design: .monospaced))
-    }
-    .padding(.horizontal, 5)
-    .padding(.vertical, 2)
-    .background(themeColor(.panelSurfaceElevated))
-    .foregroundColor(themeColor(.textSecondary))
-    .clipShape(RoundedRectangle(cornerRadius: 4))
-  }
-
-  @ViewBuilder
-  func startBadge(label: String, isFuture: Bool) -> some View {
-    HStack(spacing: 3) {
-      Image(systemName: "play.fill")
-        .font(.system(size: 8))
-      Text(label)
-        .font(.caption2)
-    }
-    .padding(.horizontal, 5).padding(.vertical, 2)
-    .background(
-      isFuture
-        ? themeColor(.link).opacity(0.12)
-        : themeColor(.panelSurfaceElevated)
-    )
-    .foregroundColor(
-      isFuture ? themeColor(.link) : themeColor(.textSecondary)
-    )
-    .clipShape(RoundedRectangle(cornerRadius: 4))
-  }
-
-  @ViewBuilder
-  func recurrenceBadge(rule: RecurrenceRule) -> some View {
-    HStack(spacing: 3) {
-      Image(systemName: "repeat")
-        .font(.system(size: 8))
-      Text(rule.displayLabel)
-        .font(.caption2)
-    }
-    .padding(.horizontal, 5).padding(.vertical, 2)
-    .background(themeColor(.panelSurfaceElevated))
-    .foregroundColor(themeColor(.textSecondary))
-    .clipShape(RoundedRectangle(cornerRadius: 4))
-  }
-
-  @ViewBuilder
-  func dueBadge(due: String, overdue: Bool, today: Bool) -> some View {
-    let displayText = due == "asap" ? "ASAP" : naturalDateString(from: due)
-    Text(displayText).font(.caption2)
-      .padding(.horizontal, 5).padding(.vertical, 2)
-      .background(
-        overdue
-          ? themeColor(.danger).opacity(0.15)
-          : today ? themeColor(.warning).opacity(0.15) : themeColor(.panelSurfaceElevated)
-      )
-      .foregroundColor(
-        overdue
-          ? themeColor(.danger)
-          : today ? themeColor(.warning) : themeColor(.textSecondary)
-      )
-      .clipShape(RoundedRectangle(cornerRadius: 4))
-  }
-  
-  private func naturalDateString(from dueString: String) -> String {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    // Try date-only format first
-    formatter.dateFormat = "yyyy-MM-dd"
-    if let date = formatter.date(from: dueString) {
-      return naturalDateString(from: date)
-    }
-    // Try datetime format
-    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
-    if let date = formatter.date(from: dueString) {
-      return naturalDateString(from: date)
-    }
-    return dueString
-  }
-  
-  private func naturalDateString(from date: Date) -> String {
-    let calendar = Calendar.current
-    let now = Date()
-    let today = calendar.startOfDay(for: now)
-    let targetDay = calendar.startOfDay(for: date)
-    let dayDiff = calendar.dateComponents([.day], from: today, to: targetDay).day ?? 0
-    
-    switch dayDiff {
-    case 0: return "Today"
-    case 1: return "Tomorrow"
-    case -1: return "Yesterday"
-    case 2...6:
-      let formatter = DateFormatter()
-      formatter.dateFormat = "EEEE"  // Day name
-      return formatter.string(from: date)
-    case 7...13: return "Next week"
-    case -7...(-2): return "Last week"
-    default:
-      let formatter = DateFormatter()
-      formatter.dateFormat = "MMM d"
-      return formatter.string(from: date)
-    }
-  }
-
-  @ViewBuilder
-  func metadataTokenBadge(_ token: String) -> some View {
-    Text(token)
-      .font(.system(size: 10, weight: .medium))
-      .padding(.horizontal, 5)
-      .padding(.vertical, 2)
-      .background(themeColor(.panelSurfaceElevated))
-      .foregroundColor(themeColor(.textSecondary))
-      .clipShape(RoundedRectangle(cornerRadius: 4))
-  }
-
-  /// Parses Checkvist #tags and @contexts and formats them as inline pills using concatenated Text views
-  // swiftlint:disable shorthand_operator
-  func formatTaskContent(_ text: String) -> Text {
-    let pattern = "([@#][a-zA-Z0-9_\\-]+)"
-    guard let regex = try? NSRegularExpression(pattern: pattern) else {
-      return Text(text).font(Typography.taskFont(size: 13)).foregroundColor(
-        themeColor(.textPrimary))
-    }
-
-    let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
-    guard !matches.isEmpty else {
-      return Text(text).font(Typography.taskFont(size: 13)).foregroundColor(
-        themeColor(.textPrimary))
-    }
-
-    var resultText = Text("")
-    var lastEnd = text.startIndex
-
-    for match in matches {
-      guard let matchRange = Range(match.range, in: text) else { continue }
-
-      // Add preceding text
-      if matchRange.lowerBound > lastEnd {
-        let preceding = String(text[lastEnd..<matchRange.lowerBound])
-        resultText =
-          resultText
-          + Text(preceding).font(Typography.taskFont(size: 13))
-          .foregroundColor(themeColor(.textPrimary))
-      }
-
-      // Add the tag pill
-      let tagStr = String(text[matchRange])
-
-      // Markdown trick: We can't actually nest complex View backgrounds inside a concatenated Text in standard SwiftUI without iOS 15 AttributedString APIs,
-      // but we CAN use basic inline styling like bolding and foreground colors.
-      let tagText = Text(tagStr)
-        .font(Typography.taskFont(size: 12, weight: .bold))
-        .foregroundColor(themeColor(.link))
-
-      resultText = resultText + tagText
-      lastEnd = matchRange.upperBound
-    }
-
-    // Add trailing text
-    if lastEnd < text.endIndex {
-      let trailing = String(text[lastEnd..<text.endIndex])
-      resultText =
-        resultText
-        + Text(trailing).font(Typography.taskFont(size: 13))
-        .foregroundColor(themeColor(.textPrimary))
-    }
-
-    return resultText
-  }
-  // swiftlint:enable shorthand_operator
 
 }
 // swiftlint:enable type_body_length function_body_length

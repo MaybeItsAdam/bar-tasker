@@ -1,11 +1,9 @@
 import Foundation
 import OSLog
 
-struct CheckvistTaskCachePayload: Codable, Sendable {
-  let listId: String
-  let fetchedAt: Date
-  let tasks: [CheckvistTask]
-}
+// `CheckvistTaskCachePayload` moved to `CheckvistTaskCachePayload.swift` so it
+// can be shared with `BarTaskerPlugins` / `BarTaskerAppLogic` without the
+// fetcher.
 
 struct CheckvistTaskRepository {
   private let logger = Logger(

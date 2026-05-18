@@ -39,14 +39,9 @@ let pluginTargetExcludes = [
   "Bar Tasker/Models",
 
   // App-level source files at Bar Tasker/ root
-  "Bar Tasker/AppCoordinator+Navigation.swift",
-  "Bar Tasker/AppCoordinator+QuickAdd.swift",
   "Bar Tasker/AppCoordinator+ReorderingAndTiming.swift",
   "Bar Tasker/AppCoordinator+StateAndLifecycle.swift",
-  "Bar Tasker/AppCoordinator+TaskMutations.swift",
   "Bar Tasker/AppCoordinator+TaskScoping.swift",
-  "Bar Tasker/AppCoordinator+TaskSync.swift",
-  "Bar Tasker/AppCoordinator+Undo.swift",
   "Bar Tasker/AppCoordinator.swift",
   "Bar Tasker/AppDelegate.swift",
   "Bar Tasker/AppThemeColorSupport.swift",
@@ -79,7 +74,6 @@ let pluginTargetExcludes = [
   "Bar Tasker/Plugins/Settings",
   "Bar Tasker/Plugins/Native/OfflineTaskSyncPlugin.swift",
   "Bar Tasker/Plugins/Native/Checkvist/CheckvistAPIClient.swift",
-  "Bar Tasker/Plugins/Native/Checkvist/CheckvistModels.swift",
   "Bar Tasker/Plugins/Native/Checkvist/CheckvistSession.swift",
   "Bar Tasker/Plugins/Native/Checkvist/CheckvistTaskRepository.swift",
   "Bar Tasker/Plugins/Native/Checkvist/NativeCheckvistSyncPlugin+Settings.swift",
@@ -156,14 +150,9 @@ let appLogicTargetExcludes = [
   "Bar Tasker/Models/RootTaskView.swift",
 
   // App-level source files at Bar Tasker/ root that AppLogic does not need.
-  "Bar Tasker/AppCoordinator+Navigation.swift",
-  "Bar Tasker/AppCoordinator+QuickAdd.swift",
   "Bar Tasker/AppCoordinator+ReorderingAndTiming.swift",
   "Bar Tasker/AppCoordinator+StateAndLifecycle.swift",
-  "Bar Tasker/AppCoordinator+TaskMutations.swift",
   "Bar Tasker/AppCoordinator+TaskScoping.swift",
-  "Bar Tasker/AppCoordinator+TaskSync.swift",
-  "Bar Tasker/AppCoordinator+Undo.swift",
   "Bar Tasker/AppCoordinator.swift",
   "Bar Tasker/AppDelegate.swift",
   "Bar Tasker/AppThemeColorSupport.swift",
@@ -221,6 +210,10 @@ let package = Package(
         "Bar Tasker/Plugins/Native/Checkvist/NativeCheckvistSyncPlugin.swift",
         "Bar Tasker/Plugins/Native/Checkvist/CheckvistCredentialStore.swift",
         "Bar Tasker/Plugins/Native/Checkvist/CheckvistEndpoints.swift",
+        "Bar Tasker/Plugins/Native/Checkvist/CheckvistModels.swift",
+        "Bar Tasker/Plugins/Native/Checkvist/CheckvistTaskCachePayload.swift",
+        "Bar Tasker/Plugins/Native/Checkvist/CheckvistSessionError.swift",
+        "Bar Tasker/Plugins/Native/Obsidian/ObsidianOpenMode.swift",
         "Bar Tasker/Plugins/Native/Obsidian/NativeObsidianIntegrationPlugin.swift",
         "Bar Tasker/Plugins/Native/GoogleCalendar/NativeGoogleCalendarIntegrationPlugin.swift",
         "Bar Tasker/Plugins/Native/GoogleCalendar/GoogleCalendarOAuthTokenStore.swift",
@@ -233,15 +226,18 @@ let package = Package(
     // AppLogic hosts the headless-but-app-bound state machines (TaskRepository,
     // OfflineTaskSyncPlugin, the priority/queue/eisenhower stores, etc.) so they
     // can be exercised by `swift test` without spinning up the Xcode app target.
-    // It depends on BarTaskerPlugins for shared protocols/models (CheckvistTask,
-    // CheckvistSyncPlugin, CheckvistCredentials) which are stubbed in
-    // plugin-tests-support/PluginModelStubs.swift.
+    // The Checkvist data types and `CheckvistSyncPlugin` protocol are
+    // re-declared in `applogic-support/AppLogicSharedTypes.swift` because
+    // promoting them out of `BarTaskerPlugins` would require making them
+    // `public` — see the Phase 5.2 note in ARCHITECTURE_IMPROVEMENT_PLAN.md.
     .target(
       name: "BarTaskerAppLogic",
       path: ".",
       exclude: appLogicTargetExcludes,
       sources: [
         "Bar Tasker/Managers/TaskRepository.swift",
+        "Bar Tasker/CacheInvalidationBus.swift",
+        "Bar Tasker/UndoService.swift",
         "Bar Tasker/LocalTaskStore.swift",
         "Bar Tasker/ReorderQueue.swift",
         "Bar Tasker/TaskNavigationCoordinator.swift",
@@ -251,11 +247,6 @@ let package = Package(
         "Bar Tasker/Plugins/Native/OfflineTaskSyncPlugin.swift",
         "Bar Tasker/PreferencesStore.swift",
         "Bar Tasker/Models/UndoableAction.swift",
-        // AppLogic-local copy of the plugin protocol + stub models. SPM forbids
-        // the same file appearing in two targets, and BarTaskerPlugins already
-        // owns Bar Tasker/Plugins/Protocols/PluginProtocols.swift and
-        // plugin-tests-support/PluginModelStubs.swift, so AppLogic gets its own.
-        // Keep these in sync with the originals.
         "applogic-support/AppLogicSharedTypes.swift",
       ]
     ),

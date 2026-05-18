@@ -12,6 +12,7 @@ import SwiftUI
 
   let repository: TaskRepository
   let feedbackService: FeedbackService
+  @ObservationIgnored let cacheInvalidationBus: CacheInvalidationBus
 
   let navigationState: NavigationState
 
@@ -21,10 +22,7 @@ import SwiftUI
   }
   var currentParentId: Int {
     get { navigationState.currentParentId }
-    set {
-      navigationState.currentParentId = newValue
-      invalidateCaches()
-    }
+    set { navigationState.currentParentId = newValue }
   }
   var currentSiblingIndex: Int {
     get { navigationState.currentSiblingIndex }
@@ -51,10 +49,6 @@ import SwiftUI
   var errorMessage: String? {
     get { repository.errorMessage }
     set { repository.errorMessage = newValue }
-  }
-  var lastUndo: UndoableAction? {
-    get { repository.lastUndo }
-    set { repository.lastUndo = newValue }
   }
 
   var hideFuture: Bool {
@@ -151,6 +145,13 @@ import SwiftUI
   @ObservationIgnored let preferencesStore = PreferencesStore()
   let userPluginManager: UserPluginManager
   @ObservationIgnored lazy var commandExecutor = CommandExecutor(manager: self)
+  @ObservationIgnored private(set) var lifecycle: LifecycleController!
+  private(set) var undoService: UndoService!
+  @ObservationIgnored private(set) var taskNavigationService: TaskNavigationService!
+  @ObservationIgnored private(set) var taskMutationService: TaskMutationService!
+  @ObservationIgnored private(set) var syncService: SyncService!
+  /// Owned here (rather than on `LifecycleController`) so `deinit`, which is
+  /// nonisolated, can call `stop()` without hopping back onto the main actor.
   @ObservationIgnored let reachabilityMonitor = NetworkReachabilityMonitor()
   var usesKeychainStorage: Bool { false }
 
@@ -204,7 +205,10 @@ import SwiftUI
     let initialRemoteKey = resolvedCheckvistSyncPlugin.startupRemoteKey(
       useKeychainStorageAtInit: false)
 
-    let navigationState = NavigationState()
+    let cacheInvalidationBus = CacheInvalidationBus()
+    self.cacheInvalidationBus = cacheInvalidationBus
+
+    let navigationState = NavigationState(cacheInvalidationBus: cacheInvalidationBus)
     self.navigationState = navigationState
 
     // Create task repository with all task-related state
@@ -212,7 +216,8 @@ import SwiftUI
       preferencesStore: preferencesStore,
       checkvistSyncPlugin: resolvedCheckvistSyncPlugin,
       localTaskStore: resolvedLocalTaskStore,
-      initialRemoteKey: initialRemoteKey
+      initialRemoteKey: initialRemoteKey,
+      cacheInvalidationBus: cacheInvalidationBus
     )
     self.repository = repository
 
@@ -222,8 +227,14 @@ import SwiftUI
     let storedPluginSelectionOnboardingCompletedFlag = preferencesStore.optionalBool(
       .pluginSelectionOnboardingCompleted)
 
-    self.kanban = KanbanManager(preferencesStore: preferencesStore)
-    self.focusSessionManager = FocusSessionManager(preferencesStore: preferencesStore)
+    self.kanban = KanbanManager(
+      preferencesStore: preferencesStore,
+      cacheInvalidationBus: cacheInvalidationBus
+    )
+    self.focusSessionManager = FocusSessionManager(
+      preferencesStore: preferencesStore,
+      cacheInvalidationBus: cacheInvalidationBus
+    )
     if let storedOnboarding = storedOnboardingCompletedFlag {
       self.onboardingCompleted = storedOnboarding
     } else {
@@ -247,11 +258,17 @@ import SwiftUI
         preferencesStore.set(true, for: .pluginSelectionOnboardingCompleted)
       }
     }
-    let timer = TimerManager(preferencesStore: preferencesStore)
+    let timer = TimerManager(
+      preferencesStore: preferencesStore,
+      cacheInvalidationBus: cacheInvalidationBus
+    )
     self.timer = timer
-    self.startDates = StartDateManager(preferencesStore: preferencesStore)
+    self.startDates = StartDateManager(
+      preferencesStore: preferencesStore,
+      cacheInvalidationBus: cacheInvalidationBus
+    )
     self.recurrence = RecurrenceManager(preferencesStore: preferencesStore)
-    let quickEntry = QuickEntryManager()
+    let quickEntry = QuickEntryManager(cacheInvalidationBus: cacheInvalidationBus)
     self.quickEntry = quickEntry
     self.integrations = IntegrationCoordinator(
       preferencesStore: preferencesStore,
@@ -278,14 +295,20 @@ import SwiftUI
     self.selectedRootDueBucketRawValue = preferencesStore.int(
       .selectedRootDueBucketRawValue, default: -1)
     self.selectedRootTag = preferencesStore.string(.selectedRootTag)
-    setupBindings()
-    setupChildCallbacks()
+    self.taskNavigationService = TaskNavigationService(coordinator: self)
+    self.taskMutationService = TaskMutationService(coordinator: self)
+    self.undoService = UndoService(performer: self.taskMutationService)
+    self.syncService = SyncService(coordinator: self)
+    self.lifecycle = LifecycleController(
+      coordinator: self,
+      reachabilityMonitor: reachabilityMonitor
+    )
+    self.lifecycle.start()
     kanban.dataSource = self
     integrations.dataSource = self
     integrations.onIntegrationStateChanged = { [weak self] in
       self?.refreshOnboardingDialogState()
     }
-    setupNetworkMonitor()
     Task { @MainActor [weak self] in
       self?.presentOnboardingDialogIfNeeded()
     }
@@ -304,6 +327,30 @@ import SwiftUI
 extension AppCoordinator: KanbanTaskDataSource {}
 
 extension AppCoordinator: IntegrationDataSource {}
+
+extension TaskMutationService: UndoActionPerforming {}
+
+extension AppCoordinator {
+  // MARK: - Recurrence convenience
+
+  /// `setRecurrenceRule` is kept here (rather than on `RecurrenceManager`)
+  /// because parse failure surfaces through `errorMessage`, which is a
+  /// coordinator-level concern. The other two are pass-throughs that exist
+  /// only to spare callers a `.recurrence.` hop and could be inlined later.
+  func recurrenceRule(for task: CheckvistTask) -> RecurrenceRule? {
+    recurrence.recurrenceRule(for: task)
+  }
+
+  @MainActor func setRecurrenceRule(_ raw: String, for task: CheckvistTask) {
+    if let error = recurrence.setRecurrenceRule(raw, for: task) {
+      errorMessage = error
+    }
+  }
+
+  @MainActor func clearRecurrenceRule(for task: CheckvistTask) {
+    recurrence.clearRecurrenceRule(for: task)
+  }
+}
 
 extension AppCoordinator {
   @MainActor func moveCurrentTaskToKanbanColumn(direction: Int) {
@@ -369,7 +416,7 @@ extension AppCoordinator {
                 )
               }
             }
-            self.lastUndo = .add(taskId: newTask.id)
+            self.undoService.lastAction = .add(taskId: newTask.id)
             // Replace optimistic task with the real one.
             if let idx = self.tasks.firstIndex(where: { $0.id == optimisticId }) {
               self.tasks[idx] = CheckvistTask(
@@ -396,7 +443,8 @@ extension AppCoordinator {
   @MainActor func applyOptimisticMoveAndSync(
     task: CheckvistTask, content: String?, due: String?
   ) {
-    lastUndo = .update(taskId: task.id, oldContent: task.content, oldDue: task.due)
+    undoService.lastAction = .update(
+      taskId: task.id, oldContent: task.content, oldDue: task.due)
 
     guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
     let originalTask = tasks[index]

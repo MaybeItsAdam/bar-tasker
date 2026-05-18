@@ -29,30 +29,31 @@ enum KanbanMoveOutcome {
 @Observable class KanbanManager {
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "kanban")
   @ObservationIgnored private let preferencesStore: PreferencesStore
+  @ObservationIgnored private let cacheInvalidationBus: CacheInvalidationBus
   @ObservationIgnored weak var dataSource: KanbanTaskDataSource?
 
   var kanbanColumns: [KanbanColumn] {
     didSet {
       saveKanbanColumns(kanbanColumns)
-      onCacheRelevantChange?()
+      cacheInvalidationBus.invalidate()
     }
   }
   var kanbanFocusedColumnIndex: Int = 0 {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
   /// Task ID of the selected card in kanban view. Decoupled from currentSiblingIndex
   /// so selection survives task-list refreshes and view switches.
   var kanbanSelectedTaskId: Int? = nil {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
   /// When true, kanban shows only subtasks of `currentParentId`
   var kanbanFilterSubtasks: Bool = false {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
   /// When set, kanban shows the full subtree under this task ID (excluding the root task itself).
   /// This overrides `kanbanFilterSubtasks`.
   var kanbanFilterParentId: Int? = nil {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
   /// Column ID currently showing the inline add field (nil = none).
   var addingToColumnId: UUID? = nil
@@ -66,14 +67,16 @@ enum KanbanMoveOutcome {
   var manualOrderByColumnId: [String: [Int]] {
     didSet {
       saveManualOrders(manualOrderByColumnId)
-      onCacheRelevantChange?()
+      cacheInvalidationBus.invalidate()
     }
   }
 
-  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
-
-  init(preferencesStore: PreferencesStore) {
+  init(
+    preferencesStore: PreferencesStore,
+    cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus()
+  ) {
     self.preferencesStore = preferencesStore
+    self.cacheInvalidationBus = cacheInvalidationBus
     let storedKanbanJson = preferencesStore.string(.kanbanColumns)
     if !storedKanbanJson.isEmpty,
       let data = storedKanbanJson.data(using: .utf8),

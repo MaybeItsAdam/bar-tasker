@@ -6,21 +6,25 @@ import OSLog
 @Observable class StartDateManager {
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "startdate")
   @ObservationIgnored private let preferencesStore: PreferencesStore
+  @ObservationIgnored private let cacheInvalidationBus: CacheInvalidationBus
 
   /// Maps task ID → start date string (same format as `due`).
   var taskStartDatesByTaskId: [Int: String] = [:] {
     didSet {
       let encoded = Dictionary(uniqueKeysWithValues: taskStartDatesByTaskId.map { (String($0.key), $0.value) })
       preferencesStore.set(encoded, for: .taskStartDatesByTaskId)
-      onCacheRelevantChange?()
+      cacheInvalidationBus.invalidate()
     }
   }
 
-  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
   @ObservationIgnored var dateResolver: ((String) -> String)?
 
-  init(preferencesStore: PreferencesStore) {
+  init(
+    preferencesStore: PreferencesStore,
+    cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus()
+  ) {
     self.preferencesStore = preferencesStore
+    self.cacheInvalidationBus = cacheInvalidationBus
     let storedStartDates = preferencesStore.stringDictionary(.taskStartDatesByTaskId)
     self.taskStartDatesByTaskId = Dictionary(
       uniqueKeysWithValues: storedStartDates.compactMap { key, value in

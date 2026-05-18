@@ -128,22 +128,6 @@ final class CheckvistSession {
   }
 }
 
-enum CheckvistSessionError: LocalizedError {
-  case authenticationUnavailable
-  case invalidResponse(statusCode: Int?)
-  case requestFailed(underlying: Error)
-
-  var errorDescription: String? {
-    switch self {
-    case .authenticationUnavailable:
-      return "Authentication unavailable — check your username and remote key."
-    case .invalidResponse(let statusCode):
-      if let code = statusCode {
-        return "Unexpected response from Checkvist (HTTP \(code))."
-      }
-      return "Invalid response from Checkvist."
-    case .requestFailed(let underlying):
-      return "Request failed: \(underlying.localizedDescription)"
-    }
-  }
-}
+// `CheckvistSessionError` moved to `CheckvistSessionError.swift` so it can be
+// shared with `BarTaskerPlugins` / `BarTaskerAppLogic` without the session
+// machinery.

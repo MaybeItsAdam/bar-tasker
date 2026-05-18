@@ -4,6 +4,10 @@ import SwiftUI
 extension NativeMCPIntegrationPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "link" }
 
+  func sidebarStatusLabel(manager: AppCoordinator) -> String {
+    manager.integrations.mcpIntegrationEnabled ? "Enabled" : "Disabled"
+  }
+
   func makeSettingsView(manager: AppCoordinator) -> AnyView {
     AnyView(MCPIntegrationPluginSettingsView(manager: manager))
   }

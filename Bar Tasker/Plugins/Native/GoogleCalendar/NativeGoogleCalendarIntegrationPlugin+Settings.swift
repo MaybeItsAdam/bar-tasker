@@ -4,6 +4,10 @@ import SwiftUI
 extension NativeGoogleCalendarIntegrationPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "calendar" }
 
+  func sidebarStatusLabel(manager: AppCoordinator) -> String {
+    manager.integrations.googleCalendarIntegrationEnabled ? "Enabled" : "Disabled"
+  }
+
   func makeSettingsView(manager: AppCoordinator) -> AnyView {
     AnyView(
       GoogleCalendarIntegrationPluginSettingsView(

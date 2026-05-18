@@ -1,10 +1,8 @@
 import AppKit
 import Foundation
 
-enum ObsidianOpenMode {
-  case standard
-  case newWindow
-}
+// `ObsidianOpenMode` moved to `ObsidianOpenMode.swift` so it can be shared
+// with `BarTaskerPlugins` / `BarTaskerAppLogic` without AppKit-bound code.
 
 // swiftlint:disable type_body_length
 final class ObsidianSyncService {

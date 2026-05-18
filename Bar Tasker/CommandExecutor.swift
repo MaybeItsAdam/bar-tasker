@@ -16,11 +16,11 @@ final class CommandExecutor {
       AppDelegate.shared.menuSettings()
       return
     case .reloadCheckvistLists:
-      _ = await manager.loadCheckvistLists(assignFirstIfMissing: false)
+      _ = await manager.syncService.loadCheckvistLists(assignFirstIfMissing: false)
       return
     case .uploadOfflineTasks:
       if manager.availableLists.isEmpty {
-        _ = await manager.loadCheckvistLists(assignFirstIfMissing: false)
+        _ = await manager.syncService.loadCheckvistLists(assignFirstIfMissing: false)
       }
       let destinationListId =
         manager.listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -30,7 +30,7 @@ final class CommandExecutor {
         manager.errorMessage = "No Checkvist list available for upload."
         return
       }
-      _ = await manager.uploadOfflineTasksToCheckvist(destinationListId: destinationListId)
+      _ = await manager.syncService.uploadOfflineTasksToCheckvist(destinationListId: destinationListId)
       return
     case .addSibling:
       manager.quickEntry.quickEntryMode = .addSibling
@@ -54,7 +54,7 @@ final class CommandExecutor {
         return
       }
       if manager.availableLists.isEmpty {
-        _ = await manager.fetchLists()
+        _ = await manager.syncService.fetchLists()
       }
       guard
         let found = manager.availableLists.first(where: { $0.name.lowercased().contains(query) })
@@ -67,16 +67,16 @@ final class CommandExecutor {
       manager.currentSiblingIndex = 0
       manager.quickEntry.searchText = ""
       manager.quickEntry.quickEntryText = ""
-      await manager.fetchTopTask()
+      await manager.syncService.fetchTopTask()
       return
     case .undo:
-      await manager.undoLastAction()
+      await manager.undoService.undo()
       return
     case .undone:
-      if manager.lastUndo == nil {
+      if manager.undoService.lastAction == nil {
         manager.errorMessage = "Nothing to undo."
       } else {
-        await manager.undoLastAction()
+        await manager.undoService.undo()
       }
       return
     case .toggleHideFuture:
@@ -95,7 +95,7 @@ final class CommandExecutor {
       manager.integrations.openMCPServerGuide()
       return
     case .exitParent:
-      manager.exitToParent()
+      manager.taskNavigationService.exitToParent()
       return
     case .switchTab(let raw):
       let view: RootTaskView?
@@ -109,19 +109,19 @@ final class CommandExecutor {
       default: view = nil
       }
       if let view {
-        manager.setRootTaskView(view)
+        manager.taskNavigationService.setRootTaskView(view)
       } else {
         manager.errorMessage = "Unknown tab: \(raw). Try: tab all|due|tags|priority|kanban|eisenhower"
       }
       return
     case .cycleTab(let direction):
-      manager.cycleRootTaskView(direction: direction)
+      manager.taskNavigationService.cycleRootTaskView(direction: direction)
       return
     case .cycleFilter(let direction):
-      manager.cycleRootScopeFilter(direction: direction)
+      manager.taskNavigationService.cycleRootScopeFilter(direction: direction)
       return
     case .quickAdd:
-      _ = manager.beginQuickAddEntry()
+      _ = manager.taskMutationService.beginQuickAddEntry()
       return
     case .kanbanMove(let direction):
       manager.rootTaskView = .kanban
@@ -143,7 +143,7 @@ final class CommandExecutor {
         manager.currentParentId = task.id
         manager.currentSiblingIndex = 0
       } else {
-        manager.navigateTo(task: task)
+        manager.taskNavigationService.navigate(to: task)
       }
       return
     case .kanbanDrillIn:
@@ -200,18 +200,18 @@ final class CommandExecutor {
     // Commands that require a current task
     switch parsed {
     case .done:
-      await manager.markCurrentTaskDone()
+      await manager.taskMutationService.markCurrentTaskDone()
     case .invalidate:
-      await manager.invalidateCurrentTask()
+      await manager.taskMutationService.invalidateCurrentTask()
     case .due(let raw):
       guard !raw.isEmpty else {
         manager.errorMessage = "Missing due date/time. Try: due today 14:30"
         return
       }
       let resolved = manager.resolveDueDateWithConfig(raw)
-      await manager.updateTask(task: task, due: resolved)
+      await manager.taskMutationService.updateTask(task: task, due: resolved)
     case .clearDue:
-      await manager.updateTask(task: task, due: "")
+      await manager.taskMutationService.updateTask(task: task, due: "")
     case .setStart(let raw):
       guard !raw.isEmpty else {
         manager.errorMessage = "Missing start date/time. Try: start tomorrow 9am"
@@ -245,14 +245,14 @@ final class CommandExecutor {
       if manager.preferences.confirmBeforeDelete {
         manager.quickEntry.pendingDeleteConfirmation = true
       } else {
-        await manager.deleteTask(task)
+        await manager.taskMutationService.deleteTask(task)
       }
     case .moveUp:
-      await manager.moveTask(task, direction: -1)
+      await manager.syncService.moveTask(task, direction: -1)
     case .moveDown:
-      await manager.moveTask(task, direction: 1)
+      await manager.syncService.moveTask(task, direction: 1)
     case .enterChildren:
-      manager.enterChildren()
+      manager.taskNavigationService.enterChildren()
     case .tag(let tagName):
       guard !tagName.isEmpty else {
         manager.errorMessage = "Missing tag name. Try: tag urgent"
@@ -260,7 +260,7 @@ final class CommandExecutor {
       }
       let tagged =
         task.content.contains("#\(tagName)") ? task.content : "\(task.content) #\(tagName)"
-      await manager.updateTask(task: task, content: tagged)
+      await manager.taskMutationService.updateTask(task: task, content: tagged)
       manager.statusMessage = "Added tag: #\(tagName)"
       manager.statusMessage = "Added tag: #\(tagName)"
     case .untag(let tagName):
@@ -271,7 +271,7 @@ final class CommandExecutor {
       let cleaned = task.content.replacingOccurrences(of: " #\(tagName)", with: "")
         .replacingOccurrences(of: "#\(tagName)", with: "")
         .trimmingCharacters(in: .whitespaces)
-      await manager.updateTask(task: task, content: cleaned)
+      await manager.taskMutationService.updateTask(task: task, content: cleaned)
       manager.statusMessage = "Removed tag: #\(tagName)"
       manager.statusMessage = "Removed tag: #\(tagName)"
     case .matrix(let u, let i):

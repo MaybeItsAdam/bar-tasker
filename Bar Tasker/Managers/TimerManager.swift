@@ -6,13 +6,14 @@ import OSLog
 @Observable class TimerManager {
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "timer")
   @ObservationIgnored private let preferencesStore: PreferencesStore
+  @ObservationIgnored private let cacheInvalidationBus: CacheInvalidationBus
 
   var timedTaskId: Int? = nil
   var timerByTaskId: [Int: TimeInterval] = [:] {
     didSet {
       let encoded = Dictionary(uniqueKeysWithValues: timerByTaskId.map { (String($0.key), $0.value) })
       preferencesStore.set(encoded, for: .timerByTaskId)
-      onCacheRelevantChange?()
+      cacheInvalidationBus.invalidate()
     }
   }
   var timerRunning: Bool = false
@@ -30,10 +31,12 @@ import OSLog
   var timerIsEnabled: Bool { timerMode != .disabled }
   var timerIsVisible: Bool { timerMode == .visible }
 
-  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
-
-  init(preferencesStore: PreferencesStore) {
+  init(
+    preferencesStore: PreferencesStore,
+    cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus()
+  ) {
     self.preferencesStore = preferencesStore
+    self.cacheInvalidationBus = cacheInvalidationBus
     self.timerBarLeading = preferencesStore.bool(.timerBarLeading, default: false)
     self.timerMode = TimerMode(rawValue: preferencesStore.int(.timerMode, default: 0)) ?? .visible
     self.timerByTaskId = Self.timerDictionaryFromDefaults(preferencesStore: preferencesStore)

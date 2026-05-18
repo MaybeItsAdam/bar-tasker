@@ -1,142 +1,20 @@
 import Foundation
 
-struct CheckvistNote: Codable, Equatable, Identifiable {
-  let id: Int?
-  let content: String
-}
-
-struct CheckvistTask: Codable, Equatable, Identifiable {
-  let id: Int
-  let content: String
-  let status: Int
-  let due: String?
-  let position: Int?
-  let parentId: Int?
-  let level: Int?
-  let notes: [CheckvistNote]?
-  let updatedAt: String?
-
-  enum CodingKeys: String, CodingKey {
-    case id
-    case content
-    case status
-    case due
-    case position
-    case parentId = "parent_id"
-    case level
-    case notes
-    case updatedAt = "updated_at"
-  }
-
-  init(
-    id: Int,
-    content: String,
-    status: Int,
-    due: String?,
-    position: Int? = nil,
-    parentId: Int? = nil,
-    level: Int? = nil,
-    notes: [CheckvistNote]? = nil,
-    updatedAt: String? = nil
-  ) {
-    self.id = id
-    self.content = content
-    self.status = status
-    self.due = due
-    self.position = position
-    self.parentId = parentId
-    self.level = level
-    self.notes = notes
-    self.updatedAt = updatedAt
-  }
-
-  var dueDate: Date? {
-    guard let dueRaw = due?.trimmingCharacters(in: .whitespacesAndNewlines), !dueRaw.isEmpty else {
-      return nil
-    }
-
-    for parser in iso8601Parsers() {
-      if let parsed = parser.date(from: dueRaw) {
-        return parsed
-      }
-    }
-
-    for formatter in dueDateFormatters() {
-      if let parsed = formatter.date(from: dueRaw) {
-        return parsed
-      }
-    }
-
-    if dueRaw.count >= 10 {
-      let dayPrefix = String(dueRaw.prefix(10))
-      for formatter in dueDateFormatters() {
-        if let parsed = formatter.date(from: dayPrefix) {
-          return parsed
-        }
-      }
-    }
-
-    return nil
-  }
-
-  private func dueDateFormatters() -> [DateFormatter] {
-    let locale = Locale(identifier: "en_US_POSIX")
-
-    let dateOnly = DateFormatter()
-    dateOnly.locale = locale
-    dateOnly.dateFormat = "yyyy-MM-dd"
-
-    let dateOnlyNoPadding = DateFormatter()
-    dateOnlyNoPadding.locale = locale
-    dateOnlyNoPadding.dateFormat = "yyyy-M-d"
-
-    let dateTime = DateFormatter()
-    dateTime.locale = locale
-    dateTime.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
-
-    return [dateOnly, dateOnlyNoPadding, dateTime]
-  }
-
-  private func iso8601Parsers() -> [ISO8601DateFormatter] {
-    let internet = ISO8601DateFormatter()
-    internet.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate]
-
-    let internetFractional = ISO8601DateFormatter()
-    internetFractional.formatOptions = [
-      .withInternetDateTime, .withFractionalSeconds, .withDashSeparatorInDate,
-    ]
-
-    let fullDate = ISO8601DateFormatter()
-    fullDate.formatOptions = [.withFullDate, .withDashSeparatorInDate]
-
-    return [internet, internetFractional, fullDate]
-  }
-}
-
-struct CheckvistList: Codable, Equatable, Identifiable {
-  let id: Int
-  let name: String
-  let archived: Bool?
-  let readOnly: Bool?
-
-  enum CodingKeys: String, CodingKey {
-    case id
-    case name
-    case archived
-    case readOnly = "read_only"
-  }
-}
-
-struct CheckvistTaskCachePayload: Codable, Equatable {
-  let listId: String
-  let fetchedAt: Date
-  let tasks: [CheckvistTask]
-}
-
-enum ObsidianOpenMode: Equatable {
-  case standard
-  case newWindow
-}
+// Fakes for the four app-only services (`ObsidianSyncService`,
+// `CheckvistSession`, `CheckvistTaskRepository`, `GoogleOAuthLoopbackReceiver`)
+// that the plugin code references directly. The classes here share the name
+// of the real services so `BarTaskerPlugins` compiles the same plugin source
+// against these in-memory stand-ins, while the Xcode app target compiles
+// against the real implementations.
+//
+// Originally this file also duplicated the data models (`CheckvistTask`,
+// `CheckvistNote`, `CheckvistList`, `CheckvistTaskCachePayload`,
+// `ObsidianOpenMode`, `CheckvistSessionError`). Those were promoted to
+// canonical sources under `Bar Tasker/Plugins/Native/...` and are now
+// compiled into `BarTaskerPlugins` directly — see Phase 5.2 of
+// `ARCHITECTURE_IMPROVEMENT_PLAN.md`. The remaining service fakes are still
+// here pending a follow-on refactor that introduces protocol seams for the
+// services themselves.
 
 @MainActor
 final class ObsidianSyncService {
@@ -203,10 +81,6 @@ final class ObsidianSyncService {
   }
 }
 
-enum CheckvistSessionError: Error {
-  case authenticationUnavailable
-  case requestFailed
-}
 
 @MainActor
 final class CheckvistSession {

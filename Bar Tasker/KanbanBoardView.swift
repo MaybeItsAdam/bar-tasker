@@ -249,7 +249,7 @@ private struct KanbanTaskCard: View {
       manager.currentParentId = task.id
       manager.currentSiblingIndex = 0
     } else {
-      manager.navigateTo(task: task)
+      manager.taskNavigationService.navigate(to: task)
     }
   }
 

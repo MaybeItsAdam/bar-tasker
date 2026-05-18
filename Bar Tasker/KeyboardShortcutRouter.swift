@@ -171,7 +171,7 @@ struct KeyboardShortcutRouter {
         manager.quickEntry.pendingDeleteConfirmation = false
         Task {
           if let task = manager.currentTask {
-            await manager.deleteTask(task)
+            await manager.taskMutationService.deleteTask(task)
             updateTitle()
           }
         }
@@ -189,19 +189,19 @@ struct KeyboardShortcutRouter {
     // Ctrl+←/→ switches root tabs. Ctrl+↑/↓ cycles Due bucket or Tag filter.
     if manager.shouldShowRootScopeSection && !isFocused {
       if matches(.rootCycleTabPrevious) {
-        manager.cycleRootTaskView(direction: -1)
+        manager.taskNavigationService.cycleRootTaskView(direction: -1)
         return true
       }
       if matches(.rootCycleTabNext) {
-        manager.cycleRootTaskView(direction: 1)
+        manager.taskNavigationService.cycleRootTaskView(direction: 1)
         return true
       }
       if matches(.rootCycleFilterPrevious) {
-        manager.cycleRootScopeFilter(direction: -1)
+        manager.taskNavigationService.cycleRootScopeFilter(direction: -1)
         return true
       }
       if matches(.rootCycleFilterNext) {
-        manager.cycleRootScopeFilter(direction: 1)
+        manager.taskNavigationService.cycleRootScopeFilter(direction: 1)
         return true
       }
     }
@@ -229,7 +229,7 @@ struct KeyboardShortcutRouter {
             manager.currentParentId = task.id
             manager.currentSiblingIndex = 0
           } else {
-            manager.navigateTo(task: task)
+            manager.taskNavigationService.navigate(to: task)
           }
         }
         return true
@@ -244,7 +244,7 @@ struct KeyboardShortcutRouter {
         if manager.rootTaskView == .kanban {
           manager.kanban.enterSelectedTaskAsScope()
         } else {
-          manager.enterChildren()
+          manager.taskNavigationService.enterChildren()
           if !manager.quickEntry.searchText.isEmpty {
             manager.quickEntry.searchText = ""
             manager.quickEntry.quickEntryMode = .search
@@ -272,7 +272,7 @@ struct KeyboardShortcutRouter {
             manager.quickEntry.quickEntryMode = .search
             manager.quickEntry.isQuickEntryFocused = false
           }
-          manager.exitToParent()
+          manager.taskNavigationService.exitToParent()
         }
         updateTitle()
       }
@@ -282,11 +282,11 @@ struct KeyboardShortcutRouter {
     // Cmd+↑/↓ - reorder. Optimistic UI is applied synchronously in moveTask;
     // the API request is queued so key repeat coalesces into the reorder queue.
     if matches(.moveTaskDown) {
-      Task { if let task = manager.currentTask { await manager.moveTask(task, direction: 1) } }
+      Task { if let task = manager.currentTask { await manager.syncService.moveTask(task, direction: 1) } }
       return true
     }
     if matches(.moveTaskUp) {
-      Task { if let task = manager.currentTask { await manager.moveTask(task, direction: -1) } }
+      Task { if let task = manager.currentTask { await manager.syncService.moveTask(task, direction: -1) } }
       return true
     }
 
@@ -323,7 +323,7 @@ struct KeyboardShortcutRouter {
       if manager.rootTaskView == .kanban {
         manager.kanban.nextKanbanTask()
       } else {
-        manager.nextTask()
+        manager.taskNavigationService.nextTask()
       }
       updateTitle()
       return true
@@ -342,7 +342,7 @@ struct KeyboardShortcutRouter {
       if manager.rootTaskView == .kanban {
         manager.kanban.previousKanbanTask()
       } else {
-        manager.previousTask()
+        manager.taskNavigationService.previousTask()
       }
       updateTitle()
       return true
@@ -351,17 +351,17 @@ struct KeyboardShortcutRouter {
     if rootScopeFocused && !isFocused && !ctrl && !cmd && !option {
       if matches(.enterChildren) {
         if manager.rootScopeFocusLevel == 1 {
-          manager.cycleRootTaskView(direction: 1)
+          manager.taskNavigationService.cycleRootTaskView(direction: 1)
         } else if manager.rootScopeFocusLevel == 2 {
-          manager.cycleRootScopeFilter(direction: 1)
+          manager.taskNavigationService.cycleRootScopeFilter(direction: 1)
         }
         return true
       }
       if matches(.exitToParent) {
         if manager.rootScopeFocusLevel == 1 {
-          manager.cycleRootTaskView(direction: -1)
+          manager.taskNavigationService.cycleRootTaskView(direction: -1)
         } else if manager.rootScopeFocusLevel == 2 {
-          manager.cycleRootScopeFilter(direction: -1)
+          manager.taskNavigationService.cycleRootScopeFilter(direction: -1)
         }
         return true
       }
@@ -389,7 +389,7 @@ struct KeyboardShortcutRouter {
     if matches(.enterChildren) {
       if isFocused { return false }
       manager.rootScopeFocusLevel = 0
-      manager.enterChildren()
+      manager.taskNavigationService.enterChildren()
       if !manager.quickEntry.searchText.isEmpty {
         manager.quickEntry.searchText = ""
         manager.quickEntry.quickEntryMode = .search
@@ -406,7 +406,7 @@ struct KeyboardShortcutRouter {
         manager.quickEntry.quickEntryMode = .search
         manager.quickEntry.isQuickEntryFocused = false
       }
-      manager.exitToParent()
+      manager.taskNavigationService.exitToParent()
       updateTitle()
       return true
     }
@@ -416,7 +416,7 @@ struct KeyboardShortcutRouter {
     if !isFocused && !rootScopeFocused && matches(.invalidateTask) {
       if !isRepeat {
         Task {
-          await manager.invalidateCurrentTask()
+          await manager.taskMutationService.invalidateCurrentTask()
           updateTitle()
         }
       }
@@ -425,7 +425,7 @@ struct KeyboardShortcutRouter {
     if !isFocused && !rootScopeFocused && matches(.markDone) {
       if !isRepeat {
         Task {
-          await manager.markCurrentTaskDone()
+          await manager.taskMutationService.markCurrentTaskDone()
           updateTitle()
         }
       }
@@ -470,7 +470,7 @@ struct KeyboardShortcutRouter {
       if isFocused { return false }
       if rootScopeFocused { return true }
       if !isRepeat {
-        Task { if let task = manager.currentTask { await manager.unindentTask(task) } }
+        Task { if let task = manager.currentTask { await manager.syncService.unindentTask(task) } }
       }
       return true
     }
@@ -525,7 +525,7 @@ struct KeyboardShortcutRouter {
       } else {
         Task {
           if let task = manager.currentTask {
-            await manager.deleteTask(task)
+            await manager.taskMutationService.deleteTask(task)
             updateTitle()
           }
         }
@@ -536,32 +536,32 @@ struct KeyboardShortcutRouter {
     // q/w/e/r - root tab shortcuts: All / Due / Tags / Priority.
     if !isFocused {
       if matches(.rootTabAll) {
-        manager.setRootTaskView(.all)
+        manager.taskNavigationService.setRootTaskView(.all)
         updateTitle()
         return true
       }
       if matches(.rootTabDue) {
-        manager.setRootTaskView(.due)
+        manager.taskNavigationService.setRootTaskView(.due)
         updateTitle()
         return true
       }
       if matches(.rootTabTags) {
-        manager.setRootTaskView(.tags)
+        manager.taskNavigationService.setRootTaskView(.tags)
         updateTitle()
         return true
       }
       if matches(.rootTabPriority) {
-        manager.setRootTaskView(.priority)
+        manager.taskNavigationService.setRootTaskView(.priority)
         updateTitle()
         return true
       }
       if matches(.rootTabKanban) {
-        manager.setRootTaskView(.kanban)
+        manager.taskNavigationService.setRootTaskView(.kanban)
         updateTitle()
         return true
       }
       if matches(.rootTabMatrix) {
-        manager.setRootTaskView(.eisenhower)
+        manager.taskNavigationService.setRootTaskView(.eisenhower)
         updateTitle()
         return true
       }
@@ -574,7 +574,7 @@ struct KeyboardShortcutRouter {
         .rootFilter7,
       ]
       if let filterIndex = rootFilterActions.firstIndex(where: { matches($0) }) {
-        manager.selectRootScopeFilter(at: filterIndex)
+        manager.taskNavigationService.selectRootScopeFilter(at: filterIndex)
         updateTitle()
         return true
       }
@@ -757,7 +757,7 @@ struct KeyboardShortcutRouter {
 
     // j/k/u - Vim up/down navigation, undo.
     if !isFocused && matches(.undo) {
-      if !isRepeat { Task { await manager.undoLastAction() } }
+      if !isRepeat { Task { await manager.undoService.undo() } }
       return true
     }
 
@@ -778,7 +778,7 @@ struct KeyboardShortcutRouter {
 
     // Shift+A - quick add using the configured quick add location.
     if !isFocused && matches(.quickAdd) {
-      _ = manager.beginQuickAddEntry()
+      _ = manager.taskMutationService.beginQuickAddEntry()
       return true
     }
 

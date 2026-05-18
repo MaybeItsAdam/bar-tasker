@@ -86,7 +86,7 @@ struct EisenhowerMatrixView: View {
           )
           .position(point.position)
           .onTapGesture {
-            manager.navigateTo(task: point.task)
+            manager.taskNavigationService.navigate(to: point.task)
             // Optional: stay in Matrix view or switch? 
             // Let's stay in Matrix but highlight selection.
           }

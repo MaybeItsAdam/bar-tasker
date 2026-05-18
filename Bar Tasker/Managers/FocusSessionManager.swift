@@ -14,6 +14,7 @@ import Observation
   static let defaultDurationMinutes = 25
 
   @ObservationIgnored private let preferencesStore: PreferencesStore
+  @ObservationIgnored private let cacheInvalidationBus: CacheInvalidationBus
 
   /// Task ID for which the focus-start prompt is showing.
   var promptTaskId: Int? = nil
@@ -33,10 +34,12 @@ import Observation
     }
   }
 
-  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
-
-  init(preferencesStore: PreferencesStore) {
+  init(
+    preferencesStore: PreferencesStore,
+    cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus()
+  ) {
     self.preferencesStore = preferencesStore
+    self.cacheInvalidationBus = cacheInvalidationBus
     let stored = preferencesStore.int(.focusDurationMinutes, default: Self.defaultDurationMinutes)
     self.durationMinutes = min(
       Self.maxDurationMinutes, max(Self.minDurationMinutes, stored)
@@ -46,12 +49,12 @@ import Observation
   func presentPrompt(forTaskId taskId: Int) {
     session = nil
     promptTaskId = taskId
-    onCacheRelevantChange?()
+    cacheInvalidationBus.invalidate()
   }
 
   func dismissPrompt() {
     promptTaskId = nil
-    onCacheRelevantChange?()
+    cacheInvalidationBus.invalidate()
   }
 
   func startSession(baselineElapsed: TimeInterval) {
@@ -62,13 +65,13 @@ import Observation
       baselineElapsed: baselineElapsed
     )
     promptTaskId = nil
-    onCacheRelevantChange?()
+    cacheInvalidationBus.invalidate()
   }
 
   func cancelSession() {
     session = nil
     promptTaskId = nil
-    onCacheRelevantChange?()
+    cacheInvalidationBus.invalidate()
   }
 
   func adjustDuration(by delta: Int) {

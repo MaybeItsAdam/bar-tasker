@@ -13,16 +13,15 @@ import Observation
   @ObservationIgnored let localTaskStore: LocalTaskStore
   @ObservationIgnored let checkvistSyncPlugin: any CheckvistSyncPlugin
   @ObservationIgnored let offlineSyncPlugin: OfflineTaskSyncPlugin
-  @ObservationIgnored let navigationCoordinator = TaskNavigationCoordinator()
   @ObservationIgnored let reorderQueue = ReorderQueue()
   @ObservationIgnored let priorityQueueStore: ListScopedPriorityStore
   @ObservationIgnored let absolutePriorityQueueStore: ListScopedTaskIDStore
   @ObservationIgnored let legacyPriorityQueueStore: ListScopedTaskIDStore
   @ObservationIgnored let eisenhowerStore: ListScopedEisenhowerStore
+  @ObservationIgnored let cacheInvalidationBus: CacheInvalidationBus
 
   // MARK: - Callbacks
 
-  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
   @ObservationIgnored var onUsernameChanged: (() -> Void)?
   @ObservationIgnored var onRemoteKeyChanged: ((String) -> Void)?
   @ObservationIgnored var onListIdChanged: ((String) -> Void)?
@@ -39,9 +38,11 @@ import Observation
   // MARK: - Task Data
 
   var tasks: [CheckvistTask] = [] {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
-  var availableLists: [CheckvistList] = []
+  var availableLists: [CheckvistList] = [] {
+    didSet { cacheInvalidationBus.invalidate() }
+  }
 
   // MARK: - Auth / Connection
 
@@ -70,6 +71,7 @@ import Observation
     didSet {
       guard checkvistIntegrationEnabled != oldValue else { return }
       preferencesStore.set(checkvistIntegrationEnabled, for: .checkvistIntegrationEnabled)
+      cacheInvalidationBus.invalidate()
       onCheckvistIntegrationEnabledChanged?()
     }
   }
@@ -79,17 +81,15 @@ import Observation
 
   var isLoading: Bool = false
   var errorMessage: String? = nil
-  var isNetworkReachable: Bool = true
-
-  // MARK: - Undo
-
-  var lastUndo: UndoableAction? = nil
+  var isNetworkReachable: Bool = true {
+    didSet { cacheInvalidationBus.invalidate() }
+  }
 
   // MARK: - Priority
 
   /// Per-parent priority queues. Key = parent task id (0 = root). No cap per scope.
   var priorityTaskIdsByParentId: [Int: [Int]] {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
 
   /// Convenience: flattened set of all prioritized task ids across every scope.
@@ -98,10 +98,10 @@ import Observation
   }
   /// Global absolute-priority queue across all tasks in the list.
   var absolutePriorityTaskIds: [Int] {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
   var taskEisenhowerLevels: [Int: EisenhowerLevel] = [:] {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
 
   var absolutePrioritizedTaskIds: Set<Int> {
@@ -149,11 +149,13 @@ import Observation
     checkvistSyncPlugin: any CheckvistSyncPlugin,
     localTaskStore: LocalTaskStore,
     initialRemoteKey: String,
+    cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus(),
     defaults: UserDefaults = .standard
   ) {
     self.preferencesStore = preferencesStore
     self.checkvistSyncPlugin = checkvistSyncPlugin
     self.localTaskStore = localTaskStore
+    self.cacheInvalidationBus = cacheInvalidationBus
     self.offlineSyncPlugin = OfflineTaskSyncPlugin(localStore: localTaskStore)
     self.priorityQueueStore = ListScopedPriorityStore(
       defaultsKey: Self.scopedPriorityQueuesDefaultsKey,

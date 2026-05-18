@@ -4,6 +4,10 @@ import SwiftUI
 extension NativeObsidianIntegrationPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "book.closed" }
 
+  func sidebarStatusLabel(manager: AppCoordinator) -> String {
+    manager.integrations.obsidianIntegrationEnabled ? "Enabled" : "Disabled"
+  }
+
   func makeSettingsView(manager: AppCoordinator) -> AnyView {
     AnyView(ObsidianIntegrationPluginSettingsView(manager: manager))
   }

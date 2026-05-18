@@ -127,9 +127,9 @@ struct CheckvistTask: Codable, Identifiable, Sendable, Equatable {
     content: String,
     status: Int,
     due: String?,
-    position: Int?,
-    parentId: Int?,
-    level: Int?,
+    position: Int? = nil,
+    parentId: Int? = nil,
+    level: Int? = nil,
     notes: [CheckvistNote]? = nil,
     updatedAt: String? = nil
   ) {
@@ -208,7 +208,7 @@ struct CheckvistTask: Codable, Identifiable, Sendable, Equatable {
     )
   }
 
-  private static let dueDateFormatters: [DateFormatter] = {
+  nonisolated(unsafe) private static let dueDateFormatters: [DateFormatter] = {
     let locale = Locale(identifier: "en_US_POSIX")
 
     let dateOnly = DateFormatter()
@@ -234,7 +234,7 @@ struct CheckvistTask: Codable, Identifiable, Sendable, Equatable {
     return [dateOnly, dateOnlyNoPadding, dateTime, slashDateOnly, slashDateTime]
   }()
 
-  private static let iso8601Parsers: [ISO8601DateFormatter] = {
+  nonisolated(unsafe) private static let iso8601Parsers: [ISO8601DateFormatter] = {
     let internet = ISO8601DateFormatter()
     internet.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate]
 

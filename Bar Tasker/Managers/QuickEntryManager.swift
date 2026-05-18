@@ -4,11 +4,11 @@ import Observation
 @MainActor
 @Observable class QuickEntryManager {
   var searchText: String = "" {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
   var quickEntryText: String = ""
   var quickEntryMode: QuickEntryMode = .search {
-    didSet { onCacheRelevantChange?() }
+    didSet { cacheInvalidationBus.invalidate() }
   }
   var isQuickEntryFocused: Bool = false
   var editCursorAtEnd: Bool = true  // true = append (a), false = insert (i)
@@ -17,9 +17,13 @@ import Observation
   var commandSuggestionIndex: Int = 0
   var keyBuffer: String = ""
 
-  @ObservationIgnored var onCacheRelevantChange: (() -> Void)?
+  @ObservationIgnored private let cacheInvalidationBus: CacheInvalidationBus
   @ObservationIgnored var integrationFlagsProvider: (() -> (obsidian: Bool, googleCalendar: Bool, mcp: Bool))?
   @ObservationIgnored var shortcutBindingProvider: ((ConfigurableShortcutAction) -> String)?
+
+  init(cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus()) {
+    self.cacheInvalidationBus = cacheInvalidationBus
+  }
 
   static let commandSuggestions: [CommandSuggestion] =
     CommandEngine.suggestions.map {

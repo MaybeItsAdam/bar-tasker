@@ -4,6 +4,10 @@ import SwiftUI
 extension NativeCheckvistSyncPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "checkmark.circle" }
 
+  func sidebarStatusLabel(manager: AppCoordinator) -> String {
+    manager.checkvistIntegrationEnabled ? "Enabled" : "Disabled"
+  }
+
   func makeSettingsView(manager: AppCoordinator) -> AnyView {
     AnyView(CheckvistSyncPluginSettingsView(manager: manager))
   }
@@ -260,7 +264,7 @@ private struct CheckvistSyncPluginSettingsView: View {
     Binding(
       get: { manager.listId },
       set: { newValue in
-        Task { await manager.switchCheckvistList(to: newValue) }
+        Task { await manager.syncService.switchCheckvistList(to: newValue) }
       }
     )
   }
@@ -310,7 +314,7 @@ private struct CheckvistSyncPluginSettingsView: View {
 
             Button("Upload Offline Tasks") {
               Task {
-                _ = await manager.uploadOfflineTasksToCheckvist(
+                _ = await manager.syncService.uploadOfflineTasksToCheckvist(
                   destinationListId: uploadDestinationListId
                 )
               }
@@ -330,7 +334,7 @@ private struct CheckvistSyncPluginSettingsView: View {
   private func loadLists(assignFirstIfMissing: Bool) async {
     isLoadingLists = true
     defer { isLoadingLists = false }
-    _ = await manager.loadCheckvistLists(assignFirstIfMissing: assignFirstIfMissing)
+    _ = await manager.syncService.loadCheckvistLists(assignFirstIfMissing: assignFirstIfMissing)
     seedUploadDestinationIfNeeded()
   }
 

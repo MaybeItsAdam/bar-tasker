@@ -1,110 +1,6 @@
 import Foundation
-import ServiceManagement
 
 extension AppCoordinator {
-  private var shouldSuppressLaunchAtLoginAvailabilityError: Bool {
-    #if DEBUG
-      let env = ProcessInfo.processInfo.environment
-      return env["XCODE_VERSION_ACTUAL"] != nil || env["__XCODE_BUILT_PRODUCTS_DIR_PATHS"] != nil
-    #else
-      return false
-    #endif
-  }
-
-  /// All persistence and cache-invalidation that was previously Combine-based is now
-  /// handled by `didSet` observers on each property. This method is retained only for
-  /// any remaining cross-cutting bindings that cannot be expressed as `didSet`.
-  func setupBindings() {
-    // All property persistence is now handled by didSet observers.
-    // Cache invalidation from own properties is handled by didSet.
-    // Cache invalidation from child managers is handled by setupChildCallbacks().
-  }
-
-  /// Wires up child manager callbacks for cache invalidation and coordinator-level side effects.
-  func setupChildCallbacks() {
-    // Repository callbacks
-    repository.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
-    repository.onUsernameChanged = { [weak self] in
-      guard let self else { return }
-      self.repository.checkvistSyncPlugin.clearAuthentication()
-      self.refreshOnboardingDialogState()
-    }
-    repository.onRemoteKeyChanged = { [weak self] newKey in
-      guard let self else { return }
-      self.repository.checkvistSyncPlugin.clearAuthentication()
-      self.repository.checkvistSyncPlugin.persistRemoteKey(
-        newKey, useKeychainStorage: self.usesKeychainStorage)
-      self.refreshOnboardingDialogState()
-    }
-    repository.onListIdChanged = { [weak self] listId in
-      guard let self else { return }
-      self.integrations.loadPendingObsidianSyncQueue(for: listId)
-      self.refreshOnboardingDialogState()
-    }
-    repository.onCheckvistIntegrationEnabledChanged = { [weak self] in
-      guard let self else { return }
-      self.invalidateCaches()
-      self.refreshOnboardingDialogState()
-    }
-
-    // Other manager callbacks
-    quickEntry.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
-    quickEntry.integrationFlagsProvider = { [weak self] in
-      guard let self else { return (false, false, false) }
-      return (
-        integrations.obsidianIntegrationEnabled,
-        integrations.googleCalendarIntegrationEnabled,
-        integrations.mcpIntegrationEnabled
-      )
-    }
-    quickEntry.shortcutBindingProvider = { [weak self] action in
-      self?.preferences.shortcutBinding(for: action) ?? action.defaultBinding
-    }
-    timer.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
-    kanban.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
-    focusSessionManager.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
-    startDates.onCacheRelevantChange = { [weak self] in self?.invalidateCaches() }
-    startDates.dateResolver = { [weak self] input in
-      self?.resolveDueDateWithConfig(input) ?? input
-    }
-    integrations.onError = { [weak self] err in self?.errorMessage = err }
-
-    preferences.onLaunchAtLoginChanged = { [weak self] newValue in
-      guard let self else { return }
-      if self.isApplyingLaunchAtLoginChange { return }
-      if #available(macOS 13.0, *) {
-        do {
-          if newValue {
-            try SMAppService.mainApp.register()
-          } else {
-            try SMAppService.mainApp.unregister()
-          }
-        } catch {
-          let nsError = error as NSError
-          if nsError.domain == SMAppServiceErrorDomain && nsError.code == 1 {
-            if !self.shouldSuppressLaunchAtLoginAvailabilityError {
-              self.repository.errorMessage =
-                "Launch at login is unavailable for this app build. Install in /Applications and try again."
-            }
-          } else {
-            self.repository.errorMessage = "Launch at login failed: \(error.localizedDescription)"
-          }
-          if newValue {
-            self.isApplyingLaunchAtLoginChange = true
-            self.preferences.launchAtLogin = false
-            self.isApplyingLaunchAtLoginChange = false
-          }
-        }
-      }
-    }
-
-    #if DEBUG
-      preferences.onIgnoreKeychainInDebugChanged = { [weak self] in
-        self?.handleCredentialStorageModeChanged()
-      }
-    #endif
-  }
-
   // MARK: - Priority Queue (forwarding to repository)
 
   func savePriorityQueue(_ queues: [Int: [Int]]) {
@@ -161,29 +57,9 @@ extension AppCoordinator {
     )
   }
 
-  // MARK: - Network
-
-  func setupNetworkMonitor() {
-    reachabilityMonitor.onStatusChange = { [weak self] reachable in
-      guard let self else { return }
-      Task { @MainActor in
-        self.repository.isNetworkReachable = reachable
-        guard reachable else { return }
-        await self.flushPendingTaskMutations()
-        guard self.integrations.obsidianIntegrationEnabled,
-          !self.integrations.pendingObsidianSyncTaskIds.isEmpty
-        else {
-          return
-        }
-        await self.integrations.processPendingObsidianSyncQueue()
-      }
-    }
-    reachabilityMonitor.start()
-  }
-
   // MARK: - Keychain
 
-  private func handleCredentialStorageModeChanged() {
+  func handleCredentialStorageModeChanged() {
     let current = repository.remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
     if usesKeychainStorage {
       if !current.isEmpty {
