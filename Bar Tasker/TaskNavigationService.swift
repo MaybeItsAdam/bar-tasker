@@ -10,19 +10,29 @@ import Foundation
 /// `TaskNavigationSelection` outcomes for movement intents, and this service
 /// applies those outcomes to the live `NavigationState` / managers.
 ///
-/// The service holds a `weak` reference to `AppCoordinator` because the
-/// view-switch logic reaches into `currentTask`, `visibleTasks`, and other
-/// derived properties that today still live on the coordinator. That coupling
-/// is expected to dissolve as later steps in Phase 3 push more state ownership
-/// down; the weak ref is the same composition pattern as `LifecycleController`
-/// and `UndoService`.
+/// Owns its raw navigation dependencies directly: cursor state
+/// (`NavigationState`) and the task list (`TaskRepository`). It still keeps a
+/// `weak` reference to `AppCoordinator` for the *derived* properties that today
+/// only the coordinator computes (`currentTask`, `visibleTasks`,
+/// `currentTaskChildren`, `rootLevelTagNames`, `shouldShowRootScopeSection`).
+/// As those derivations move down onto `TaskListViewModel`, the coordinator
+/// reference shrinks toward nothing. The weak ref is the same composition
+/// pattern as `LifecycleController` and `UndoService`.
 @MainActor
 final class TaskNavigationService {
   private weak var coordinator: AppCoordinator?
+  private let repository: TaskRepository
+  private let navigationState: NavigationState
   private let logic = TaskNavigationCoordinator()
 
-  init(coordinator: AppCoordinator) {
+  init(
+    coordinator: AppCoordinator,
+    repository: TaskRepository,
+    navigationState: NavigationState
+  ) {
     self.coordinator = coordinator
+    self.repository = repository
+    self.navigationState = navigationState
   }
 
   // MARK: - Movement
@@ -31,20 +41,20 @@ final class TaskNavigationService {
     guard let coordinator else { return }
     guard
       let nextIndex = logic.nextSiblingIndex(
-        currentSiblingIndex: coordinator.currentSiblingIndex,
+        currentSiblingIndex: navigationState.currentSiblingIndex,
         visibleCount: coordinator.visibleTasks.count)
     else { return }
-    coordinator.currentSiblingIndex = nextIndex
+    navigationState.currentSiblingIndex = nextIndex
   }
 
   func previousTask() {
     guard let coordinator else { return }
     guard
       let previousIndex = logic.previousSiblingIndex(
-        currentSiblingIndex: coordinator.currentSiblingIndex,
+        currentSiblingIndex: navigationState.currentSiblingIndex,
         visibleCount: coordinator.visibleTasks.count)
     else { return }
-    coordinator.currentSiblingIndex = previousIndex
+    navigationState.currentSiblingIndex = previousIndex
   }
 
   func enterChildren() {
@@ -54,41 +64,39 @@ final class TaskNavigationService {
         currentTask: coordinator.currentTask,
         childCount: coordinator.currentTaskChildren.count)
     else { return }
-    coordinator.rootScopeFocusLevel = selection.rootScopeFocusLevel
-    coordinator.currentParentId = selection.currentParentId
-    coordinator.currentSiblingIndex = selection.currentSiblingIndex
+    navigationState.rootScopeFocusLevel = selection.rootScopeFocusLevel
+    navigationState.currentParentId = selection.currentParentId
+    navigationState.currentSiblingIndex = selection.currentSiblingIndex
   }
 
   func exitToParent() {
-    guard let coordinator else { return }
     guard
       let selection = logic.exitToParent(
-        currentParentId: coordinator.currentParentId,
-        tasks: coordinator.tasks)
+        currentParentId: navigationState.currentParentId,
+        tasks: repository.tasks)
     else { return }
-    coordinator.rootScopeFocusLevel = selection.rootScopeFocusLevel
-    coordinator.currentParentId = selection.currentParentId
-    coordinator.currentSiblingIndex = selection.currentSiblingIndex
+    navigationState.rootScopeFocusLevel = selection.rootScopeFocusLevel
+    navigationState.currentParentId = selection.currentParentId
+    navigationState.currentSiblingIndex = selection.currentSiblingIndex
   }
 
   func navigate(to task: CheckvistTask) {
-    guard let coordinator else { return }
-    let selection = logic.navigate(to: task, tasks: coordinator.tasks)
-    coordinator.rootScopeFocusLevel = selection.rootScopeFocusLevel
-    coordinator.currentParentId = selection.currentParentId
-    coordinator.currentSiblingIndex = selection.currentSiblingIndex
+    let selection = logic.navigate(to: task, tasks: repository.tasks)
+    navigationState.rootScopeFocusLevel = selection.rootScopeFocusLevel
+    navigationState.currentParentId = selection.currentParentId
+    navigationState.currentSiblingIndex = selection.currentSiblingIndex
   }
 
   func clampSelectionToVisibleRange() {
     guard let coordinator else { return }
-    coordinator.focusSessionManager.clampForTasks(coordinator.tasks)
+    coordinator.focusSessionManager.clampForTasks(repository.tasks)
     if coordinator.rootTaskView == .kanban {
       coordinator.kanban.clampKanbanSelection()
       return
     }
     let maxIndex = max(coordinator.visibleTasks.count - 1, 0)
-    if coordinator.currentSiblingIndex > maxIndex {
-      coordinator.currentSiblingIndex = maxIndex
+    if navigationState.currentSiblingIndex > maxIndex {
+      navigationState.currentSiblingIndex = maxIndex
     }
   }
 
@@ -100,7 +108,7 @@ final class TaskNavigationService {
     // Capture tree position BEFORE changing rootTaskView — `currentTask`
     // dispatches on `rootTaskView` and would otherwise return the kanban
     // selection, not the task the user had highlighted in the source view.
-    let capturedParentId = coordinator.currentParentId
+    let capturedParentId = navigationState.currentParentId
     let capturedTask = coordinator.currentTask
     coordinator.rootTaskView = view
 
@@ -111,9 +119,9 @@ final class TaskNavigationService {
     if let task = capturedTask,
       let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id })
     {
-      coordinator.currentSiblingIndex = newIndex
+      navigationState.currentSiblingIndex = newIndex
     } else {
-      coordinator.currentSiblingIndex = 0
+      navigationState.currentSiblingIndex = 0
     }
     if view != .due {
       coordinator.selectedRootDueBucket = nil
@@ -132,9 +140,9 @@ final class TaskNavigationService {
       )
     }
     if !(view == .due || view == .tags || view == .kanban),
-      coordinator.rootScopeFocusLevel > 1
+      navigationState.rootScopeFocusLevel > 1
     {
-      coordinator.rootScopeFocusLevel = 1
+      navigationState.rootScopeFocusLevel = 1
     }
   }
 
@@ -159,23 +167,23 @@ final class TaskNavigationService {
         let currentIndex = options.firstIndex(where: { $0 == coordinator.selectedRootDueBucket })
       else {
         coordinator.selectedRootDueBucket = nil
-        coordinator.currentSiblingIndex = 0
+        navigationState.currentSiblingIndex = 0
         return
       }
       let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
       coordinator.selectedRootDueBucket = options[nextIndex]
-      coordinator.currentSiblingIndex = 0
+      navigationState.currentSiblingIndex = 0
     case .tags:
       let tags = coordinator.rootLevelTagNames(limit: 30)
       let options = [""] + tags
       guard let currentIndex = options.firstIndex(of: coordinator.selectedRootTag) else {
         coordinator.selectedRootTag = ""
-        coordinator.currentSiblingIndex = 0
+        navigationState.currentSiblingIndex = 0
         return
       }
       let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
       coordinator.selectedRootTag = options[nextIndex]
-      coordinator.currentSiblingIndex = 0
+      navigationState.currentSiblingIndex = 0
     }
   }
 
@@ -189,14 +197,14 @@ final class TaskNavigationService {
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
       guard options.indices.contains(index) else { return }
       coordinator.selectedRootDueBucket = options[index]
-      coordinator.currentSiblingIndex = 0
-      coordinator.rootScopeFocusLevel = 2
+      navigationState.currentSiblingIndex = 0
+      navigationState.rootScopeFocusLevel = 2
     case .tags:
       let options = [""] + coordinator.rootLevelTagNames(limit: 30)
       guard options.indices.contains(index) else { return }
       coordinator.selectedRootTag = options[index]
-      coordinator.currentSiblingIndex = 0
-      coordinator.rootScopeFocusLevel = 2
+      navigationState.currentSiblingIndex = 0
+      navigationState.rootScopeFocusLevel = 2
     }
   }
 
@@ -244,7 +252,7 @@ final class TaskNavigationService {
       if let firstTask = colTasks.first {
         kanban.kanbanFocusedColumnIndex = idx
         kanban.kanbanSelectedTaskId = firstTask.id
-        coordinator.currentSiblingIndex = 0
+        navigationState.currentSiblingIndex = 0
         break
       }
     }

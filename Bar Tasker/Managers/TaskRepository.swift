@@ -2,6 +2,28 @@ import Foundation
 import OSLog
 import Observation
 
+/// A task creation that was attempted while offline and is awaiting replay.
+struct PendingTaskCreate: Sendable, Codable {
+  let tempId: Int
+  let content: String
+  let parentId: Int?
+  let position: Int?
+}
+
+/// A close/reopen/invalidate action queued while offline.
+struct PendingTaskAction: Sendable, Codable {
+  let taskId: Int
+  let action: CheckvistTaskAction
+}
+
+/// The on-disk shape of a pending update (content/due) — mirrors the
+/// in-memory tuple in `TaskRepository.pendingTaskMutations` for Codable's
+/// sake (tuples aren't Codable).
+struct PendingTaskUpdate: Sendable, Codable {
+  let content: String?
+  let due: String?
+}
+
 @MainActor
 @Observable class TaskRepository {
   @ObservationIgnored private let logger = Logger(
@@ -11,6 +33,7 @@ import Observation
 
   @ObservationIgnored let preferencesStore: PreferencesStore
   @ObservationIgnored let localTaskStore: LocalTaskStore
+  @ObservationIgnored let pendingOfflineWorkStore: PendingOfflineWorkStore
   @ObservationIgnored let checkvistSyncPlugin: any CheckvistSyncPlugin
   @ObservationIgnored let offlineSyncPlugin: OfflineTaskSyncPlugin
   @ObservationIgnored let reorderQueue = ReorderQueue()
@@ -110,9 +133,98 @@ import Observation
 
   // MARK: - Offline State
 
+  /// Updates (content/due) that failed to reach Checkvist while offline.
+  /// Replayed by `SyncService.flushPendingTaskMutations` on reconnect.
   @ObservationIgnored var pendingTaskMutations: [Int: (content: String?, due: String?)] = [:]
+  /// Task creates that failed while offline. `tempId` is the optimistic
+  /// (negative) id currently sitting in `tasks`; on replay we map it to the
+  /// real server id so dependent actions/updates/deletes can be retargeted.
+  @ObservationIgnored var pendingTaskCreates: [PendingTaskCreate] = []
+  /// close/reopen/invalidate actions queued while offline. `taskId` may be
+  /// negative if it refers to a task in `pendingTaskCreates`.
+  @ObservationIgnored var pendingTaskActions: [PendingTaskAction] = []
+  /// Deletes queued while offline. May contain negative ids referring to
+  /// `pendingTaskCreates`; resolved at flush time.
+  @ObservationIgnored var pendingTaskDeletes: [Int] = []
   @ObservationIgnored var loadingOperationCount: Int = 0
   @ObservationIgnored var hasAttemptedRemoteKeyBootstrap: Bool = false
+
+  /// True when any offline-queued work is awaiting a reconnect flush.
+  var hasPendingOfflineWork: Bool {
+    !pendingTaskMutations.isEmpty
+      || !pendingTaskCreates.isEmpty
+      || !pendingTaskActions.isEmpty
+      || !pendingTaskDeletes.isEmpty
+  }
+
+  /// Wipes the in-memory queues *and* the on-disk payload. Use this when the
+  /// queued work is being abandoned (list switch) or has been successfully
+  /// drained — callers that want to re-stash on failure should re-enqueue
+  /// after calling this.
+  func clearPendingOfflineWork() {
+    pendingTaskMutations = [:]
+    pendingTaskCreates = []
+    pendingTaskActions = []
+    pendingTaskDeletes = []
+    pendingOfflineWorkStore.clear()
+  }
+
+  // MARK: - Pending-queue enqueue helpers (write-through to disk)
+
+  /// Append a create and persist. Call instead of mutating
+  /// `pendingTaskCreates` directly so the on-disk payload stays in sync.
+  func enqueuePendingCreate(_ create: PendingTaskCreate) {
+    pendingTaskCreates.append(create)
+    persistPendingOfflineWork()
+  }
+
+  /// Append an action (close/reopen/invalidate) and persist.
+  func enqueuePendingAction(_ action: PendingTaskAction) {
+    pendingTaskActions.append(action)
+    persistPendingOfflineWork()
+  }
+
+  /// Append a delete and persist. `taskId` may be a negative temp id when
+  /// the delete refers to a still-pending create.
+  func enqueuePendingDelete(_ taskId: Int) {
+    pendingTaskDeletes.append(taskId)
+    persistPendingOfflineWork()
+  }
+
+  /// Record (or overwrite) an update for `taskId` and persist.
+  func enqueuePendingMutation(taskId: Int, content: String?, due: String?) {
+    pendingTaskMutations[taskId] = (content: content, due: due)
+    persistPendingOfflineWork()
+  }
+
+  /// Drop any queued work that targets a still-pending temp create. Returns
+  /// `true` if the create was found and cancelled — callers (delete) can use
+  /// that to short-circuit the round-trip create+delete on the server.
+  @discardableResult
+  func cancelPendingCreate(tempId: Int) -> Bool {
+    guard let idx = pendingTaskCreates.firstIndex(where: { $0.tempId == tempId }) else {
+      return false
+    }
+    pendingTaskCreates.remove(at: idx)
+    pendingTaskActions.removeAll { $0.taskId == tempId }
+    pendingTaskMutations.removeValue(forKey: tempId)
+    pendingTaskDeletes.removeAll { $0 == tempId }
+    persistPendingOfflineWork()
+    return true
+  }
+
+  private func persistPendingOfflineWork() {
+    let codableMutations = pendingTaskMutations.mapValues {
+      PendingTaskUpdate(content: $0.content, due: $0.due)
+    }
+    pendingOfflineWorkStore.save(
+      PendingOfflineWorkPayload(
+        listId: listId,
+        creates: pendingTaskCreates,
+        actions: pendingTaskActions,
+        deletes: pendingTaskDeletes,
+        mutations: codableMutations))
+  }
 
   // MARK: - Computed Properties
 
@@ -148,6 +260,7 @@ import Observation
     preferencesStore: PreferencesStore,
     checkvistSyncPlugin: any CheckvistSyncPlugin,
     localTaskStore: LocalTaskStore,
+    pendingOfflineWorkStore: PendingOfflineWorkStore = PendingOfflineWorkStore(),
     initialRemoteKey: String,
     cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus(),
     defaults: UserDefaults = .standard
@@ -155,6 +268,7 @@ import Observation
     self.preferencesStore = preferencesStore
     self.checkvistSyncPlugin = checkvistSyncPlugin
     self.localTaskStore = localTaskStore
+    self.pendingOfflineWorkStore = pendingOfflineWorkStore
     self.cacheInvalidationBus = cacheInvalidationBus
     self.offlineSyncPlugin = OfflineTaskSyncPlugin(localStore: localTaskStore)
     self.priorityQueueStore = ListScopedPriorityStore(
@@ -200,6 +314,39 @@ import Observation
     )
     self.absolutePriorityTaskIds = absolutePriorityQueueStore.load(for: storedListId)
     self.taskEisenhowerLevels = eisenhowerStore.load(for: storedListId)
+
+    // Restore offline-queued work for the current list. A payload scoped to a
+    // different list is dropped — replaying its mutations against the active
+    // list would silently target the wrong tasks.
+    let pendingPayload = pendingOfflineWorkStore.load()
+    if !pendingPayload.isEmpty && pendingPayload.listId == storedListId {
+      self.pendingTaskCreates = pendingPayload.creates
+      self.pendingTaskActions = pendingPayload.actions
+      self.pendingTaskDeletes = pendingPayload.deletes
+      self.pendingTaskMutations = pendingPayload.mutations.mapValues {
+        (content: $0.content, due: $0.due)
+      }
+      // Re-insert the optimistic placeholders so the user sees their
+      // unsynced tasks immediately — `fetchTopTask` after a reconnect will
+      // replace them with the real server tasks once the queued creates
+      // replay.
+      for create in pendingPayload.creates where !self.tasks.contains(where: {
+        $0.id == create.tempId
+      }) {
+        self.tasks.append(
+          CheckvistTask(
+            id: create.tempId,
+            content: create.content,
+            status: 0,
+            due: nil,
+            position: create.position,
+            parentId: create.parentId,
+            level: nil
+          ))
+      }
+    } else if !pendingPayload.isEmpty {
+      pendingOfflineWorkStore.clear()
+    }
   }
   // swiftlint:enable function_body_length
 }

@@ -115,8 +115,8 @@ extension AppCoordinator {
           listId: repository.listId,
           availableListsCount: repository.availableLists.count,
           tasksCount: repository.tasks.count,
-          currentParentId: currentParentId,
-          currentSiblingIndex: currentSiblingIndex
+          currentParentId: navigationState.currentParentId,
+          currentSiblingIndex: navigationState.currentSiblingIndex
         ))
 
       onboardingCompleted = resetState.onboardingCompleted
@@ -124,8 +124,8 @@ extension AppCoordinator {
       repository.listId = resetState.listId
       repository.availableLists = []
       repository.tasks = []
-      currentParentId = resetState.currentParentId
-      currentSiblingIndex = resetState.currentSiblingIndex
+      navigationState.currentParentId = resetState.currentParentId
+      navigationState.currentSiblingIndex = resetState.currentSiblingIndex
 
       preferencesStore.remove(.checkvistUsername)
       preferencesStore.remove(.checkvistListId)

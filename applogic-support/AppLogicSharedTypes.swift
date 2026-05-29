@@ -37,7 +37,7 @@ struct CheckvistCredentials: Sendable {
   }
 }
 
-enum CheckvistTaskAction: String, Sendable {
+enum CheckvistTaskAction: String, Sendable, Codable {
   case close
   case reopen
   case invalidate

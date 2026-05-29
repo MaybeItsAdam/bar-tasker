@@ -23,9 +23,9 @@ extension PopoverView {
   @ViewBuilder
   func taskRow(task: CheckvistTask, index: Int, childCount: Int, elapsed: TimeInterval) -> some View
   {
-    let isSelected = index == manager.currentSiblingIndex
+    let isSelected = index == navigationState.currentSiblingIndex
     let showsInlineComposer = isSelected && isAddMode
-    let listFocusIsActive = manager.rootScopeFocusLevel == 0
+    let listFocusIsActive = navigationState.rootScopeFocusLevel == 0
     let showsSelectedStyling = isSelected && !showsInlineComposer && listFocusIsActive
     let showsInactiveSelection = isSelected && !showsInlineComposer && !listFocusIsActive
     let isCompleting = manager.quickEntry.completingTaskId == task.id
@@ -74,8 +74,8 @@ extension PopoverView {
             }
             if hasObsidianNoteLink {
               Button {
-                manager.rootScopeFocusLevel = 0
-                manager.currentSiblingIndex = index
+                navigationState.rootScopeFocusLevel = 0
+                navigationState.currentSiblingIndex = index
                 Task {
                   if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
                     await manager.integrations.syncTaskToObsidian(taskId: task.id, openMode: .newWindow)
@@ -97,8 +97,8 @@ extension PopoverView {
             }
             if hasGoogleCalendarLink {
               Button {
-                manager.rootScopeFocusLevel = 0
-                manager.currentSiblingIndex = index
+                navigationState.rootScopeFocusLevel = 0
+                navigationState.currentSiblingIndex = index
                 manager.integrations.openSavedGoogleCalendarEventLink(taskId: task.id)
               } label: {
                 Image(systemName: "calendar.badge.checkmark")
@@ -123,7 +123,7 @@ extension PopoverView {
 
       if childCount > 0 {
         Button {
-          manager.currentSiblingIndex = index
+          navigationState.currentSiblingIndex = index
           manager.taskNavigationService.enterChildren()
           if !manager.quickEntry.searchText.isEmpty {
             manager.quickEntry.searchText = ""
@@ -160,8 +160,8 @@ extension PopoverView {
     }
     .contentShape(Rectangle())
     .onTapGesture {
-      manager.rootScopeFocusLevel = 0
-      manager.currentSiblingIndex = index
+      navigationState.rootScopeFocusLevel = 0
+      navigationState.currentSiblingIndex = index
     }
   }
 

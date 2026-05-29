@@ -328,6 +328,7 @@ class MenuBarController: NSObject {
       rootView: PopoverView()
         .font(Typography.interfaceFont)
         .environment(manager)
+        .environment(manager.navigationState)
     )
     popoverWindow.contentViewController = hostingController
     popoverWindow.isMovableByWindowBackground = false
@@ -475,8 +476,8 @@ class MenuBarController: NSObject {
       _ = self.manager.preferences.maxTitleWidth
       _ = self.manager.integrations.pendingObsidianSyncTaskIds
       _ = self.manager.tasks
-      _ = self.manager.currentParentId
-      _ = self.manager.currentSiblingIndex
+      _ = self.manager.navigationState.currentParentId
+      _ = self.manager.navigationState.currentSiblingIndex
       _ = self.manager.isLoading
       _ = self.manager.errorMessage
     } onChange: {

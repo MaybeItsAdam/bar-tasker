@@ -28,6 +28,11 @@ import OSLog
   }
   @ObservationIgnored var timerTask: Task<Void, Never>? = nil
 
+  /// Called on the main actor after every per-second increment with
+  /// `(taskId, newElapsed)`. Used by `FocusSessionManager` to detect when
+  /// the focus block has ended.
+  @ObservationIgnored var onTick: ((Int, TimeInterval) -> Void)? = nil
+
   var timerIsEnabled: Bool { timerMode != .disabled }
   var timerIsVisible: Bool { timerMode == .visible }
 
@@ -72,7 +77,9 @@ import OSLog
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         guard !Task.isCancelled else { break }
         await MainActor.run {
-          self?.timerByTaskId[activeTaskId, default: 0] += 1
+          guard let self else { return }
+          self.timerByTaskId[activeTaskId, default: 0] += 1
+          self.onTick?(activeTaskId, self.timerByTaskId[activeTaskId, default: 0])
         }
       }
     }

@@ -52,11 +52,41 @@ struct KeyboardShortcutRouter {
       }
       return false
     }
-    if !isFocused, manager.focusSessionManager.session != nil {
-      if event.keyCode == 53 {  // Escape
+    if !isFocused, let phase = manager.focusSessionManager.phase {
+      if event.keyCode == 53 {  // Escape always ends the whole session.
         manager.focusSessionManager.cancelSession()
         manager.timer.pauseTimer()
         updateTitle()
+        return true
+      }
+      if event.keyCode == 36 {  // Enter advances the pomodoro flow.
+        switch phase {
+        case .running:
+          break
+        case .focusCompleted:
+          manager.focusSessionManager.startBreak()
+          return true
+        case .breakRunning:
+          manager.focusSessionManager.skipBreak()
+          return true
+        case .breakCompleted:
+          if let taskId = manager.focusSessionManager.lastFocusedTaskId {
+            let baseline = manager.timer.timerByTaskId[taskId, default: 0]
+            if !manager.timer.timerIsEnabled {
+              manager.timer.timerMode = .visible
+            }
+            if manager.timer.timedTaskId == taskId {
+              if !manager.timer.timerRunning {
+                manager.timer.resumeTimer()
+              }
+            } else {
+              manager.timer.toggleTimer(forTaskId: taskId)
+            }
+            manager.focusSessionManager.startAnotherSession(baselineElapsed: baseline)
+            updateTitle()
+          }
+          return true
+        }
       }
       return true
     }
@@ -101,10 +131,10 @@ struct KeyboardShortcutRouter {
     }
     let isRepeat = event.isARepeat
     let chars = event.charactersIgnoringModifiers ?? ""
-    if !manager.shouldShowRootScopeSection && manager.rootScopeFocusLevel != 0 {
-      manager.rootScopeFocusLevel = 0
+    if !manager.shouldShowRootScopeSection && manager.navigationState.rootScopeFocusLevel != 0 {
+      manager.navigationState.rootScopeFocusLevel = 0
     }
-    let rootScopeFocused = manager.shouldShowRootScopeSection && manager.rootScopeFocusLevel > 0
+    let rootScopeFocused = manager.shouldShowRootScopeSection && manager.navigationState.rootScopeFocusLevel > 0
     // Allow UP arrow to enter the scope row when at the top of the current view.
     // In kanban mode, visibleTasks is intentionally empty (kanban uses per-column task lists),
     // so we check the focused column's first task instead.
@@ -116,8 +146,8 @@ struct KeyboardShortcutRouter {
     } else {
       canFocusRootScopeFromListTop =
         manager.shouldShowRootScopeSection
-        && manager.currentSiblingIndex == 0
-        && (!manager.visibleTasks.isEmpty || manager.currentParentId == 0)
+        && manager.navigationState.currentSiblingIndex == 0
+        && (!manager.visibleTasks.isEmpty || manager.navigationState.currentParentId == 0)
     }
 
     #if DEBUG
@@ -224,10 +254,10 @@ struct KeyboardShortcutRouter {
         if !isRepeat, let task = manager.kanban.currentKanbanTask {
           let childCounts = manager.childCountByTaskId()
           manager.rootTaskView = .all
-          manager.rootScopeFocusLevel = 0
+          manager.navigationState.rootScopeFocusLevel = 0
           if childCounts[task.id, default: 0] > 0 {
-            manager.currentParentId = task.id
-            manager.currentSiblingIndex = 0
+            manager.navigationState.currentParentId = task.id
+            manager.navigationState.currentSiblingIndex = 0
           } else {
             manager.taskNavigationService.navigate(to: task)
           }
@@ -313,10 +343,10 @@ struct KeyboardShortcutRouter {
     // Up/Down arrows - list navigation + root scope navigation.
     if !isFocused && matches(.nextTask) {
       if rootScopeFocused {
-        if manager.rootScopeFocusLevel == 1 && manager.rootScopeShowsFilterControls {
-          manager.rootScopeFocusLevel = 2
+        if manager.navigationState.rootScopeFocusLevel == 1 && manager.rootScopeShowsFilterControls {
+          manager.navigationState.rootScopeFocusLevel = 2
         } else {
-          manager.rootScopeFocusLevel = 0
+          manager.navigationState.rootScopeFocusLevel = 0
         }
         return true
       }
@@ -330,13 +360,13 @@ struct KeyboardShortcutRouter {
     }
     if !isFocused && matches(.previousTask) {
       if rootScopeFocused {
-        if manager.rootScopeFocusLevel == 2 {
-          manager.rootScopeFocusLevel = 1
+        if manager.navigationState.rootScopeFocusLevel == 2 {
+          manager.navigationState.rootScopeFocusLevel = 1
         }
         return true
       }
       if canFocusRootScopeFromListTop {
-        manager.rootScopeFocusLevel = manager.rootScopeShowsFilterControls ? 2 : 1
+        manager.navigationState.rootScopeFocusLevel = manager.rootScopeShowsFilterControls ? 2 : 1
         return true
       }
       if manager.rootTaskView == .kanban {
@@ -350,23 +380,23 @@ struct KeyboardShortcutRouter {
 
     if rootScopeFocused && !isFocused && !ctrl && !cmd && !option {
       if matches(.enterChildren) {
-        if manager.rootScopeFocusLevel == 1 {
+        if manager.navigationState.rootScopeFocusLevel == 1 {
           manager.taskNavigationService.cycleRootTaskView(direction: 1)
-        } else if manager.rootScopeFocusLevel == 2 {
+        } else if manager.navigationState.rootScopeFocusLevel == 2 {
           manager.taskNavigationService.cycleRootScopeFilter(direction: 1)
         }
         return true
       }
       if matches(.exitToParent) {
-        if manager.rootScopeFocusLevel == 1 {
+        if manager.navigationState.rootScopeFocusLevel == 1 {
           manager.taskNavigationService.cycleRootTaskView(direction: -1)
-        } else if manager.rootScopeFocusLevel == 2 {
+        } else if manager.navigationState.rootScopeFocusLevel == 2 {
           manager.taskNavigationService.cycleRootScopeFilter(direction: -1)
         }
         return true
       }
       if event.keyCode == 36 || event.keyCode == 53 {
-        manager.rootScopeFocusLevel = 0
+        manager.navigationState.rootScopeFocusLevel = 0
         return true
       }
     }
@@ -388,7 +418,7 @@ struct KeyboardShortcutRouter {
     // Shift+→ - focus/hoist (Checkvist), plain → - enter children.
     if matches(.enterChildren) {
       if isFocused { return false }
-      manager.rootScopeFocusLevel = 0
+      manager.navigationState.rootScopeFocusLevel = 0
       manager.taskNavigationService.enterChildren()
       if !manager.quickEntry.searchText.isEmpty {
         manager.quickEntry.searchText = ""
@@ -400,7 +430,7 @@ struct KeyboardShortcutRouter {
     // Shift+← - un-focus (Checkvist), plain ← - exit to parent.
     if matches(.exitToParent) {
       if isFocused { return false }
-      manager.rootScopeFocusLevel = 0
+      manager.navigationState.rootScopeFocusLevel = 0
       if !manager.quickEntry.searchText.isEmpty {
         manager.quickEntry.searchText = ""
         manager.quickEntry.quickEntryMode = .search
@@ -434,7 +464,7 @@ struct KeyboardShortcutRouter {
 
     if matches(.addSibling) {
       if rootScopeFocused {
-        manager.rootScopeFocusLevel = 0
+        manager.navigationState.rootScopeFocusLevel = 0
         return true
       }
       if isFocused { return false }
@@ -455,7 +485,7 @@ struct KeyboardShortcutRouter {
     }
     if matches(.addChild) {
       if rootScopeFocused {
-        manager.rootScopeFocusLevel = 0
+        manager.navigationState.rootScopeFocusLevel = 0
         return true
       }
       if isFocused { return false }
@@ -484,7 +514,7 @@ struct KeyboardShortcutRouter {
         return true
       }
       if rootScopeFocused {
-        manager.rootScopeFocusLevel = 0
+        manager.navigationState.rootScopeFocusLevel = 0
         return true
       }
       if manager.quickEntry.quickEntryMode == .search {

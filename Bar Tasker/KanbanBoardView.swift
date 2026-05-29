@@ -95,6 +95,7 @@ struct KanbanBoardView: View {
 
 private struct KanbanColumnView: View {
   @Environment(AppCoordinator.self) var manager
+  @Environment(NavigationState.self) var navigationState
   @FocusState private var addFieldFocused: Bool
   let column: KanbanColumn
   let tasks: [CheckvistTask]
@@ -164,8 +165,8 @@ private struct KanbanColumnView: View {
                 .onTapGesture {
                   manager.kanban.kanbanFocusedColumnIndex = columnIndex
                   manager.kanban.kanbanSelectedTaskId = task.id
-                  manager.currentSiblingIndex = taskIndex
-                  manager.rootScopeFocusLevel = 0
+                  navigationState.currentSiblingIndex = taskIndex
+                  navigationState.rootScopeFocusLevel = 0
                 }
                 .draggable(String(task.id))
               }
@@ -230,6 +231,7 @@ private struct KanbanColumnView: View {
 
 private struct KanbanTaskCard: View {
   @Environment(AppCoordinator.self) var manager
+  @Environment(NavigationState.self) var navigationState
   let task: CheckvistTask
   let isSelected: Bool
   let childCount: Int
@@ -244,10 +246,10 @@ private struct KanbanTaskCard: View {
 
   private func showInAllView() {
     manager.rootTaskView = .all
-    manager.rootScopeFocusLevel = 0
+    navigationState.rootScopeFocusLevel = 0
     if childCount > 0 {
-      manager.currentParentId = task.id
-      manager.currentSiblingIndex = 0
+      navigationState.currentParentId = task.id
+      navigationState.currentSiblingIndex = 0
     } else {
       manager.taskNavigationService.navigate(to: task)
     }

@@ -52,6 +52,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       self?.menuQuit()
     }
 
+    checkvistManager.focusSessionManager.onAlert = { [weak self] in
+      guard let self else { return }
+      self.menuBarController.showPopoverWindow()
+      if let sound = NSSound(named: NSSound.Name("Glass")) {
+        sound.play()
+      } else {
+        NSSound.beep()
+      }
+    }
+
     shortcutManager = GlobalShortcutManager(manager: checkvistManager)
     shortcutManager.onTogglePopover = { [weak self] in
       self?.menuBarController.togglePopover()

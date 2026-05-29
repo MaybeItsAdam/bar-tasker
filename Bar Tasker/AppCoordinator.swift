@@ -20,18 +20,6 @@ import SwiftUI
     get { repository.tasks }
     set { repository.tasks = newValue }
   }
-  var currentParentId: Int {
-    get { navigationState.currentParentId }
-    set { navigationState.currentParentId = newValue }
-  }
-  var currentSiblingIndex: Int {
-    get { navigationState.currentSiblingIndex }
-    set { navigationState.currentSiblingIndex = newValue }
-  }
-  var rootScopeFocusLevel: Int {
-    get { navigationState.rootScopeFocusLevel }
-    set { navigationState.rootScopeFocusLevel = newValue }
-  }
   var listId: String {
     get { repository.listId }
     set { repository.listId = newValue }
@@ -61,24 +49,15 @@ import SwiftUI
   }
   var rootTaskView: RootTaskView {
     get { taskListViewModel.rootTaskView }
-    set {
-      taskListViewModel.rootTaskView = newValue
-      preferencesStore.set(newValue.rawValue, for: .rootTaskView)
-    }
+    set { taskListViewModel.rootTaskView = newValue }
   }
   var selectedRootDueBucketRawValue: Int {
     get { taskListViewModel.selectedRootDueBucketRawValue }
-    set {
-      taskListViewModel.selectedRootDueBucketRawValue = newValue
-      preferencesStore.set(newValue, for: .selectedRootDueBucketRawValue)
-    }
+    set { taskListViewModel.selectedRootDueBucketRawValue = newValue }
   }
   var selectedRootTag: String {
     get { taskListViewModel.selectedRootTag }
-    set {
-      taskListViewModel.selectedRootTag = newValue
-      preferencesStore.set(newValue, for: .selectedRootTag)
-    }
+    set { taskListViewModel.selectedRootTag = newValue }
   }
   var orderedRootTaskViews: [RootTaskView] {
     if let data = UserDefaults.standard.data(forKey: "rootTaskViewOrder"),
@@ -150,6 +129,10 @@ import SwiftUI
   @ObservationIgnored private(set) var taskNavigationService: TaskNavigationService!
   @ObservationIgnored private(set) var taskMutationService: TaskMutationService!
   @ObservationIgnored private(set) var syncService: SyncService!
+  /// Strong-held because `KanbanManager.dataSource` is `weak`. Bridges the
+  /// kanban data-source protocol to repository/navigationState/taskListViewModel
+  /// so AppCoordinator no longer has to conform to `KanbanTaskDataSource`.
+  @ObservationIgnored private var kanbanDataSourceAdapter: KanbanTaskDataSourceAdapter!
   /// Owned here (rather than on `LifecycleController`) so `deinit`, which is
   /// nonisolated, can call `stop()` without hopping back onto the main actor.
   @ObservationIgnored let reachabilityMonitor = NetworkReachabilityMonitor()
@@ -287,15 +270,15 @@ import SwiftUI
       repository: repository,
       navigationState: navigationState,
       timer: timer,
-      quickEntry: quickEntry
+      quickEntry: quickEntry,
+      preferencesStore: preferencesStore
     )
 
-    self.rootTaskView =
-      RootTaskView(rawValue: preferencesStore.int(.rootTaskView, default: 1)) ?? .due
-    self.selectedRootDueBucketRawValue = preferencesStore.int(
-      .selectedRootDueBucketRawValue, default: -1)
-    self.selectedRootTag = preferencesStore.string(.selectedRootTag)
-    self.taskNavigationService = TaskNavigationService(coordinator: self)
+    self.taskNavigationService = TaskNavigationService(
+      coordinator: self,
+      repository: repository,
+      navigationState: navigationState
+    )
     self.taskMutationService = TaskMutationService(coordinator: self)
     self.undoService = UndoService(performer: self.taskMutationService)
     self.syncService = SyncService(coordinator: self)
@@ -304,7 +287,19 @@ import SwiftUI
       reachabilityMonitor: reachabilityMonitor
     )
     self.lifecycle.start()
-    kanban.dataSource = self
+    timer.onTick = { [weak self] taskId, elapsed in
+      self?.focusSessionManager.handleTaskElapsed(elapsed, forTaskId: taskId)
+    }
+    focusSessionManager.onFocusBlockEnded = { [weak timer] in
+      timer?.pauseTimer()
+    }
+    let kanbanDataSourceAdapter = KanbanTaskDataSourceAdapter(
+      repository: repository,
+      navigationState: navigationState,
+      taskListViewModel: taskListViewModel
+    )
+    self.kanbanDataSourceAdapter = kanbanDataSourceAdapter
+    kanban.dataSource = kanbanDataSourceAdapter
     integrations.dataSource = self
     integrations.onIntegrationStateChanged = { [weak self] in
       self?.refreshOnboardingDialogState()
@@ -323,8 +318,6 @@ import SwiftUI
   }
   // swiftlint:enable function_body_length
 }
-
-extension AppCoordinator: KanbanTaskDataSource {}
 
 extension AppCoordinator: IntegrationDataSource {}
 

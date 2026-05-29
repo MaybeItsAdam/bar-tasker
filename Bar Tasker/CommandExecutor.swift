@@ -63,8 +63,8 @@ final class CommandExecutor {
         return
       }
       manager.listId = "\(found.id)"
-      manager.currentParentId = 0
-      manager.currentSiblingIndex = 0
+      manager.navigationState.currentParentId = 0
+      manager.navigationState.currentSiblingIndex = 0
       manager.quickEntry.searchText = ""
       manager.quickEntry.quickEntryText = ""
       await manager.syncService.fetchTopTask()
@@ -138,10 +138,10 @@ final class CommandExecutor {
       }
       let childCounts = manager.childCountByTaskId()
       manager.rootTaskView = .all
-      manager.rootScopeFocusLevel = 0
+      manager.navigationState.rootScopeFocusLevel = 0
       if childCounts[task.id, default: 0] > 0 {
-        manager.currentParentId = task.id
-        manager.currentSiblingIndex = 0
+        manager.navigationState.currentParentId = task.id
+        manager.navigationState.currentSiblingIndex = 0
       } else {
         manager.taskNavigationService.navigate(to: task)
       }

@@ -45,6 +45,7 @@ final class PreferencesStore {
     case recurrenceRulesByTaskId
     case rootTaskViewOrder
     case focusDurationMinutes
+    case focusBreakDurationMinutes
     case kanbanManualOrderByColumnId
   }
 

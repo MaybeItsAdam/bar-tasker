@@ -8,22 +8,38 @@ import Observation
   @ObservationIgnored private let navigationState: NavigationState
   @ObservationIgnored private let timer: TimerManager
   @ObservationIgnored private let quickEntry: QuickEntryManager
+  @ObservationIgnored private let preferencesStore: PreferencesStore
 
   // MARK: - State
   var hideFuture: Bool = false {
     didSet { invalidateCaches() }
   }
 
+  // The three view-shaping selections below own their own persistence: each
+  // `didSet` writes through to `PreferencesStore`. (Previously the persistence
+  // lived on `AppCoordinator`'s forwarder setters; moving it here lets those
+  // forwarders be pure pass-throughs and eventually deleted.) Assignments made
+  // in `init` deliberately don't fire these observers, so loading the persisted
+  // value on launch doesn't write it straight back.
   var rootTaskView: RootTaskView = .all {
-    didSet { invalidateCaches() }
+    didSet {
+      preferencesStore.set(rootTaskView.rawValue, for: .rootTaskView)
+      invalidateCaches()
+    }
   }
 
   var selectedRootDueBucketRawValue: Int = -1 {
-    didSet { invalidateCaches() }
+    didSet {
+      preferencesStore.set(selectedRootDueBucketRawValue, for: .selectedRootDueBucketRawValue)
+      invalidateCaches()
+    }
   }
 
   var selectedRootTag: String = "" {
-    didSet { invalidateCaches() }
+    didSet {
+      preferencesStore.set(selectedRootTag, for: .selectedRootTag)
+      invalidateCaches()
+    }
   }
 
   /// When true, non-kanban menus (Due, Tags, Priority, Eisenhower) show the entire
@@ -40,12 +56,22 @@ import Observation
     repository: TaskRepository,
     navigationState: NavigationState,
     timer: TimerManager,
-    quickEntry: QuickEntryManager
+    quickEntry: QuickEntryManager,
+    preferencesStore: PreferencesStore
   ) {
     self.repository = repository
     self.navigationState = navigationState
     self.timer = timer
     self.quickEntry = quickEntry
+    self.preferencesStore = preferencesStore
+
+    // Load persisted view-shaping state. These assignments run inside `init`,
+    // so the `didSet` write-throughs above don't fire.
+    self.rootTaskView =
+      RootTaskView(rawValue: preferencesStore.int(.rootTaskView, default: 1)) ?? .due
+    self.selectedRootDueBucketRawValue = preferencesStore.int(
+      .selectedRootDueBucketRawValue, default: -1)
+    self.selectedRootTag = preferencesStore.string(.selectedRootTag)
   }
 
   func invalidateCaches() {

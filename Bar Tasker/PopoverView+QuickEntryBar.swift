@@ -26,7 +26,7 @@ extension PopoverView {
         )
         .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20, alignment: .leading)
         .onChange(of: manager.quickEntry.searchText) { _, _ in
-          if manager.quickEntry.quickEntryMode == .search { manager.currentSiblingIndex = 0 }
+          if manager.quickEntry.quickEntryMode == .search { navigationState.currentSiblingIndex = 0 }
         }
         .onChange(of: manager.quickEntry.quickEntryText) { _, _ in
           if manager.quickEntry.quickEntryMode == .command { manager.quickEntry.commandSuggestionIndex = 0 }

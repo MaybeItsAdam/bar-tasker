@@ -29,6 +29,26 @@ final class TaskMutationService {
     self.coordinator = coordinator
   }
 
+  // MARK: - Failure Handling
+
+  /// The single decision shared by every optimistic mutation when its server
+  /// call throws: if the network is unreachable, keep the optimistic state and
+  /// queue the work for replay (`whenOffline`); otherwise treat it as a genuine
+  /// failure (`whenOnline`) — typically roll back the optimistic change and set
+  /// an error message. Each caller supplies its own offline/online specifics;
+  /// this only owns the reachability branch so it isn't re-derived per site.
+  private func resolveMutationFailure(
+    whenOffline: () -> Void,
+    whenOnline: () -> Void
+  ) {
+    guard let coordinator else { return }
+    if coordinator.repository.isNetworkReachable {
+      whenOnline()
+    } else {
+      whenOffline()
+    }
+  }
+
   // MARK: - Mark Done / Reopen / Invalidate
 
   func markCurrentTaskDone() async {
@@ -105,16 +125,42 @@ final class TaskMutationService {
         }
         coordinator.errorMessage = "Failed to \(endpoint) task."
       }
-    } catch CheckvistSessionError.authenticationUnavailable {
-      if let optimisticSnapshot {
-        restoreTasksSnapshot(optimisticSnapshot)
-      }
     } catch {
-      if let optimisticSnapshot {
-        restoreTasksSnapshot(optimisticSnapshot)
-      }
-      coordinator.errorMessage = "Error: \(error.localizedDescription)"
+      resolveMutationFailure(
+        whenOffline: {
+          self.queueOfflineTaskAction(
+            taskId: task.id, action: action, ancestorIds: ancestorTaskIDsToKeepOpen)
+        },
+        whenOnline: {
+          if let optimisticSnapshot {
+            self.restoreTasksSnapshot(optimisticSnapshot)
+          }
+          // The auth-unavailable case here rolls back silently (no message);
+          // any other error surfaces a generic message.
+          if case CheckvistSessionError.authenticationUnavailable = error {
+            return
+          }
+          coordinator.errorMessage = "Error: \(error.localizedDescription)"
+        }
+      )
     }
+  }
+
+  /// Keep the optimistic close/reopen/invalidate in the UI and stash it for
+  /// replay on reconnect. Ancestor reopens (used to defeat Checkvist's auto-
+  /// complete-parent cascade) are queued too so the same reconciliation runs
+  /// once we're back online.
+  private func queueOfflineTaskAction(
+    taskId: Int, action: CheckvistTaskAction, ancestorIds: [Int]
+  ) {
+    guard let coordinator else { return }
+    coordinator.repository.enqueuePendingAction(
+      PendingTaskAction(taskId: taskId, action: action))
+    for ancestorId in ancestorIds {
+      coordinator.repository.enqueuePendingAction(
+        PendingTaskAction(taskId: ancestorId, action: .reopen))
+    }
+    coordinator.errorMessage = "Offline — will sync when connected."
   }
 
   // MARK: - Update
@@ -161,22 +207,22 @@ final class TaskMutationService {
         coordinator.tasks[index] = originalTask
         coordinator.errorMessage = "Failed to update task."
       }
-    } catch CheckvistSessionError.authenticationUnavailable {
-      if !coordinator.repository.isNetworkReachable {
-        coordinator.repository.pendingTaskMutations[task.id] = (content: content, due: due)
-        coordinator.errorMessage = "Offline — will sync when connected."
-      } else {
-        coordinator.tasks[index] = originalTask
-        coordinator.setAuthenticationRequiredErrorIfNeeded()
-      }
     } catch {
-      if !coordinator.repository.isNetworkReachable {
-        coordinator.repository.pendingTaskMutations[task.id] = (content: content, due: due)
-        coordinator.errorMessage = "Offline — will sync when connected."
-      } else {
-        coordinator.tasks[index] = originalTask
-        coordinator.errorMessage = "Error: \(error.localizedDescription)"
-      }
+      resolveMutationFailure(
+        whenOffline: {
+          coordinator.repository.enqueuePendingMutation(
+            taskId: task.id, content: content, due: due)
+          coordinator.errorMessage = "Offline — will sync when connected."
+        },
+        whenOnline: {
+          coordinator.tasks[index] = originalTask
+          if case CheckvistSessionError.authenticationUnavailable = error {
+            coordinator.setAuthenticationRequiredErrorIfNeeded()
+          } else {
+            coordinator.errorMessage = "Error: \(error.localizedDescription)"
+          }
+        }
+      )
     }
   }
 
@@ -222,7 +268,7 @@ final class TaskMutationService {
         apiPosition = targetPos + 1
       } else {
         let siblings =
-          coordinator.tasks.filter { ($0.parentId ?? 0) == coordinator.currentParentId }
+          coordinator.tasks.filter { ($0.parentId ?? 0) == coordinator.navigationState.currentParentId }
         if let idx = siblings.firstIndex(where: { $0.id == current.id }) {
           apiPosition = idx + 2
         }
@@ -231,7 +277,7 @@ final class TaskMutationService {
       apiPosition = 1
     }
 
-    let parentIdForCreate = coordinator.currentParentId == 0 ? nil : coordinator.currentParentId
+    let parentIdForCreate = coordinator.navigationState.currentParentId == 0 ? nil : coordinator.navigationState.currentParentId
     let positionForCreate: Int? = apiPosition > 0 ? apiPosition : nil
 
     do {
@@ -249,13 +295,39 @@ final class TaskMutationService {
         removeOptimisticTask(id: optimisticTaskId)
         coordinator.errorMessage = "Failed to add task."
       }
-    } catch CheckvistSessionError.authenticationUnavailable {
-      removeOptimisticTask(id: optimisticTaskId)
-      coordinator.setAuthenticationRequiredErrorIfNeeded()
     } catch {
-      removeOptimisticTask(id: optimisticTaskId)
-      coordinator.errorMessage = "Error adding task: \(error.localizedDescription)"
+      resolveMutationFailure(
+        whenOffline: {
+          self.queueOfflineCreate(
+            tempId: optimisticTaskId,
+            content: trimmedContent,
+            parentId: parentIdForCreate,
+            position: positionForCreate)
+        },
+        whenOnline: {
+          self.removeOptimisticTask(id: optimisticTaskId)
+          if case CheckvistSessionError.authenticationUnavailable = error {
+            coordinator.setAuthenticationRequiredErrorIfNeeded()
+          } else {
+            coordinator.errorMessage = "Error adding task: \(error.localizedDescription)"
+          }
+        }
+      )
     }
+  }
+
+  /// Keeps the optimistic task in `tasks` and queues a create to fire on
+  /// reconnect. Undo points at the temp id so a subsequent undo can either
+  /// cancel the queued create or, after replay, delete the real task.
+  private func queueOfflineCreate(
+    tempId: Int, content: String, parentId: Int?, position: Int?
+  ) {
+    guard let coordinator else { return }
+    coordinator.repository.enqueuePendingCreate(
+      PendingTaskCreate(
+        tempId: tempId, content: content, parentId: parentId, position: position))
+    coordinator.undoService.lastAction = .add(taskId: tempId)
+    coordinator.errorMessage = "Offline — will sync when connected."
   }
 
   func addTaskAsChild(content: String, parentId: Int) async {
@@ -294,12 +366,21 @@ final class TaskMutationService {
         removeOptimisticTask(id: optimisticTaskId)
         coordinator.errorMessage = "Failed to add task."
       }
-    } catch CheckvistSessionError.authenticationUnavailable {
-      removeOptimisticTask(id: optimisticTaskId)
-      coordinator.setAuthenticationRequiredErrorIfNeeded()
     } catch {
-      removeOptimisticTask(id: optimisticTaskId)
-      coordinator.errorMessage = "Error: \(error.localizedDescription)"
+      resolveMutationFailure(
+        whenOffline: {
+          self.queueOfflineCreate(
+            tempId: optimisticTaskId, content: trimmedContent, parentId: parentId, position: 1)
+        },
+        whenOnline: {
+          self.removeOptimisticTask(id: optimisticTaskId)
+          if case CheckvistSessionError.authenticationUnavailable = error {
+            coordinator.setAuthenticationRequiredErrorIfNeeded()
+          } else {
+            coordinator.errorMessage = "Error: \(error.localizedDescription)"
+          }
+        }
+      )
     }
   }
 
@@ -313,6 +394,15 @@ final class TaskMutationService {
       // tasks yet.
       coordinator.undoService.lastAction = nil
     }
+
+    // If the task is still a queued offline create, cancel that create
+    // instead of round-tripping a create+delete through the server.
+    if coordinator.repository.cancelPendingCreate(tempId: task.id) {
+      _ = applyOptimisticCompletion(for: task.id)
+      coordinator.reconcilePendingObsidianSyncQueueWithOpenTasks()
+      return
+    }
+
     guard let optimisticSnapshot = applyOptimisticCompletion(for: task.id) else {
       coordinator.errorMessage = "Task not found."
       return
@@ -338,17 +428,23 @@ final class TaskMutationService {
             coordinator?.errorMessage = "Failed to delete task."
           }
         }
-      } catch CheckvistSessionError.authenticationUnavailable {
-        await MainActor.run {
-          guard let self else { return }
-          self.restoreTasksSnapshot(optimisticSnapshot)
-          coordinator?.setAuthenticationRequiredErrorIfNeeded()
-        }
       } catch {
         await MainActor.run {
-          guard let self else { return }
-          self.restoreTasksSnapshot(optimisticSnapshot)
-          coordinator?.errorMessage = "Error: \(error.localizedDescription)"
+          guard let self, let coordinator else { return }
+          self.resolveMutationFailure(
+            whenOffline: {
+              coordinator.repository.enqueuePendingDelete(taskId)
+              coordinator.errorMessage = "Offline — will sync when connected."
+            },
+            whenOnline: {
+              self.restoreTasksSnapshot(optimisticSnapshot)
+              if case CheckvistSessionError.authenticationUnavailable = error {
+                coordinator.setAuthenticationRequiredErrorIfNeeded()
+              } else {
+                coordinator.errorMessage = "Error: \(error.localizedDescription)"
+              }
+            }
+          )
         }
       }
     }
@@ -432,11 +528,42 @@ final class TaskMutationService {
       coordinator.quickEntry.quickEntryMode = .search
       coordinator.quickEntry.quickEntryText = ""
       coordinator.quickEntry.isQuickEntryFocused = false
-    } catch CheckvistSessionError.authenticationUnavailable {
-      coordinator.setAuthenticationRequiredErrorIfNeeded()
     } catch {
-      coordinator.errorMessage = "Quick add failed: \(error.localizedDescription)"
+      resolveMutationFailure(
+        whenOffline: {
+          self.finishQuickAddOffline(content: normalizedContent, parentId: parentTaskId)
+        },
+        whenOnline: {
+          if case CheckvistSessionError.authenticationUnavailable = error {
+            coordinator.setAuthenticationRequiredErrorIfNeeded()
+          } else {
+            coordinator.errorMessage = "Quick add failed: \(error.localizedDescription)"
+          }
+        }
+      )
     }
+  }
+
+  /// Quick add doesn't insert an optimistic task on the success path (it
+  /// relies on the subsequent fetch to surface the new task). When offline
+  /// there's no fetch to do, so insert one ourselves and queue the create.
+  private func finishQuickAddOffline(content: String, parentId: Int?) {
+    guard let coordinator else { return }
+    let optimisticTask = CheckvistTask(
+      id: nextOptimisticTaskId(),
+      content: content,
+      status: 0,
+      due: nil,
+      position: nil,
+      parentId: parentId,
+      level: nil
+    )
+    coordinator.tasks.append(optimisticTask)
+    queueOfflineCreate(
+      tempId: optimisticTask.id, content: content, parentId: parentId, position: 1)
+    coordinator.quickEntry.quickEntryMode = .search
+    coordinator.quickEntry.quickEntryText = ""
+    coordinator.quickEntry.isQuickEntryFocused = false
   }
 
   // MARK: - Recurrence (cross-cutting: recurrence + task CRUD)
@@ -499,18 +626,18 @@ final class TaskMutationService {
       status: 0,
       due: nil,
       position: nil,
-      parentId: coordinator.currentParentId == 0 ? nil : coordinator.currentParentId,
+      parentId: coordinator.navigationState.currentParentId == 0 ? nil : coordinator.navigationState.currentParentId,
       level: nil
     )
 
     var insertIndex = coordinator.tasks.endIndex
     if insertAtTopOfCurrentLevel {
-      if coordinator.currentParentId == 0 {
+      if coordinator.navigationState.currentParentId == 0 {
         insertIndex =
           coordinator.tasks.firstIndex(where: { ($0.parentId ?? 0) == 0 })
           ?? coordinator.tasks.endIndex
       } else if let parentRawIndex = coordinator.tasks.firstIndex(where: {
-        $0.id == coordinator.currentParentId
+        $0.id == coordinator.navigationState.currentParentId
       }) {
         insertIndex = parentRawIndex + 1
       }
@@ -535,7 +662,7 @@ final class TaskMutationService {
     if let insertedIndex = coordinator.currentLevelTasks.firstIndex(where: {
       $0.id == optimisticTask.id
     }) {
-      coordinator.currentSiblingIndex = insertedIndex
+      coordinator.navigationState.currentSiblingIndex = insertedIndex
     }
     return optimisticTask
   }

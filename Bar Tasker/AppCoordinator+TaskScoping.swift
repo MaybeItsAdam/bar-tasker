@@ -66,7 +66,7 @@ extension AppCoordinator {
 
   /// Tasks visible at the current level, sorted by position
   var currentLevelTasks: [CheckvistTask] {
-    tasks.filter { ($0.parentId ?? 0) == currentParentId }
+    tasks.filter { ($0.parentId ?? 0) == navigationState.currentParentId }
   }
 
   var currentTask: CheckvistTask? {
@@ -75,7 +75,7 @@ extension AppCoordinator {
     }
     let level = visibleTasks
     guard !level.isEmpty else { return nil }
-    let clampedIndex = min(max(currentSiblingIndex, 0), level.count - 1)
+    let clampedIndex = min(max(navigationState.currentSiblingIndex, 0), level.count - 1)
     return level[clampedIndex]
   }
 
@@ -85,7 +85,7 @@ extension AppCoordinator {
   var breadcrumbs: [CheckvistTask] {
     taskListViewModel.ensureVisibleTasksCacheValid()
     var result: [CheckvistTask] = []
-    var parentId = currentParentId
+    var parentId = navigationState.currentParentId
     while parentId != 0 {
       if let parent = taskListViewModel.cache.taskById[parentId] {
         result.append(parent)
@@ -124,7 +124,7 @@ extension AppCoordinator {
     return taskListViewModel.cache.visibleTasks
   }
 
-  var isRootLevel: Bool { currentParentId == 0 }
+  var isRootLevel: Bool { navigationState.currentParentId == 0 }
 
   var shouldShowRootScopeSection: Bool { !needsInitialSetup && !isSearchFilterActive }
   var rootScopeShowsFilterControls: Bool {
@@ -148,7 +148,7 @@ extension AppCoordinator {
       return pid != 0
     }
     if isSearchFilterActive {
-      return pid != currentParentId
+      return pid != navigationState.currentParentId
     }
     if preferences.showTaskBreadcrumbContext {
       return pid != 0
@@ -322,7 +322,7 @@ extension AppCoordinator {
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      currentSiblingIndex = newIndex
+      navigationState.currentSiblingIndex = newIndex
     }
   }
 
@@ -332,7 +332,7 @@ extension AppCoordinator {
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      currentSiblingIndex = newIndex
+      navigationState.currentSiblingIndex = newIndex
     }
   }
 
@@ -355,7 +355,7 @@ extension AppCoordinator {
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      currentSiblingIndex = newIndex
+      navigationState.currentSiblingIndex = newIndex
     }
   }
 
@@ -374,7 +374,7 @@ extension AppCoordinator {
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      currentSiblingIndex = newIndex
+      navigationState.currentSiblingIndex = newIndex
     } else {
       taskNavigationService.clampSelectionToVisibleRange()
     }
@@ -387,7 +387,7 @@ extension AppCoordinator {
     errorMessage = nil
 
     if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      currentSiblingIndex = newIndex
+      navigationState.currentSiblingIndex = newIndex
     } else {
       taskNavigationService.clampSelectionToVisibleRange()
     }

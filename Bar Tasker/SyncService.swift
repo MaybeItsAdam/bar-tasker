@@ -54,8 +54,8 @@ final class SyncService {
         coordinator.reconcilePendingObsidianSyncQueueWithOpenTasks()
         if coordinator.rootTaskView == .kanban {
           coordinator.kanban.clampKanbanSelection()
-        } else if coordinator.currentSiblingIndex >= fetchedTasks.count {
-          coordinator.currentSiblingIndex = 0
+        } else if coordinator.navigationState.currentSiblingIndex >= fetchedTasks.count {
+          coordinator.navigationState.currentSiblingIndex = 0
         }
         coordinator.focusSessionManager.clampForTasks(fetchedTasks)
         let latestOpenTaskIDs = Set(fetchedTasks.map(\.id))
@@ -73,7 +73,7 @@ final class SyncService {
         {
           coordinator.kanban.kanbanFilterParentId = nil
           if coordinator.rootTaskView == .kanban {
-            coordinator.currentParentId = 0
+            coordinator.navigationState.currentParentId = 0
           }
         }
         if !coordinator.listId.isEmpty && coordinator.canAttemptLogin {
@@ -107,9 +107,9 @@ final class SyncService {
     guard trimmedListId != coordinator.listId else { return }
 
     coordinator.listId = trimmedListId
-    coordinator.currentParentId = 0
-    coordinator.currentSiblingIndex = 0
-    coordinator.repository.pendingTaskMutations = [:]
+    coordinator.navigationState.currentParentId = 0
+    coordinator.navigationState.currentSiblingIndex = 0
+    coordinator.repository.clearPendingOfflineWork()
     coordinator.kanban.kanbanFilterParentId = nil
     coordinator.kanban.kanbanSelectedTaskId = nil
     coordinator.errorMessage = nil
@@ -267,15 +267,125 @@ final class SyncService {
 
   // MARK: - Offline Mutation Queue
 
+  /// Replays offline-queued creates, deletes, actions, and updates against
+  /// the active sync plugin. Creates run first to build a `tempId → realId`
+  /// map; later queues resolve negative ids through it so a delete or close
+  /// of an offline-created task hits the correct server task. Any individual
+  /// failure re-queues that item and suppresses the final `fetchTopTask` so
+  /// optimistic UI state survives until the next reconnect attempt.
   func flushPendingTaskMutations() async {
     guard let coordinator else { return }
-    guard !coordinator.repository.pendingTaskMutations.isEmpty else { return }
-    let mutations = coordinator.repository.pendingTaskMutations
-    coordinator.repository.pendingTaskMutations = [:]
-    for (taskId, mutation) in mutations {
-      guard let task = coordinator.tasks.first(where: { $0.id == taskId }) else { continue }
-      await coordinator.taskMutationService.updateTask(
-        task: task, content: mutation.content, due: mutation.due)
+    let repo = coordinator.repository
+    guard repo.hasPendingOfflineWork else { return }
+
+    let creates = repo.pendingTaskCreates
+    let deletes = repo.pendingTaskDeletes
+    let actions = repo.pendingTaskActions
+    let mutations = repo.pendingTaskMutations
+    repo.clearPendingOfflineWork()
+
+    var tempIdToRealId: [Int: Int] = [:]
+    var anyFailure = false
+
+    func resolve(_ id: Int) -> Int? {
+      id >= 0 ? id : tempIdToRealId[id]
+    }
+
+    for pending in creates {
+      let resolvedParentId: Int?
+      if let parentId = pending.parentId, parentId < 0 {
+        guard let realParentId = tempIdToRealId[parentId] else {
+          // Parent create failed earlier; can't create child without it.
+          // Re-queue the child so a future flush can try again once the
+          // parent eventually succeeds.
+          repo.enqueuePendingCreate(pending)
+          anyFailure = true
+          continue
+        }
+        resolvedParentId = realParentId
+      } else {
+        resolvedParentId = pending.parentId
+      }
+
+      do {
+        if let newTask = try await repo.activeSyncPlugin.createTask(
+          listId: coordinator.listId,
+          content: pending.content,
+          parentId: resolvedParentId,
+          position: pending.position,
+          credentials: coordinator.activeCredentials
+        ) {
+          tempIdToRealId[pending.tempId] = newTask.id
+          if let idx = coordinator.tasks.firstIndex(where: { $0.id == pending.tempId }) {
+            coordinator.tasks[idx] = newTask
+          }
+        } else {
+          repo.enqueuePendingCreate(pending)
+          anyFailure = true
+        }
+      } catch {
+        repo.enqueuePendingCreate(pending)
+        anyFailure = true
+        logger.error(
+          "Offline create replay failed: \(error.localizedDescription, privacy: .public)")
+      }
+    }
+
+    for tempOrRealId in deletes {
+      guard let realId = resolve(tempOrRealId) else {
+        // Underlying create never succeeded; the delete is moot.
+        continue
+      }
+      do {
+        _ = try await repo.activeSyncPlugin.deleteTask(
+          listId: coordinator.listId,
+          taskId: realId,
+          credentials: coordinator.activeCredentials)
+      } catch {
+        repo.enqueuePendingDelete(realId)
+        anyFailure = true
+        logger.error(
+          "Offline delete replay failed: \(error.localizedDescription, privacy: .public)")
+      }
+    }
+
+    for pending in actions {
+      guard let realId = resolve(pending.taskId) else { continue }
+      do {
+        _ = try await repo.activeSyncPlugin.performTaskAction(
+          listId: coordinator.listId,
+          taskId: realId,
+          action: pending.action,
+          credentials: coordinator.activeCredentials)
+      } catch {
+        repo.enqueuePendingAction(
+          PendingTaskAction(taskId: realId, action: pending.action))
+        anyFailure = true
+        logger.error(
+          "Offline action replay failed: \(error.localizedDescription, privacy: .public)")
+      }
+    }
+
+    for (tempOrRealId, mutation) in mutations {
+      guard let realId = resolve(tempOrRealId) else { continue }
+      do {
+        _ = try await repo.activeSyncPlugin.updateTask(
+          listId: coordinator.listId,
+          taskId: realId,
+          content: mutation.content,
+          due: mutation.due,
+          credentials: coordinator.activeCredentials)
+      } catch {
+        repo.enqueuePendingMutation(
+          taskId: realId, content: mutation.content, due: mutation.due)
+        anyFailure = true
+        logger.error(
+          "Offline update replay failed: \(error.localizedDescription, privacy: .public)")
+      }
+    }
+
+    if !anyFailure {
+      await fetchTopTask()
     }
   }
 
@@ -405,7 +515,7 @@ final class SyncService {
       // Keep selection anchored to the moved task in the currently visible
       // list.
       if let visibleIdx = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
-        coordinator.currentSiblingIndex = visibleIdx
+        coordinator.navigationState.currentSiblingIndex = visibleIdx
       }
     }
 
@@ -436,7 +546,7 @@ final class SyncService {
       var queue = absoluteQueue
       queue.swapAt(i1, i2)
       coordinator.repository.saveAbsolutePriorityQueue(queue)
-      coordinator.currentSiblingIndex = newIdx
+      coordinator.navigationState.currentSiblingIndex = newIdx
       return
     }
 
@@ -449,7 +559,7 @@ final class SyncService {
       queue.swapAt(i1, i2)
       updated[p1] = queue
       coordinator.savePriorityQueue(updated)
-      coordinator.currentSiblingIndex = newIdx
+      coordinator.navigationState.currentSiblingIndex = newIdx
     }
   }
 

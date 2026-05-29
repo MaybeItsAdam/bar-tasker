@@ -35,7 +35,7 @@ enum PopoverLayout {
     // Top strip + first divider.
     var fixedHeight: CGFloat = topStripHeight + dividerHeight
 
-    if !manager.breadcrumbs.isEmpty || manager.currentParentId != 0 {
+    if !manager.breadcrumbs.isEmpty || manager.navigationState.currentParentId != 0 {
       fixedHeight += 30 + dividerHeight
     }
     if manager.shouldShowRootScopeSection {
@@ -361,6 +361,7 @@ struct QuickEntryField: NSViewRepresentable {
 // swiftlint:disable type_body_length function_body_length
 struct PopoverView: View {
   @Environment(AppCoordinator.self) var manager
+  @Environment(NavigationState.self) var navigationState
 
   func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
@@ -379,7 +380,7 @@ struct PopoverView: View {
         Divider()
       }
 
-      if manager.currentParentId != 0 {
+      if navigationState.currentParentId != 0 {
         breadcrumbBar
         Divider()
       }
@@ -446,10 +447,12 @@ struct PopoverView: View {
 
   @ViewBuilder
   private var focusOverlay: some View {
-    if let session = manager.focusSessionManager.session,
-      let task = manager.cache.taskById[session.taskId]
-    {
-      FocusSessionOverlay(task: task, session: session)
+    if let phase = manager.focusSessionManager.phase {
+      let session = manager.focusSessionManager.session
+      let taskId =
+        session?.taskId ?? manager.focusSessionManager.lastFocusedTaskId
+      let task = taskId.flatMap { manager.cache.taskById[$0] }
+      FocusSessionOverlay(task: task, phase: phase, session: session)
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(themeColor(.panelBackground).opacity(0.92))
@@ -818,8 +821,8 @@ struct PopoverView: View {
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 4) {
           Button("All Tasks") {
-            manager.currentParentId = 0
-            manager.currentSiblingIndex = 0
+            navigationState.currentParentId = 0
+            navigationState.currentSiblingIndex = 0
             if manager.rootTaskView == .kanban {
               manager.kanban.kanbanFilterSubtasks = false
               manager.kanban.kanbanFilterParentId = nil
@@ -876,7 +879,7 @@ struct PopoverView: View {
         Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
       }
       .overlay(alignment: .bottom) {
-        if manager.rootScopeFocusLevel == 1 {
+        if navigationState.rootScopeFocusLevel == 1 {
           Rectangle()
             .fill(themeColor(.focusRing))
             .frame(height: 2)
@@ -893,8 +896,8 @@ struct PopoverView: View {
                 isSelected: manager.selectedRootDueBucket == nil
               ) {
                 manager.selectedRootDueBucket = nil
-                manager.currentSiblingIndex = 0
-                manager.rootScopeFocusLevel = 2
+                navigationState.currentSiblingIndex = 0
+                navigationState.rootScopeFocusLevel = 2
               }
               .id("due-filter-all")
 
@@ -911,8 +914,8 @@ struct PopoverView: View {
                   isSelected: manager.selectedRootDueBucket == bucket
                 ) {
                   manager.selectedRootDueBucket = bucket
-                  manager.currentSiblingIndex = 0
-                  manager.rootScopeFocusLevel = 2
+                  navigationState.currentSiblingIndex = 0
+                  navigationState.rootScopeFocusLevel = 2
                 }
                 .id("due-filter-\(bucket.rawValue)")
               }
@@ -930,7 +933,7 @@ struct PopoverView: View {
           Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
         }
         .overlay(alignment: .bottom) {
-          if manager.rootScopeFocusLevel == 2 {
+          if navigationState.rootScopeFocusLevel == 2 {
             Rectangle()
               .fill(themeColor(.focusRing))
               .frame(height: 2)
@@ -946,8 +949,8 @@ struct PopoverView: View {
                 isSelected: manager.selectedRootTag.isEmpty
               ) {
                 manager.selectedRootTag = ""
-                manager.currentSiblingIndex = 0
-                manager.rootScopeFocusLevel = 2
+                navigationState.currentSiblingIndex = 0
+                navigationState.rootScopeFocusLevel = 2
               }
               .id("tags-filter-all")
 
@@ -964,8 +967,8 @@ struct PopoverView: View {
                   isSelected: manager.selectedRootTag == tag
                 ) {
                   manager.selectedRootTag = tag
-                  manager.currentSiblingIndex = 0
-                  manager.rootScopeFocusLevel = 2
+                  navigationState.currentSiblingIndex = 0
+                  navigationState.rootScopeFocusLevel = 2
                 }
                 .id("tags-filter-\(tag)")
               }
@@ -983,7 +986,7 @@ struct PopoverView: View {
           Rectangle().stroke(themeColor(.panelDivider), lineWidth: 1)
         }
         .overlay(alignment: .bottom) {
-          if manager.rootScopeFocusLevel == 2 {
+          if navigationState.rootScopeFocusLevel == 2 {
             Rectangle()
               .fill(themeColor(.focusRing))
               .frame(height: 2)
@@ -993,20 +996,20 @@ struct PopoverView: View {
     }
     .onAppear {
       if manager.rootTaskView != .kanban
-        && manager.currentParentId == 0
+        && navigationState.currentParentId == 0
         && manager.visibleTasks.isEmpty
-        && manager.rootScopeFocusLevel == 0
+        && navigationState.rootScopeFocusLevel == 0
       {
-        manager.rootScopeFocusLevel = 1
+        navigationState.rootScopeFocusLevel = 1
       }
     }
     .onChange(of: manager.visibleTasks.count) { _, count in
       if manager.rootTaskView != .kanban
-        && manager.currentParentId == 0
+        && navigationState.currentParentId == 0
         && count == 0
-        && manager.rootScopeFocusLevel == 0
+        && navigationState.rootScopeFocusLevel == 0
       {
-        manager.rootScopeFocusLevel = 1
+        navigationState.rootScopeFocusLevel = 1
       }
     }
   }
@@ -1016,7 +1019,7 @@ struct PopoverView: View {
     let selected = manager.rootTaskView == scope
     Button {
       manager.taskNavigationService.setRootTaskView(scope)
-      manager.rootScopeFocusLevel = 1
+      navigationState.rootScopeFocusLevel = 1
     } label: {
       Text(scope.title)
         .font(.system(size: 12, weight: .semibold))
@@ -1111,7 +1114,7 @@ struct PopoverView: View {
                 )
                 .id(task.id)
 
-                if manager.currentSiblingIndex == index,
+                if navigationState.currentSiblingIndex == index,
                   manager.quickEntry.quickEntryMode == .addSibling || manager.quickEntry.quickEntryMode == .addChild
                 {
                   quickEntryBar(
@@ -1128,7 +1131,7 @@ struct PopoverView: View {
             }
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-          .onChange(of: manager.currentSiblingIndex) { _, _ in
+          .onChange(of: navigationState.currentSiblingIndex) { _, _ in
             if let currentTask = manager.currentTask {
               proxy.scrollTo(currentTask.id, anchor: .center)
             }
@@ -1252,7 +1255,7 @@ struct PopoverView: View {
     var parts: [String] = []
     var pid = task.parentId ?? 0
     while pid != 0 {
-      if !includeCurrentParent && pid == manager.currentParentId {
+      if !includeCurrentParent && pid == navigationState.currentParentId {
         break
       }
       if let parent = manager.tasks.first(where: { $0.id == pid }) {

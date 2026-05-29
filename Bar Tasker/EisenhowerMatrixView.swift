@@ -7,6 +7,7 @@ struct EisenhowerMatrixView: View {
   }
 
   @Environment(AppCoordinator.self) var manager
+  @Environment(NavigationState.self) var navigationState
   @State private var hoveredTaskId: Int?
 
   private func themeColor(_ token: AppThemeColorToken) -> Color {
@@ -15,7 +16,7 @@ struct EisenhowerMatrixView: View {
 
   var body: some View {
     let levels = manager.repository.taskEisenhowerLevels
-    let scopeId = manager.currentParentId
+    let scopeId = navigationState.currentParentId
     let showChildren = manager.showChildrenInMenus
     let tasks = manager.tasks.filter { task in
       guard task.status == 0,
