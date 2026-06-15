@@ -16,7 +16,7 @@ extension AppCoordinator {
     var end = start + 1
     while end < flatTasks.count {
       let candidate = flatTasks[end]
-      if isDescendant(candidate, of: taskId) {
+      if taskListViewModel.isDescendant(candidate, of: taskId) {
         end += 1
       } else {
         break

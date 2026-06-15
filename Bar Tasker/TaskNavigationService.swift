@@ -174,7 +174,7 @@ final class TaskNavigationService {
       coordinator.taskListViewModel.selectedRootDueBucket = options[nextIndex]
       navigationState.currentSiblingIndex = 0
     case .tags:
-      let tags = coordinator.rootLevelTagNames(limit: 30)
+      let tags = coordinator.taskListViewModel.rootLevelTagNames(limit: 30)
       let options = [""] + tags
       guard let currentIndex = options.firstIndex(of: coordinator.taskListViewModel.selectedRootTag) else {
         coordinator.taskListViewModel.selectedRootTag = ""
@@ -200,7 +200,7 @@ final class TaskNavigationService {
       navigationState.currentSiblingIndex = 0
       navigationState.rootScopeFocusLevel = 2
     case .tags:
-      let options = [""] + coordinator.rootLevelTagNames(limit: 30)
+      let options = [""] + coordinator.taskListViewModel.rootLevelTagNames(limit: 30)
       guard options.indices.contains(index) else { return }
       coordinator.taskListViewModel.selectedRootTag = options[index]
       navigationState.currentSiblingIndex = 0

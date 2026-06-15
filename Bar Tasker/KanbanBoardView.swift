@@ -319,8 +319,8 @@ private struct KanbanTaskCard: View {
     let hasDue = !(task.due ?? "").isEmpty
     let tags = extractTags(from: task.content)
     let hasChildren = childCount > 0
-    let priorityLabel = manager.priorityBadgeLabel(for: task)
-    let matrixLabel = manager.eisenhowerBadgeLabel(for: task)
+    let priorityLabel = taskListViewModel.priorityBadgeLabel(for: task)
+    let matrixLabel = taskListViewModel.eisenhowerBadgeLabel(for: task)
 
     if hasDue || !tags.isEmpty || hasChildren || priorityLabel != nil || matrixLabel != nil {
       HStack(spacing: 5) {
@@ -349,7 +349,7 @@ private struct KanbanTaskCard: View {
         }
 
         if hasDue, let due = task.due {
-          let bucket = manager.rootDueBucket(for: task)
+          let bucket = taskListViewModel.rootDueBucket(for: task)
           let isOverdue = bucket == .overdue
           let isToday = bucket == .today
           Text(due == "asap" ? "ASAP" : shortDateString(due))

@@ -236,6 +236,120 @@ import Observation
     }
   }
 
+  // MARK: - View-derived badge / section helpers
+  // Consolidated from `AppCoordinator+TaskScoping` (Phase 3 follow-up): these read
+  // purely from the rebuilt `cache` (+ `repository`/`navigationState`/`quickEntry`
+  // this VM already owns), so they belong with the cache rather than forwarded
+  // through the coordinator. Views read them via `@Environment(TaskListViewModel.self)`.
+
+  func priorityRank(for task: CheckvistTask) -> Int? {
+    ensureVisibleTasksCacheValid()
+    return cache.priorityRank[task.id]
+  }
+
+  func absolutePriorityRank(for task: CheckvistTask) -> Int? {
+    ensureVisibleTasksCacheValid()
+    return cache.absolutePriorityRank[task.id]
+  }
+
+  func priorityPath(for task: CheckvistTask) -> String? {
+    ensureVisibleTasksCacheValid()
+    return cache.priorityPath[task.id]
+  }
+
+  func priorityBadgeLabel(for task: CheckvistTask) -> String? {
+    if let absolute = absolutePriorityRank(for: task) {
+      return "A\(absolute)"
+    }
+    if let scoped = priorityPath(for: task) {
+      return "P\(scoped)"
+    }
+    return nil
+  }
+
+  func eisenhowerBadgeLabel(for task: CheckvistTask) -> String? {
+    guard let level = repository.taskEisenhowerLevels[task.id],
+      level.urgency != 0 || level.importance != 0
+    else { return nil }
+    return "M(\(formatEisenhowerCoordinate(level.urgency)),\(formatEisenhowerCoordinate(level.importance)))"
+  }
+
+  private func formatEisenhowerCoordinate(_ value: Double) -> String {
+    if value.rounded() == value {
+      return String(Int(value))
+    }
+    return String(format: "%.1f", value)
+  }
+
+  /// Exposes the boundary (if any) at which non-matching "remainder" tasks begin
+  /// within `visibleTasks`. Computed by `TaskVisibilityEngine` for due/tags/priority
+  /// root views.
+  var remainderStartIndex: Int? {
+    ensureVisibleTasksCacheValid()
+    return cache.remainderStartIndex
+  }
+
+  private var isRootLevel: Bool { navigationState.currentParentId == 0 }
+
+  private var shouldShowRootScopeSection: Bool { !quickEntry.isSearchFilterActive }
+
+  private var shouldShowDueSectionHeaders: Bool {
+    isRootLevel && shouldShowRootScopeSection && rootTaskView == .due
+      && selectedRootDueBucket == nil
+  }
+
+  func rootDueSectionHeader(atVisibleIndex index: Int, visibleTasks: [CheckvistTask]) -> String? {
+    guard shouldShowDueSectionHeaders, visibleTasks.indices.contains(index) else { return nil }
+    // Due-bucket section headers only apply to the matching portion of the list.
+    // Remainder tasks get their own header via `remainderSectionHeader`.
+    if let remainderStart = remainderStartIndex, index >= remainderStart { return nil }
+    let currentBucket = rootDueBucket(for: visibleTasks[index])
+    if index == 0 { return currentBucket.title }
+    let previousBucket = rootDueBucket(for: visibleTasks[index - 1])
+    return previousBucket == currentBucket ? nil : currentBucket.title
+  }
+
+  /// Returns the header title to display just before the task at the given index, or
+  /// nil when no remainder header belongs there. Only the boundary index produces a
+  /// header.
+  func remainderSectionHeader(atVisibleIndex index: Int) -> String? {
+    guard let start = remainderStartIndex, index == start else { return nil }
+    switch rootTaskView {
+    case .due:
+      return start == 0 ? "All tasks" : "Other tasks"
+    case .tags:
+      return start == 0 ? "Untagged" : "Other tasks"
+    case .priority:
+      return start == 0 ? "Unprioritised" : "Other tasks"
+    case .all, .kanban, .eisenhower:
+      return nil
+    }
+  }
+
+  func rootDueSectionCount(in visibleTasks: [CheckvistTask]) -> Int {
+    guard shouldShowDueSectionHeaders, !visibleTasks.isEmpty else { return 0 }
+    var total = 0
+    var previousBucket: RootDueBucket?
+    for task in visibleTasks {
+      let bucket = rootDueBucket(for: task)
+      if bucket != previousBucket {
+        total += 1
+        previousBucket = bucket
+      }
+    }
+    return total
+  }
+
+  func rootLevelTagNames(limit: Int = 8) -> [String] {
+    ensureVisibleTasksCacheValid()
+    return Array(cache.rootLevelTagNames.prefix(limit))
+  }
+
+  /// Returns true if task is a descendant of the given parentId (or IS at that level).
+  func isDescendant(_ task: CheckvistTask, of rootId: Int) -> Bool {
+    TaskFilterEngine.isDescendant(task, of: rootId, taskById: cache.taskById)
+  }
+
   /// Computes a hierarchical priority path per ranked task. For each ranked task, walks
   /// from the root of its ancestor chain down to itself; each ancestor contributes its
   /// own rank-in-parent-scope or "=" if unranked in that scope.

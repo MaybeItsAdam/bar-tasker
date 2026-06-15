@@ -88,6 +88,7 @@ struct FocusPromptOverlay: View {
 struct FocusSessionOverlay: View {
   @Environment(AppCoordinator.self) var manager
   @Environment(TaskRepository.self) var repository
+  @Environment(TaskListViewModel.self) var taskListViewModel
 
   /// Task associated with the focus block. `nil` during break phases if the
   /// originating task was deleted — we still want to surface the break UI.
@@ -288,7 +289,7 @@ struct FocusSessionOverlay: View {
     if let task {
       let subtasks = repository.tasks.filter { candidate in
         candidate.status == 0 && candidate.id != task.id
-          && manager.isDescendant(candidate, of: task.id)
+          && taskListViewModel.isDescendant(candidate, of: task.id)
       }
       if !subtasks.isEmpty {
         Divider()

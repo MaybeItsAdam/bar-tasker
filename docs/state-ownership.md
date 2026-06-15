@@ -71,6 +71,13 @@ Owns the toggles that shape what's visible, *and* the rebuilt `cache`. These `di
 `showChildrenInMenus`. `cache: CacheState` is `@ObservationIgnored` and rebuilt by
 `ensureVisibleTasksCacheValid()`.
 
+Also owns the cache-derived view helpers consolidated here in step 3.7d (they read the
+`cache` directly rather than forwarding through `AppCoordinator`): `priorityBadgeLabel` /
+`eisenhowerBadgeLabel` / `priorityRank` / `absolutePriorityRank` / `priorityPath`,
+`rootDueBucket`, `rootDueSectionHeader` / `remainderSectionHeader` / `rootDueSectionCount` /
+`remainderStartIndex`, `rootLevelTagNames`, and `isDescendant`. Views read these via
+`@Environment(TaskListViewModel.self)`.
+
 
 ### Feature managers (each owns its slice + persists to `PreferencesStore`)
 | Manager | Owns | Cache-relevant |

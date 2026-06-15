@@ -26,7 +26,7 @@ struct EisenhowerMatrixView: View {
         level.urgency != 0.0 || level.importance != 0.0
       else { return false }
       if showChildren {
-        return manager.isDescendant(task, of: scopeId)
+        return taskListViewModel.isDescendant(task, of: scopeId)
       }
       return (task.parentId ?? 0) == scopeId
     }

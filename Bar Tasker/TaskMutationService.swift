@@ -648,7 +648,7 @@ final class TaskMutationService {
     {
       var endIndex = rawIndex + 1
       while endIndex < coordinator.repository.tasks.count
-        && coordinator.isDescendant(coordinator.repository.tasks[endIndex], of: target.id)
+        && coordinator.taskListViewModel.isDescendant(coordinator.repository.tasks[endIndex], of: target.id)
       {
         endIndex += 1
       }

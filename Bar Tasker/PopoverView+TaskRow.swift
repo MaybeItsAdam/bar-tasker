@@ -224,8 +224,8 @@ extension PopoverView {
     let metadataTokens = taskMetadataTokens(task.content)
     let startLabel = manager.startDates.startDateLabel(for: task)
     let recurrenceRule = manager.recurrenceRule(for: task)
-    let priorityLabel = manager.priorityBadgeLabel(for: task)
-    let matrixLabel = manager.eisenhowerBadgeLabel(for: task)
+    let priorityLabel = taskListViewModel.priorityBadgeLabel(for: task)
+    let matrixLabel = taskListViewModel.eisenhowerBadgeLabel(for: task)
     if !metadataTokens.isEmpty
       || priorityLabel != nil
       || matrixLabel != nil

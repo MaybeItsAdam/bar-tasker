@@ -99,7 +99,7 @@ enum PopoverLayout {
       taskAreaHeight = 150
     } else {
       let visibleTasks = manager.visibleTasks
-      let sectionRows = manager.rootDueSectionCount(in: visibleTasks)
+      let sectionRows = manager.taskListViewModel.rootDueSectionCount(in: visibleTasks)
       let visibleRows = CGFloat(min(visibleTasks.count + sectionRows, 8))
       taskAreaHeight = max(110, visibleRows * 34)
     }
@@ -942,7 +942,7 @@ struct PopoverView: View {
           }
         }
       } else if taskListViewModel.rootTaskView == .tags {
-        let tags = manager.rootLevelTagNames(limit: 30)
+        let tags = taskListViewModel.rootLevelTagNames(limit: 30)
         ScrollViewReader { proxy in
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
@@ -1099,10 +1099,12 @@ struct PopoverView: View {
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(Array(visibleTasks.enumerated()), id: \.element.id) { index, task in
-                if let remainderHeader = manager.remainderSectionHeader(atVisibleIndex: index) {
+                if let remainderHeader = taskListViewModel.remainderSectionHeader(
+                  atVisibleIndex: index)
+                {
                   dueSectionHeader(remainderHeader)
                 }
-                if let sectionHeader = manager.rootDueSectionHeader(
+                if let sectionHeader = taskListViewModel.rootDueSectionHeader(
                   atVisibleIndex: index, visibleTasks: visibleTasks)
                 {
                   dueSectionHeader(sectionHeader)
