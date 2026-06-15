@@ -36,7 +36,7 @@ final class LifecycleController {
     // `didSet`s call `bus.invalidate()`, and the single subscription below
     // routes that into `TaskListViewModel.invalidateCaches()`.
     coordinator.cacheInvalidationBus.subscribe { [weak coordinator] in
-      coordinator?.invalidateCaches()
+      coordinator?.taskListViewModel.invalidateCaches()
     }
 
     let repository = coordinator.repository
@@ -79,7 +79,7 @@ final class LifecycleController {
       coordinator?.resolveDueDateWithConfig(input) ?? input
     }
     coordinator.integrations.onError = { [weak coordinator] err in
-      coordinator?.errorMessage = err
+      coordinator?.repository.errorMessage = err
     }
 
     coordinator.preferences.onLaunchAtLoginChanged = { [weak self] newValue in

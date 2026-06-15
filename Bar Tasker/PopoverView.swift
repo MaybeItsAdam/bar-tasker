@@ -44,7 +44,7 @@ enum PopoverLayout {
     if manager.preferences.showTaskBreadcrumbContext {
       fixedHeight += 24 + dividerHeight
     }
-    if manager.hideFuture {
+    if manager.taskListViewModel.hideFuture {
       fixedHeight += 24 + dividerHeight
     }
     if manager.quickEntry.pendingDeleteConfirmation {
@@ -80,20 +80,20 @@ enum PopoverLayout {
         fixedHeight += 72
       }
     }
-    if manager.errorMessage != nil || manager.statusMessage != nil {
+    if manager.repository.errorMessage != nil || manager.statusMessage != nil {
       fixedHeight += 20
     }
 
-    if manager.rootTaskView == .kanban {
+    if manager.taskListViewModel.rootTaskView == .kanban {
       return maxHeight
     }
 
-    if manager.rootTaskView == .eisenhower {
+    if manager.taskListViewModel.rootTaskView == .eisenhower {
       return min(maxHeight, fixedHeight + width)
     }
 
     let taskAreaHeight: CGFloat
-    if manager.isLoading && manager.tasks.isEmpty {
+    if manager.repository.isLoading && manager.repository.tasks.isEmpty {
       taskAreaHeight = 90
     } else if manager.visibleTasks.isEmpty {
       taskAreaHeight = 150
@@ -362,6 +362,8 @@ struct QuickEntryField: NSViewRepresentable {
 struct PopoverView: View {
   @Environment(AppCoordinator.self) var manager
   @Environment(NavigationState.self) var navigationState
+  @Environment(TaskListViewModel.self) var taskListViewModel
+  @Environment(TaskRepository.self) var repository
 
   func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
@@ -385,16 +387,16 @@ struct PopoverView: View {
         Divider()
       }
 
-      if manager.hideFuture {
+      if taskListViewModel.hideFuture {
         hideFutureChip
         Divider()
       }
 
       // Task list / Kanban board — keyboard navigable
-      if manager.rootTaskView == .kanban {
+      if taskListViewModel.rootTaskView == .kanban {
         KanbanBoardView()
           .frame(maxHeight: .infinity, alignment: .top)
-      } else if manager.rootTaskView == .eisenhower {
+      } else if taskListViewModel.rootTaskView == .eisenhower {
         EisenhowerMatrixView()
           .frame(maxHeight: .infinity, alignment: .top)
       } else {
@@ -451,13 +453,13 @@ struct PopoverView: View {
       let session = manager.focusSessionManager.session
       let taskId =
         session?.taskId ?? manager.focusSessionManager.lastFocusedTaskId
-      let task = taskId.flatMap { manager.cache.taskById[$0] }
+      let task = taskId.flatMap { taskListViewModel.cache.taskById[$0] }
       FocusSessionOverlay(task: task, phase: phase, session: session)
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(themeColor(.panelBackground).opacity(0.92))
     } else if let promptId = manager.focusSessionManager.promptTaskId,
-      let task = manager.cache.taskById[promptId]
+      let task = taskListViewModel.cache.taskById[promptId]
     {
       FocusPromptOverlay(task: task)
         .padding(20)
@@ -467,12 +469,12 @@ struct PopoverView: View {
   }
 
   private var isRootFilteredView: Bool {
-    manager.isRootLevel && manager.shouldShowRootScopeSection && manager.rootTaskView != .all
+    manager.isRootLevel && manager.shouldShowRootScopeSection && taskListViewModel.rootTaskView != .all
   }
 
   /// True when the user has zero tasks anywhere — distinct from "filter excludes all tasks".
   private var hasNoTasksAtAll: Bool {
-    manager.tasks.isEmpty
+    repository.tasks.isEmpty
   }
 
   private var emptyStateTitle: String {
@@ -485,15 +487,15 @@ struct PopoverView: View {
     }
 
     if isRootFilteredView {
-      switch manager.rootTaskView {
+      switch taskListViewModel.rootTaskView {
       case .due:
-        if let bucket = manager.selectedRootDueBucket {
+        if let bucket = taskListViewModel.selectedRootDueBucket {
           return "No \(bucket.title.lowercased()) tasks"
         }
         return "No due tasks"
       case .tags:
-        return manager.selectedRootTag.isEmpty
-          ? "No tagged tasks" : "No #\(manager.selectedRootTag) tasks"
+        return taskListViewModel.selectedRootTag.isEmpty
+          ? "No tagged tasks" : "No #\(taskListViewModel.selectedRootTag) tasks"
       case .priority:
         return "No priority tasks"
       case .kanban:
@@ -514,21 +516,21 @@ struct PopoverView: View {
     }
 
     if hasNoTasksAtAll {
-      return manager.listId.isEmpty
+      return repository.listId.isEmpty
         ? "Connect Checkvist in Preferences, then add your first task below."
         : "Add your first task below."
     }
 
     guard isRootFilteredView else { return nil }
 
-    switch manager.rootTaskView {
+    switch taskListViewModel.rootTaskView {
     case .due:
-      if manager.selectedRootDueBucket == nil {
+      if taskListViewModel.selectedRootDueBucket == nil {
         return "You have tasks, but none of them have a due date."
       }
       return "No tasks match this due filter."
     case .tags:
-      if manager.selectedRootTag.isEmpty {
+      if taskListViewModel.selectedRootTag.isEmpty {
         return "You have tasks, but none of them are tagged."
       }
       return "No tasks match this tag filter."
@@ -546,7 +548,7 @@ struct PopoverView: View {
   var shouldShowEmptyListComposer: Bool {
     let baseConditions =
       manager.visibleTasks.isEmpty
-      && !manager.isLoading
+      && !repository.isLoading
       && !manager.quickEntry.pendingDeleteConfirmation
       && manager.activeOnboardingDialog == nil
       && !manager.isSearchFilterActive
@@ -669,12 +671,12 @@ struct PopoverView: View {
             get: { manager.checkvistIntegrationEnabled },
             set: { on in
               manager.checkvistIntegrationEnabled = on
-              if on && manager.username.isEmpty {
+              if on && repository.username.isEmpty {
                 AppDelegate.shared.menuSettings(pane: .plugins)
               }
             }
           ),
-          prompt: manager.checkvistIntegrationEnabled && manager.username.isEmpty
+          prompt: manager.checkvistIntegrationEnabled && repository.username.isEmpty
             ? "Connect to sync tasks" : nil,
           onPromptTap: { AppDelegate.shared.menuSettings(pane: .plugins) }
         )
@@ -810,7 +812,7 @@ struct PopoverView: View {
   var breadcrumbBar: some View {
     HStack(spacing: 4) {
       Button {
-        if manager.rootTaskView == .kanban {
+        if taskListViewModel.rootTaskView == .kanban {
           manager.kanban.exitToParentScope()
         } else {
           manager.taskNavigationService.exitToParent()
@@ -823,7 +825,7 @@ struct PopoverView: View {
           Button("All Tasks") {
             navigationState.currentParentId = 0
             navigationState.currentSiblingIndex = 0
-            if manager.rootTaskView == .kanban {
+            if taskListViewModel.rootTaskView == .kanban {
               manager.kanban.kanbanFilterSubtasks = false
               manager.kanban.kanbanFilterParentId = nil
             }
@@ -852,7 +854,7 @@ struct PopoverView: View {
         .clipShape(Capsule())
       Spacer()
       Button {
-        manager.hideFuture = false
+        taskListViewModel.hideFuture = false
       } label: {
         Image(systemName: "xmark").font(.caption2).foregroundColor(themeColor(.textSecondary))
       }.buttonStyle(PlainButtonStyle())
@@ -886,16 +888,16 @@ struct PopoverView: View {
         }
       }
 
-      if manager.rootTaskView == .due {
+      if taskListViewModel.rootTaskView == .due {
         let dueBuckets = RootDueBucket.allCases.filter { $0 != .noDueDate }
         ScrollViewReader { proxy in
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
               rootScopeChip(
                 title: "All due",
-                isSelected: manager.selectedRootDueBucket == nil
+                isSelected: taskListViewModel.selectedRootDueBucket == nil
               ) {
-                manager.selectedRootDueBucket = nil
+                taskListViewModel.selectedRootDueBucket = nil
                 navigationState.currentSiblingIndex = 0
                 navigationState.rootScopeFocusLevel = 2
               }
@@ -911,9 +913,9 @@ struct PopoverView: View {
                 }
                 rootScopeChip(
                   title: bucket.title,
-                  isSelected: manager.selectedRootDueBucket == bucket
+                  isSelected: taskListViewModel.selectedRootDueBucket == bucket
                 ) {
-                  manager.selectedRootDueBucket = bucket
+                  taskListViewModel.selectedRootDueBucket = bucket
                   navigationState.currentSiblingIndex = 0
                   navigationState.rootScopeFocusLevel = 2
                 }
@@ -924,7 +926,7 @@ struct PopoverView: View {
           .onAppear {
             scrollRootDueFilterIntoView(proxy: proxy)
           }
-          .onChange(of: manager.selectedRootDueBucketRawValue) { _, _ in
+          .onChange(of: taskListViewModel.selectedRootDueBucketRawValue) { _, _ in
             scrollRootDueFilterIntoView(proxy: proxy)
           }
         }
@@ -939,16 +941,16 @@ struct PopoverView: View {
               .frame(height: 2)
           }
         }
-      } else if manager.rootTaskView == .tags {
+      } else if taskListViewModel.rootTaskView == .tags {
         let tags = manager.rootLevelTagNames(limit: 30)
         ScrollViewReader { proxy in
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
               rootScopeChip(
                 title: "All tags",
-                isSelected: manager.selectedRootTag.isEmpty
+                isSelected: taskListViewModel.selectedRootTag.isEmpty
               ) {
-                manager.selectedRootTag = ""
+                taskListViewModel.selectedRootTag = ""
                 navigationState.currentSiblingIndex = 0
                 navigationState.rootScopeFocusLevel = 2
               }
@@ -964,9 +966,9 @@ struct PopoverView: View {
                 }
                 rootScopeChip(
                   title: tag,
-                  isSelected: manager.selectedRootTag == tag
+                  isSelected: taskListViewModel.selectedRootTag == tag
                 ) {
-                  manager.selectedRootTag = tag
+                  taskListViewModel.selectedRootTag = tag
                   navigationState.currentSiblingIndex = 0
                   navigationState.rootScopeFocusLevel = 2
                 }
@@ -977,7 +979,7 @@ struct PopoverView: View {
           .onAppear {
             scrollRootTagFilterIntoView(proxy: proxy)
           }
-          .onChange(of: manager.selectedRootTag) { _, _ in
+          .onChange(of: taskListViewModel.selectedRootTag) { _, _ in
             scrollRootTagFilterIntoView(proxy: proxy)
           }
         }
@@ -995,7 +997,7 @@ struct PopoverView: View {
       }
     }
     .onAppear {
-      if manager.rootTaskView != .kanban
+      if taskListViewModel.rootTaskView != .kanban
         && navigationState.currentParentId == 0
         && manager.visibleTasks.isEmpty
         && navigationState.rootScopeFocusLevel == 0
@@ -1004,7 +1006,7 @@ struct PopoverView: View {
       }
     }
     .onChange(of: manager.visibleTasks.count) { _, count in
-      if manager.rootTaskView != .kanban
+      if taskListViewModel.rootTaskView != .kanban
         && navigationState.currentParentId == 0
         && count == 0
         && navigationState.rootScopeFocusLevel == 0
@@ -1016,7 +1018,7 @@ struct PopoverView: View {
 
   @ViewBuilder
   func rootScopeTabButton(_ scope: RootTaskView) -> some View {
-    let selected = manager.rootTaskView == scope
+    let selected = taskListViewModel.rootTaskView == scope
     Button {
       manager.taskNavigationService.setRootTaskView(scope)
       navigationState.rootScopeFocusLevel = 1
@@ -1059,7 +1061,7 @@ struct PopoverView: View {
 
   func scrollRootDueFilterIntoView(proxy: ScrollViewProxy) {
     let targetId: String
-    if let bucket = manager.selectedRootDueBucket {
+    if let bucket = taskListViewModel.selectedRootDueBucket {
       targetId = "due-filter-\(bucket.rawValue)"
     } else {
       targetId = "due-filter-all"
@@ -1071,8 +1073,8 @@ struct PopoverView: View {
 
   func scrollRootTagFilterIntoView(proxy: ScrollViewProxy) {
     let targetId =
-      manager.selectedRootTag.isEmpty
-      ? "tags-filter-all" : "tags-filter-\(manager.selectedRootTag)"
+      taskListViewModel.selectedRootTag.isEmpty
+      ? "tags-filter-all" : "tags-filter-\(taskListViewModel.selectedRootTag)"
     withAnimation(.easeInOut(duration: 0.12)) {
       proxy.scrollTo(targetId, anchor: .center)
     }
@@ -1082,7 +1084,7 @@ struct PopoverView: View {
     let visibleTasks = manager.visibleTasks
 
     return Group {
-      if manager.isLoading && manager.tasks.isEmpty {
+      if repository.isLoading && repository.tasks.isEmpty {
         HStack {
           Spacer()
           ProgressView().padding(24)
@@ -1212,7 +1214,7 @@ struct PopoverView: View {
           .buttonStyle(.plain)
         }
 
-        if manager.isLoading {
+        if repository.isLoading {
           ProgressView().scaleEffect(0.6).frame(width: 16, height: 20)
         }
       }
@@ -1221,7 +1223,7 @@ struct PopoverView: View {
       .background(themeColor(.panelSurface))
       .clipShape(RoundedRectangle(cornerRadius: 8))
 
-      if let error = manager.errorMessage {
+      if let error = repository.errorMessage {
         Text(error)
           .font(.caption2)
           .foregroundColor(themeColor(.danger))
@@ -1258,7 +1260,7 @@ struct PopoverView: View {
       if !includeCurrentParent && pid == navigationState.currentParentId {
         break
       }
-      if let parent = manager.tasks.first(where: { $0.id == pid }) {
+      if let parent = repository.tasks.first(where: { $0.id == pid }) {
         parts.insert(parent.content, at: 0)
         pid = parent.parentId ?? 0
       } else {

@@ -139,7 +139,7 @@ struct KeyboardShortcutRouter {
     // In kanban mode, visibleTasks is intentionally empty (kanban uses per-column task lists),
     // so we check the focused column's first task instead.
     let canFocusRootScopeFromListTop: Bool
-    if manager.rootTaskView == .kanban {
+    if manager.taskListViewModel.rootTaskView == .kanban {
       canFocusRootScopeFromListTop =
         manager.shouldShowRootScopeSection
         && manager.kanban.isAtTopOfFocusedColumn
@@ -237,7 +237,7 @@ struct KeyboardShortcutRouter {
     }
 
     // Cmd+←/→ - move task to adjacent kanban column (kanban mode only).
-    if manager.rootTaskView == .kanban && !isFocused {
+    if manager.taskListViewModel.rootTaskView == .kanban && !isFocused {
       if matches(.kanbanMoveLeft) {
         if !isRepeat {
           manager.moveCurrentTaskToKanbanColumn(direction: -1)
@@ -253,7 +253,7 @@ struct KeyboardShortcutRouter {
       if matches(.kanbanShowInAll) {
         if !isRepeat, let task = manager.kanban.currentKanbanTask {
           let childCounts = manager.childCountByTaskId()
-          manager.rootTaskView = .all
+          manager.taskListViewModel.rootTaskView = .all
           manager.navigationState.rootScopeFocusLevel = 0
           if childCounts[task.id, default: 0] > 0 {
             manager.navigationState.currentParentId = task.id
@@ -271,7 +271,7 @@ struct KeyboardShortcutRouter {
     // shared parent-id navigation so the keybind behaves consistently.
     if !isFocused && !rootScopeFocused && matches(.kanbanEnterTaskChildren) {
       if !isRepeat {
-        if manager.rootTaskView == .kanban {
+        if manager.taskListViewModel.rootTaskView == .kanban {
           manager.kanban.enterSelectedTaskAsScope()
         } else {
           manager.taskNavigationService.enterChildren()
@@ -294,7 +294,7 @@ struct KeyboardShortcutRouter {
     }
     if !isFocused && !rootScopeFocused && matches(.kanbanExitToTaskParent) {
       if !isRepeat {
-        if manager.rootTaskView == .kanban {
+        if manager.taskListViewModel.rootTaskView == .kanban {
           manager.kanban.exitToParentScope()
         } else {
           if !manager.quickEntry.searchText.isEmpty {
@@ -350,7 +350,7 @@ struct KeyboardShortcutRouter {
         }
         return true
       }
-      if manager.rootTaskView == .kanban {
+      if manager.taskListViewModel.rootTaskView == .kanban {
         manager.kanban.nextKanbanTask()
       } else {
         manager.taskNavigationService.nextTask()
@@ -369,7 +369,7 @@ struct KeyboardShortcutRouter {
         manager.navigationState.rootScopeFocusLevel = manager.rootScopeShowsFilterControls ? 2 : 1
         return true
       }
-      if manager.rootTaskView == .kanban {
+      if manager.taskListViewModel.rootTaskView == .kanban {
         manager.kanban.previousKanbanTask()
       } else {
         manager.taskNavigationService.previousTask()
@@ -402,7 +402,7 @@ struct KeyboardShortcutRouter {
     }
 
     // In kanban mode, ←/→ (h/l) navigate between columns without moving the task.
-    if manager.rootTaskView == .kanban && !isFocused && !rootScopeFocused {
+    if manager.taskListViewModel.rootTaskView == .kanban && !isFocused && !rootScopeFocused {
       if matches(.kanbanFocusLeft) {
         manager.kanban.focusKanbanColumn(direction: -1)
         updateTitle()
@@ -469,7 +469,7 @@ struct KeyboardShortcutRouter {
       }
       if isFocused { return false }
       // In kanban mode, Enter opens the inline add field in the focused column.
-      if manager.rootTaskView == .kanban {
+      if manager.taskListViewModel.rootTaskView == .kanban {
         let columns = manager.kanban.kanbanColumns
         let idx = manager.kanban.kanbanFocusedColumnIndex
         if columns.indices.contains(idx) {
@@ -663,11 +663,11 @@ struct KeyboardShortcutRouter {
         if let task = manager.currentTask {
           manager.repository.setUrgency(taskId: task.id, level: urgency)
           manager.repository.setImportance(taskId: task.id, level: importance)
-          manager.errorMessage = nil
+          manager.repository.errorMessage = nil
           manager.statusMessage = "Matrix: (\(Int(urgency)), \(Int(importance)))"
           updateTitle()
         } else {
-          manager.errorMessage = "No task selected."
+          manager.repository.errorMessage = "No task selected."
         }
         return true
       }
@@ -793,7 +793,7 @@ struct KeyboardShortcutRouter {
 
     // H (Shift+h) - toggle hide future.
     if !isFocused && matches(.toggleHideFuture) {
-      manager.hideFuture.toggle()
+      manager.taskListViewModel.hideFuture.toggle()
       return true
     }
 
@@ -823,17 +823,17 @@ struct KeyboardShortcutRouter {
     // = sends to the back of prioritized tasks, - clears priority.
     if !isFocused && !rootScopeFocused {
       if matches(.clearAbsolutePriority) {
-        manager.clearAbsolutePriorityForCurrentTask()
+        manager.taskMutationService.clearAbsolutePriorityForCurrentTask()
         updateTitle()
         return true
       }
       if matches(.clearPriority) {
-        manager.clearPriorityForCurrentTask()
+        manager.taskMutationService.clearPriorityForCurrentTask()
         updateTitle()
         return true
       }
       if matches(.pushPriorityBack) {
-        manager.sendCurrentTaskToPriorityBack()
+        manager.taskMutationService.sendCurrentTaskToPriorityBack()
         updateTitle()
         return true
       }
@@ -856,7 +856,7 @@ struct KeyboardShortcutRouter {
         let priority = Int(chars) ?? keyCodePriority,
         (1...TaskRepository.maxPriorityRank).contains(priority)
       {
-        manager.setPriorityForCurrentTask(priority)
+        manager.taskMutationService.setPriorityForCurrentTask(priority)
         updateTitle()
         return true
       }
@@ -864,7 +864,7 @@ struct KeyboardShortcutRouter {
         let priority = Int(chars) ?? keyCodePriority,
         (1...TaskRepository.maxPriorityRank).contains(priority)
       {
-        manager.setAbsolutePriorityForCurrentTask(priority)
+        manager.taskMutationService.setAbsolutePriorityForCurrentTask(priority)
         updateTitle()
         return true
       }

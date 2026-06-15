@@ -26,7 +26,7 @@ private struct CheckvistSyncPluginSettingsView: View {
   }
 
   private var isBusy: Bool {
-    manager.isLoading || isLoadingLists
+    manager.repository.isLoading || isLoadingLists
   }
 
   private var connectButtonLabel: String {
@@ -65,7 +65,14 @@ private struct CheckvistSyncPluginSettingsView: View {
             Text("Email")
               .font(.caption)
               .foregroundColor(.secondary)
-            TextField("", text: $manager.username, prompt: Text("email@example.com"))
+            TextField(
+              "",
+              text: Binding(
+                get: { manager.repository.username },
+                set: { manager.repository.username = $0 }
+              ),
+              prompt: Text("email@example.com")
+            )
               .textFieldStyle(.roundedBorder)
               .labelsHidden()
               .autocorrectionDisabled()
@@ -78,7 +85,14 @@ private struct CheckvistSyncPluginSettingsView: View {
               Link("Where do I find this?", destination: checkvistAPIKeyURL)
                 .font(.caption)
             }
-            SecureField("", text: $manager.remoteKey, prompt: Text("Paste your key"))
+            SecureField(
+              "",
+              text: Binding(
+                get: { manager.repository.remoteKey },
+                set: { manager.repository.remoteKey = $0 }
+              ),
+              prompt: Text("Paste your key")
+            )
               .textFieldStyle(.roundedBorder)
               .labelsHidden()
           }
@@ -102,10 +116,10 @@ private struct CheckvistSyncPluginSettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
               Picker("", selection: activeWorkspaceBinding) {
                 Text("Offline workspace").tag("")
-                if !manager.listId.isEmpty && !isCurrentListInAvailableLists {
-                  Text("Current list (\(manager.listId))").tag(manager.listId)
+                if !manager.repository.listId.isEmpty && !isCurrentListInAvailableLists {
+                  Text("Current list (\(manager.repository.listId))").tag(manager.repository.listId)
                 }
-                ForEach(manager.availableLists) { list in
+                ForEach(manager.repository.availableLists) { list in
                   Text(list.name).tag(String(list.id))
                 }
               }
@@ -118,9 +132,9 @@ private struct CheckvistSyncPluginSettingsView: View {
             }
           }
 
-          if let errorMessage = manager.errorMessage {
+          if let errorMessage = manager.repository.errorMessage {
             errorBanner(message: errorMessage) {
-              manager.errorMessage = nil
+              manager.repository.errorMessage = nil
             }
           }
         }
@@ -135,17 +149,17 @@ private struct CheckvistSyncPluginSettingsView: View {
     .task {
       guard !didAutoloadLists else { return }
       didAutoloadLists = true
-      if manager.canAttemptLogin && manager.availableLists.isEmpty {
+      if manager.canAttemptLogin && manager.repository.availableLists.isEmpty {
         await loadLists(assignFirstIfMissing: false)
       }
       seedUploadDestinationIfNeeded()
     }
-    .onChange(of: manager.availableLists.map(\.id)) { _, _ in
+    .onChange(of: manager.repository.availableLists.map(\.id)) { _, _ in
       seedUploadDestinationIfNeeded()
     }
-    .onChange(of: manager.listId) { _, _ in
-      if !manager.listId.isEmpty {
-        uploadDestinationListId = manager.listId
+    .onChange(of: manager.repository.listId) { _, _ in
+      if !manager.repository.listId.isEmpty {
+        uploadDestinationListId = manager.repository.listId
       }
     }
   }
@@ -249,7 +263,7 @@ private struct CheckvistSyncPluginSettingsView: View {
         message: "Click Connect to sign in and load your lists."
       )
     case .connected(let listCount):
-      let email = manager.username
+      let email = manager.repository.username
       let listWord = listCount == 1 ? "list" : "lists"
       return StatusStyle(
         iconName: "checkmark.circle.fill",
@@ -262,7 +276,7 @@ private struct CheckvistSyncPluginSettingsView: View {
 
   private var activeWorkspaceBinding: Binding<String> {
     Binding(
-      get: { manager.listId },
+      get: { manager.repository.listId },
       set: { newValue in
         Task { await manager.syncService.switchCheckvistList(to: newValue) }
       }
@@ -270,17 +284,17 @@ private struct CheckvistSyncPluginSettingsView: View {
   }
 
   private var isCurrentListInAvailableLists: Bool {
-    manager.availableLists.contains { String($0.id) == manager.listId }
+    manager.repository.availableLists.contains { String($0.id) == manager.repository.listId }
   }
 
   private func workspaceCaption(listCount: Int) -> String {
-    if manager.listId.isEmpty {
+    if manager.repository.listId.isEmpty {
       return "Pick a Checkvist list above to start syncing."
     }
-    if let active = manager.availableLists.first(where: { String($0.id) == manager.listId }) {
+    if let active = manager.repository.availableLists.first(where: { String($0.id) == manager.repository.listId }) {
       return "Bar Tasker is syncing with “\(active.name)”."
     }
-    return "Bar Tasker is syncing with list ID \(manager.listId)."
+    return "Bar Tasker is syncing with list ID \(manager.repository.listId)."
   }
 
   private var uploadOfflineTasksSection: some View {
@@ -298,9 +312,9 @@ private struct CheckvistSyncPluginSettingsView: View {
         .font(.caption)
         .foregroundColor(.secondary)
 
-        if !manager.availableLists.isEmpty {
+        if !manager.repository.availableLists.isEmpty {
           Picker("Destination List", selection: $uploadDestinationListId) {
-            ForEach(manager.availableLists) { list in
+            ForEach(manager.repository.availableLists) { list in
               Text("\(list.name) (\(list.id))").tag(String(list.id))
             }
           }
@@ -308,9 +322,9 @@ private struct CheckvistSyncPluginSettingsView: View {
 
           HStack {
             Button("Use Active List") {
-              uploadDestinationListId = manager.listId
+              uploadDestinationListId = manager.repository.listId
             }
-            .disabled(manager.listId.isEmpty)
+            .disabled(manager.repository.listId.isEmpty)
 
             Button("Upload Offline Tasks") {
               Task {
@@ -339,21 +353,21 @@ private struct CheckvistSyncPluginSettingsView: View {
   }
 
   private func seedUploadDestinationIfNeeded() {
-    guard !manager.availableLists.isEmpty else {
+    guard !manager.repository.availableLists.isEmpty else {
       uploadDestinationListId = ""
       return
     }
 
-    let listIDs = Set(manager.availableLists.map { String($0.id) })
+    let listIDs = Set(manager.repository.availableLists.map { String($0.id) })
 
     if !uploadDestinationListId.isEmpty, !listIDs.contains(uploadDestinationListId) {
       uploadDestinationListId = ""
     }
 
     if uploadDestinationListId.isEmpty {
-      if listIDs.contains(manager.listId) {
-        uploadDestinationListId = manager.listId
-      } else if let first = manager.availableLists.first {
+      if listIDs.contains(manager.repository.listId) {
+        uploadDestinationListId = manager.repository.listId
+      } else if let first = manager.repository.availableLists.first {
         uploadDestinationListId = String(first.id)
       }
     }

@@ -29,8 +29,8 @@ extension PopoverView {
     let showsSelectedStyling = isSelected && !showsInlineComposer && listFocusIsActive
     let showsInactiveSelection = isSelected && !showsInlineComposer && !listFocusIsActive
     let isCompleting = manager.quickEntry.completingTaskId == task.id
-    let hasObsidianNoteLink = manager.integrations.hasObsidianSyncedNote(task: task, tasks: manager.tasks)
-    let hasGoogleCalendarLink = manager.integrations.hasGoogleCalendarEventLink(taskId: task.id, listId: manager.listId)
+    let hasObsidianNoteLink = manager.integrations.hasObsidianSyncedNote(task: task, tasks: repository.tasks)
+    let hasGoogleCalendarLink = manager.integrations.hasGoogleCalendarEventLink(taskId: task.id, listId: repository.listId)
 
     HStack(alignment: .top, spacing: PopoverLayout.rowContentSpacing) {
       VStack(alignment: .leading, spacing: 3) {

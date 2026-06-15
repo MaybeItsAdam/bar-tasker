@@ -6,24 +6,27 @@ import OSLog
 /// position/parent edits (move, indent, unindent) that need a serialised
 /// reorder queue talking to the active sync plugin.
 ///
-/// Like the other Phase-3 services, it keeps a `weak` reference to
-/// `AppCoordinator` for state it doesn't yet own (`tasks`, `errorMessage`,
-/// the navigation cursor, sibling managers like `kanban`, `timer`,
-/// `focusSessionManager`, `integrations`) and for forwarding helpers that
-/// still live on the coordinator (`updateTask`, `applyOptimisticMoveAndSync`,
-/// `subtreeBlockRange`, `runBooleanMutation`, `withLoadingState`,
-/// `beginLoading` / `endLoading`, `savePriorityQueue`,
-/// `reconcilePriorityQueueWithOpenTasks`,
+/// Owns the raw network/auth state directly via a strong `TaskRepository`
+/// reference — `listId`, `errorMessage`, `activeCredentials`, and the active
+/// sync plugin all come from there, no coordinator forwarder hop. It still
+/// keeps a `weak` reference to `AppCoordinator` for the sibling managers it
+/// orchestrates (`kanban`, `timer`, `focusSessionManager`, `integrations`,
+/// `taskListViewModel`, `navigationState`) and for helpers that still live on
+/// the coordinator (`applyOptimisticMoveAndSync`, `subtreeBlockRange`,
+/// `runBooleanMutation`, `withLoadingState`, `beginLoading` / `endLoading`,
+/// `savePriorityQueue`, `reconcilePriorityQueueWithOpenTasks`,
 /// `reconcilePendingObsidianSyncQueueWithOpenTasks`,
 /// `setAuthenticationRequiredErrorIfNeeded`).
 @MainActor
 final class SyncService {
   private weak var coordinator: AppCoordinator?
+  private let repository: TaskRepository
   private let logger = Logger(
     subsystem: "uk.co.maybeitsadam.bar-tasker", category: "sync")
 
-  init(coordinator: AppCoordinator) {
+  init(coordinator: AppCoordinator, repository: TaskRepository) {
     self.coordinator = coordinator
+    self.repository = repository
   }
 
   // MARK: - Authentication & Fetch
@@ -35,24 +38,24 @@ final class SyncService {
 
   func fetchTopTask() async {
     guard let coordinator else { return }
-    if coordinator.canSyncRemotely && coordinator.listId.isEmpty { return }
+    if coordinator.canSyncRemotely && repository.listId.isEmpty { return }
 
-    coordinator.errorMessage = nil
+    repository.errorMessage = nil
 
     do {
-      try await coordinator.withLoadingState {
-        let previousTasks = coordinator.tasks
+      try await repository.withLoadingState {
+        let previousTasks = coordinator.repository.tasks
         let fetchedTasks = try await coordinator.repository.activeSyncPlugin.fetchOpenTasks(
-          listId: coordinator.listId,
-          credentials: coordinator.activeCredentials
+          listId: repository.listId,
+          credentials: repository.activeCredentials
         )
 
-        coordinator.tasks = fetchedTasks
+        coordinator.repository.tasks = fetchedTasks
         coordinator.repository.activeSyncPlugin.persistTaskCache(
-          listId: coordinator.listId, tasks: fetchedTasks)
-        coordinator.reconcilePriorityQueueWithOpenTasks()
+          listId: repository.listId, tasks: fetchedTasks)
+        repository.reconcilePriorityQueueWithOpenTasks()
         coordinator.reconcilePendingObsidianSyncQueueWithOpenTasks()
-        if coordinator.rootTaskView == .kanban {
+        if coordinator.taskListViewModel.rootTaskView == .kanban {
           coordinator.kanban.clampKanbanSelection()
         } else if coordinator.navigationState.currentSiblingIndex >= fetchedTasks.count {
           coordinator.navigationState.currentSiblingIndex = 0
@@ -72,19 +75,19 @@ final class SyncService {
           !latestOpenTaskIDs.contains(filterParentId)
         {
           coordinator.kanban.kanbanFilterParentId = nil
-          if coordinator.rootTaskView == .kanban {
+          if coordinator.taskListViewModel.rootTaskView == .kanban {
             coordinator.navigationState.currentParentId = 0
           }
         }
-        if !coordinator.listId.isEmpty && coordinator.canAttemptLogin {
+        if !repository.listId.isEmpty && coordinator.canAttemptLogin {
           coordinator.onboardingCompleted = true
         }
       }
     } catch CheckvistSessionError.authenticationUnavailable {
-      coordinator.setAuthenticationRequiredErrorIfNeeded()
+      repository.setAuthenticationRequiredErrorIfNeeded()
     } catch {
       logger.error("Fetch tasks failed: \(error.localizedDescription, privacy: .public)")
-      coordinator.errorMessage = "Failed to fetch tasks: \(error.localizedDescription)"
+      repository.errorMessage = "Failed to fetch tasks: \(error.localizedDescription)"
     }
   }
 
@@ -104,15 +107,15 @@ final class SyncService {
   func switchCheckvistList(to rawListId: String) async {
     guard let coordinator else { return }
     let trimmedListId = rawListId.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard trimmedListId != coordinator.listId else { return }
+    guard trimmedListId != repository.listId else { return }
 
-    coordinator.listId = trimmedListId
+    repository.listId = trimmedListId
     coordinator.navigationState.currentParentId = 0
     coordinator.navigationState.currentSiblingIndex = 0
     coordinator.repository.clearPendingOfflineWork()
     coordinator.kanban.kanbanFilterParentId = nil
     coordinator.kanban.kanbanSelectedTaskId = nil
-    coordinator.errorMessage = nil
+    repository.errorMessage = nil
     await fetchTopTask()
   }
 
@@ -120,34 +123,34 @@ final class SyncService {
     guard let coordinator else { return false }
     let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedName.isEmpty else {
-      coordinator.errorMessage = "List name cannot be empty."
+      repository.errorMessage = "List name cannot be empty."
       return false
     }
 
-    coordinator.beginLoading()
-    defer { coordinator.endLoading() }
+    repository.beginLoading()
+    defer { repository.endLoading() }
 
     do {
       guard
         let createdList = try await coordinator.repository.activeSyncPlugin.createList(
           name: trimmedName,
-          credentials: coordinator.activeCredentials
+          credentials: repository.activeCredentials
         )
       else {
-        coordinator.errorMessage = "Failed to create list."
+        repository.errorMessage = "Failed to create list."
         return false
       }
 
       _ = await fetchLists()
       selectList(createdList)
-      coordinator.errorMessage = "Created and switched to list: \(createdList.name)"
+      repository.errorMessage = "Created and switched to list: \(createdList.name)"
       await fetchTopTask()
       return true
     } catch CheckvistSessionError.authenticationUnavailable {
-      coordinator.setAuthenticationRequiredErrorIfNeeded()
+      repository.setAuthenticationRequiredErrorIfNeeded()
       return false
     } catch {
-      coordinator.errorMessage = "Failed to create list: \(error.localizedDescription)"
+      repository.errorMessage = "Failed to create list: \(error.localizedDescription)"
       return false
     }
   }
@@ -158,24 +161,24 @@ final class SyncService {
     let destination = destinationListId.trimmingCharacters(in: .whitespacesAndNewlines)
 
     guard !source.isEmpty, !destination.isEmpty else {
-      coordinator.errorMessage = "Choose both source and destination lists."
+      repository.errorMessage = "Choose both source and destination lists."
       return false
     }
     guard source != destination else {
-      coordinator.errorMessage = "Source and destination list must be different."
+      repository.errorMessage = "Source and destination list must be different."
       return false
     }
 
-    coordinator.beginLoading()
-    defer { coordinator.endLoading() }
+    repository.beginLoading()
+    defer { repository.endLoading() }
 
     do {
       let sourceTasks = try await coordinator.repository.activeSyncPlugin.fetchOpenTasks(
         listId: source,
-        credentials: coordinator.activeCredentials
+        credentials: repository.activeCredentials
       )
       guard !sourceTasks.isEmpty else {
-        coordinator.errorMessage = "Source list has no open tasks to merge."
+        repository.errorMessage = "Source list has no open tasks to merge."
         return false
       }
 
@@ -193,20 +196,20 @@ final class SyncService {
 
       let migrationResult = try await copyTasks(orderedTasks, to: destination)
 
-      if destination == coordinator.listId {
+      if destination == repository.listId {
         await fetchTopTask()
       }
 
-      coordinator.errorMessage =
+      repository.errorMessage =
         migrationResult.skippedCount > 0
         ? "Merged \(migrationResult.mergedCount) tasks (\(migrationResult.skippedCount) skipped)."
         : "Merged \(migrationResult.mergedCount) tasks."
       return true
     } catch CheckvistSessionError.authenticationUnavailable {
-      coordinator.setAuthenticationRequiredErrorIfNeeded()
+      repository.setAuthenticationRequiredErrorIfNeeded()
       return false
     } catch {
-      coordinator.errorMessage = "Failed to merge lists: \(error.localizedDescription)"
+      repository.errorMessage = "Failed to merge lists: \(error.localizedDescription)"
       return false
     }
   }
@@ -219,41 +222,41 @@ final class SyncService {
     guard let coordinator else { return false }
     let destination = destinationListId.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !destination.isEmpty else {
-      coordinator.errorMessage = "Choose a Checkvist destination list."
+      repository.errorMessage = "Choose a Checkvist destination list."
       return false
     }
 
     let offlineTasks =
       (try? await coordinator.repository.offlineSyncPlugin.fetchOpenTasks(
-        listId: "", credentials: coordinator.activeCredentials)) ?? []
+        listId: "", credentials: repository.activeCredentials)) ?? []
     guard !offlineTasks.isEmpty else {
-      coordinator.errorMessage = "No offline tasks are available to upload."
+      repository.errorMessage = "No offline tasks are available to upload."
       return false
     }
 
     let loginSucceeded = await login()
     guard loginSucceeded else { return false }
 
-    coordinator.beginLoading()
-    defer { coordinator.endLoading() }
+    repository.beginLoading()
+    defer { repository.endLoading() }
 
     do {
       let migrationResult = try await copyTasks(offlineTasks, to: destination)
 
-      if destination == coordinator.listId {
+      if destination == repository.listId {
         await fetchTopTask()
       }
 
-      coordinator.errorMessage =
+      repository.errorMessage =
         migrationResult.skippedCount > 0
         ? "Uploaded \(migrationResult.mergedCount) offline tasks (\(migrationResult.skippedCount) skipped)."
         : "Uploaded \(migrationResult.mergedCount) offline tasks."
       return true
     } catch CheckvistSessionError.authenticationUnavailable {
-      coordinator.setAuthenticationRequiredErrorIfNeeded()
+      repository.setAuthenticationRequiredErrorIfNeeded()
       return false
     } catch {
-      coordinator.errorMessage = "Failed to upload offline tasks: \(error.localizedDescription)"
+      repository.errorMessage = "Failed to upload offline tasks: \(error.localizedDescription)"
       return false
     }
   }
@@ -309,15 +312,15 @@ final class SyncService {
 
       do {
         if let newTask = try await repo.activeSyncPlugin.createTask(
-          listId: coordinator.listId,
+          listId: repository.listId,
           content: pending.content,
           parentId: resolvedParentId,
           position: pending.position,
-          credentials: coordinator.activeCredentials
+          credentials: repository.activeCredentials
         ) {
           tempIdToRealId[pending.tempId] = newTask.id
-          if let idx = coordinator.tasks.firstIndex(where: { $0.id == pending.tempId }) {
-            coordinator.tasks[idx] = newTask
+          if let idx = coordinator.repository.tasks.firstIndex(where: { $0.id == pending.tempId }) {
+            coordinator.repository.tasks[idx] = newTask
           }
         } else {
           repo.enqueuePendingCreate(pending)
@@ -338,9 +341,9 @@ final class SyncService {
       }
       do {
         _ = try await repo.activeSyncPlugin.deleteTask(
-          listId: coordinator.listId,
+          listId: repository.listId,
           taskId: realId,
-          credentials: coordinator.activeCredentials)
+          credentials: repository.activeCredentials)
       } catch {
         repo.enqueuePendingDelete(realId)
         anyFailure = true
@@ -353,10 +356,10 @@ final class SyncService {
       guard let realId = resolve(pending.taskId) else { continue }
       do {
         _ = try await repo.activeSyncPlugin.performTaskAction(
-          listId: coordinator.listId,
+          listId: repository.listId,
           taskId: realId,
           action: pending.action,
-          credentials: coordinator.activeCredentials)
+          credentials: repository.activeCredentials)
       } catch {
         repo.enqueuePendingAction(
           PendingTaskAction(taskId: realId, action: pending.action))
@@ -370,11 +373,11 @@ final class SyncService {
       guard let realId = resolve(tempOrRealId) else { continue }
       do {
         _ = try await repo.activeSyncPlugin.updateTask(
-          listId: coordinator.listId,
+          listId: repository.listId,
           taskId: realId,
           content: mutation.content,
           due: mutation.due,
-          credentials: coordinator.activeCredentials)
+          credentials: repository.activeCredentials)
       } catch {
         repo.enqueuePendingMutation(
           taskId: realId, content: mutation.content, due: mutation.due)
@@ -395,7 +398,7 @@ final class SyncService {
     guard let coordinator else { return }
     guard direction == -1 || direction == 1 else { return }
 
-    switch coordinator.rootTaskView {
+    switch coordinator.taskListViewModel.rootTaskView {
     case .priority:
       movePriorityTask(task, direction: direction)
     case .kanban:
@@ -413,7 +416,7 @@ final class SyncService {
   private func swapWithSiblingNeighbour(task: CheckvistTask, direction: Int) {
     guard let coordinator else { return }
     let siblings =
-      coordinator.tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
+      coordinator.repository.tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }) else { return }
     let newIdx = idx + direction
     guard siblings.indices.contains(newIdx) else { return }
@@ -460,8 +463,8 @@ final class SyncService {
     if neighbourDue != taskDue {
       let neighbourPos = neighbour.position ?? 1
       let newPosition = direction < 0 ? max(1, neighbourPos - 1) : neighbourPos + 1
-      if let idx = coordinator.tasks.firstIndex(where: { $0.id == task.id }) {
-        coordinator.tasks[idx] = taskWithPosition(coordinator.tasks[idx], position: newPosition)
+      if let idx = coordinator.repository.tasks.firstIndex(where: { $0.id == task.id }) {
+        coordinator.repository.tasks[idx] = taskWithPosition(coordinator.repository.tasks[idx], position: newPosition)
       }
       coordinator.applyOptimisticMoveAndSync(task: task, content: nil, due: neighbourDue)
       enqueueReorderRequest(taskId: task.id, position: newPosition)
@@ -484,11 +487,11 @@ final class SyncService {
     // happened at all.
     let neighbourTargetPosition = max(1, targetPosition - direction)
 
-    if let movingRange = coordinator.subtreeBlockRange(for: task.id, in: coordinator.tasks),
+    if let movingRange = coordinator.subtreeBlockRange(for: task.id, in: coordinator.repository.tasks),
       let neighbourRange =
-        coordinator.subtreeBlockRange(for: neighbour.id, in: coordinator.tasks)
+        coordinator.subtreeBlockRange(for: neighbour.id, in: coordinator.repository.tasks)
     {
-      var updated = coordinator.tasks
+      var updated = coordinator.repository.tasks
       let movingBlock = Array(updated[movingRange])
       updated.removeSubrange(movingRange)
 
@@ -511,7 +514,7 @@ final class SyncService {
           updated[neighbourIdx], position: neighbourTargetPosition)
       }
 
-      coordinator.tasks = updated
+      coordinator.repository.tasks = updated
       // Keep selection anchored to the moved task in the currently visible
       // list.
       if let visibleIdx = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
@@ -558,7 +561,7 @@ final class SyncService {
       var queue = updated[p1] ?? []
       queue.swapAt(i1, i2)
       updated[p1] = queue
-      coordinator.savePriorityQueue(updated)
+      repository.savePriorityQueue(updated)
       coordinator.navigationState.currentSiblingIndex = newIdx
     }
   }
@@ -628,14 +631,14 @@ final class SyncService {
     guard let coordinator else { return false }
     do {
       let success = try await coordinator.repository.activeSyncPlugin.moveTask(
-        listId: coordinator.listId,
+        listId: repository.listId,
         taskId: taskId,
         position: position,
-        credentials: coordinator.activeCredentials
+        credentials: repository.activeCredentials
       )
       if !success {
         await MainActor.run { [weak coordinator] in
-          coordinator?.errorMessage = "Failed to move task."
+          coordinator?.repository.errorMessage = "Failed to move task."
         }
         return false
       }
@@ -644,7 +647,7 @@ final class SyncService {
       return false
     } catch {
       await MainActor.run { [weak coordinator] in
-        coordinator?.errorMessage = "Error: \(error.localizedDescription)"
+        coordinator?.repository.errorMessage = "Error: \(error.localizedDescription)"
       }
       return false
     }
@@ -668,19 +671,19 @@ final class SyncService {
   func indentTask(_ task: CheckvistTask) async {
     guard let coordinator else { return }
     let siblings =
-      coordinator.tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
+      coordinator.repository.tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }), idx > 0 else { return }
     let newParent = siblings[idx - 1]
 
-    await coordinator.runBooleanMutation(
+    await repository.runBooleanMutation(
       failureMessage: "Failed to indent task.",
       errorMessageBuilder: { "Error indenting task: \($0.localizedDescription)" },
       action: {
         try await coordinator.repository.activeSyncPlugin.reparentTask(
-          listId: coordinator.listId,
+          listId: repository.listId,
           taskId: task.id,
           parentId: newParent.id,
-          credentials: coordinator.activeCredentials
+          credentials: repository.activeCredentials
         )
       },
       onSuccess: { [weak self] in
@@ -692,18 +695,18 @@ final class SyncService {
   func unindentTask(_ task: CheckvistTask) async {
     guard let coordinator else { return }
     guard let parentId = task.parentId, parentId != 0 else { return }
-    guard let parent = coordinator.tasks.first(where: { $0.id == parentId }) else { return }
+    guard let parent = coordinator.repository.tasks.first(where: { $0.id == parentId }) else { return }
     let newParentId = parent.parentId ?? 0
 
-    await coordinator.runBooleanMutation(
+    await repository.runBooleanMutation(
       failureMessage: "Failed to unindent task.",
       errorMessageBuilder: { "Error unindenting task: \($0.localizedDescription)" },
       action: {
         try await coordinator.repository.activeSyncPlugin.reparentTask(
-          listId: coordinator.listId,
+          listId: repository.listId,
           taskId: task.id,
           parentId: newParentId == 0 ? nil : newParentId,
-          credentials: coordinator.activeCredentials
+          credentials: repository.activeCredentials
         )
       },
       onSuccess: { [weak self] in

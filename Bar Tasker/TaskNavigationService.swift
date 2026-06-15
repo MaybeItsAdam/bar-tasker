@@ -90,7 +90,7 @@ final class TaskNavigationService {
   func clampSelectionToVisibleRange() {
     guard let coordinator else { return }
     coordinator.focusSessionManager.clampForTasks(repository.tasks)
-    if coordinator.rootTaskView == .kanban {
+    if coordinator.taskListViewModel.rootTaskView == .kanban {
       coordinator.kanban.clampKanbanSelection()
       return
     }
@@ -110,7 +110,7 @@ final class TaskNavigationService {
     // selection, not the task the user had highlighted in the source view.
     let capturedParentId = navigationState.currentParentId
     let capturedTask = coordinator.currentTask
-    coordinator.rootTaskView = view
+    coordinator.taskListViewModel.rootTaskView = view
 
     // Preserve drill-in across view switches. Previously we reset
     // currentParentId to 0 which lost the user's subtask scope whenever they
@@ -124,10 +124,10 @@ final class TaskNavigationService {
       navigationState.currentSiblingIndex = 0
     }
     if view != .due {
-      coordinator.selectedRootDueBucket = nil
+      coordinator.taskListViewModel.selectedRootDueBucket = nil
     }
     if view != .tags {
-      coordinator.selectedRootTag = ""
+      coordinator.taskListViewModel.selectedRootTag = ""
     }
     if view != .kanban {
       coordinator.kanban.kanbanFilterSubtasks = false
@@ -149,7 +149,7 @@ final class TaskNavigationService {
   func cycleRootTaskView(direction: Int) {
     guard let coordinator else { return }
     let allViews = coordinator.orderedRootTaskViews
-    guard let currentIndex = allViews.firstIndex(of: coordinator.rootTaskView) else { return }
+    guard let currentIndex = allViews.firstIndex(of: coordinator.taskListViewModel.rootTaskView) else { return }
     let nextIndex = max(0, min(allViews.count - 1, currentIndex + direction))
     guard nextIndex != currentIndex else { return }
     setRootTaskView(allViews[nextIndex])
@@ -158,31 +158,31 @@ final class TaskNavigationService {
   func cycleRootScopeFilter(direction: Int) {
     guard let coordinator else { return }
     guard coordinator.shouldShowRootScopeSection else { return }
-    switch coordinator.rootTaskView {
+    switch coordinator.taskListViewModel.rootTaskView {
     case .all, .priority, .eisenhower, .kanban:
       return
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
       guard
-        let currentIndex = options.firstIndex(where: { $0 == coordinator.selectedRootDueBucket })
+        let currentIndex = options.firstIndex(where: { $0 == coordinator.taskListViewModel.selectedRootDueBucket })
       else {
-        coordinator.selectedRootDueBucket = nil
+        coordinator.taskListViewModel.selectedRootDueBucket = nil
         navigationState.currentSiblingIndex = 0
         return
       }
       let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
-      coordinator.selectedRootDueBucket = options[nextIndex]
+      coordinator.taskListViewModel.selectedRootDueBucket = options[nextIndex]
       navigationState.currentSiblingIndex = 0
     case .tags:
       let tags = coordinator.rootLevelTagNames(limit: 30)
       let options = [""] + tags
-      guard let currentIndex = options.firstIndex(of: coordinator.selectedRootTag) else {
-        coordinator.selectedRootTag = ""
+      guard let currentIndex = options.firstIndex(of: coordinator.taskListViewModel.selectedRootTag) else {
+        coordinator.taskListViewModel.selectedRootTag = ""
         navigationState.currentSiblingIndex = 0
         return
       }
       let nextIndex = max(0, min(options.count - 1, currentIndex + direction))
-      coordinator.selectedRootTag = options[nextIndex]
+      coordinator.taskListViewModel.selectedRootTag = options[nextIndex]
       navigationState.currentSiblingIndex = 0
     }
   }
@@ -190,19 +190,19 @@ final class TaskNavigationService {
   func selectRootScopeFilter(at index: Int) {
     guard let coordinator else { return }
     guard coordinator.shouldShowRootScopeSection, index >= 0 else { return }
-    switch coordinator.rootTaskView {
+    switch coordinator.taskListViewModel.rootTaskView {
     case .all, .priority, .eisenhower, .kanban:
       return
     case .due:
       let options: [RootDueBucket?] = [nil] + RootDueBucket.allCases.filter { $0 != .noDueDate }
       guard options.indices.contains(index) else { return }
-      coordinator.selectedRootDueBucket = options[index]
+      coordinator.taskListViewModel.selectedRootDueBucket = options[index]
       navigationState.currentSiblingIndex = 0
       navigationState.rootScopeFocusLevel = 2
     case .tags:
       let options = [""] + coordinator.rootLevelTagNames(limit: 30)
       guard options.indices.contains(index) else { return }
-      coordinator.selectedRootTag = options[index]
+      coordinator.taskListViewModel.selectedRootTag = options[index]
       navigationState.currentSiblingIndex = 0
       navigationState.rootScopeFocusLevel = 2
     }

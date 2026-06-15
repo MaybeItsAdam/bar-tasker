@@ -22,16 +22,16 @@ extension SettingsView {
             .font(.caption)
             .foregroundColor(themeColor(.textSecondary))
 
-          if checkvistManager.availableLists.count >= 2 {
+          if checkvistManager.repository.availableLists.count >= 2 {
             Picker("From", selection: $mergeSourceListId) {
-              ForEach(checkvistManager.availableLists) { list in
+              ForEach(checkvistManager.repository.availableLists) { list in
                 Text("\(list.name) (\(list.id))").tag(String(list.id))
               }
             }
             .pickerStyle(.menu)
 
             Picker("Into", selection: $mergeDestinationListId) {
-              ForEach(checkvistManager.availableLists) { list in
+              ForEach(checkvistManager.repository.availableLists) { list in
                 Text("\(list.name) (\(list.id))").tag(String(list.id))
               }
             }
@@ -39,9 +39,9 @@ extension SettingsView {
 
             HStack {
               Button("Use Active List as Destination") {
-                mergeDestinationListId = checkvistManager.listId
+                mergeDestinationListId = checkvistManager.repository.listId
               }
-              .disabled(checkvistManager.listId.isEmpty)
+              .disabled(checkvistManager.repository.listId.isEmpty)
 
               Button("Merge Open Tasks") {
                 Task {
@@ -52,7 +52,7 @@ extension SettingsView {
                 }
               }
               .disabled(
-                checkvistManager.isLoading || isLoadingCheckvistLists || mergeSourceListId.isEmpty
+                checkvistManager.repository.isLoading || isLoadingCheckvistLists || mergeSourceListId.isEmpty
                   || mergeDestinationListId.isEmpty
                   || mergeSourceListId == mergeDestinationListId
                   || !checkvistManager.canAttemptLogin
@@ -181,7 +181,7 @@ extension SettingsView {
         }
       }
 
-      if let errorMessage = checkvistManager.errorMessage {
+      if let errorMessage = checkvistManager.repository.errorMessage {
         Text(errorMessage)
           .foregroundColor(themeColor(.danger))
           .font(.caption)
@@ -222,13 +222,13 @@ extension SettingsView {
     case .awaitingConnect:
       return "Credentials entered"
     case .connected:
-      if let active = checkvistManager.availableLists.first(where: {
-        String($0.id) == checkvistManager.listId
+      if let active = checkvistManager.repository.availableLists.first(where: {
+        String($0.id) == checkvistManager.repository.listId
       }) {
         return "Syncing with “\(active.name)”"
       }
-      if !checkvistManager.listId.isEmpty {
-        return "Syncing with list \(checkvistManager.listId)"
+      if !checkvistManager.repository.listId.isEmpty {
+        return "Syncing with list \(checkvistManager.repository.listId)"
       }
       return "Offline workspace active"
     }
@@ -247,7 +247,7 @@ extension SettingsView {
       return "Open Checkvist settings to finish connecting."
     case .connected(let listCount):
       let listWord = listCount == 1 ? "list" : "lists"
-      return "Connected as \(checkvistManager.username). \(listCount) \(listWord) available."
+      return "Connected as \(checkvistManager.repository.username). \(listCount) \(listWord) available."
     }
   }
 
@@ -265,7 +265,7 @@ extension SettingsView {
     didAutoloadCheckvistLists = true
 
     if checkvistManager.checkvistIntegrationEnabled, checkvistManager.canAttemptLogin,
-      checkvistManager.availableLists.isEmpty
+      checkvistManager.repository.availableLists.isEmpty
     {
       await loadCheckvistLists(assignFirstIfMissing: false)
     } else {
@@ -282,13 +282,13 @@ extension SettingsView {
   }
 
   func seedMergeSelectionsIfNeeded() {
-    guard !checkvistManager.availableLists.isEmpty else {
+    guard !checkvistManager.repository.availableLists.isEmpty else {
       mergeSourceListId = ""
       mergeDestinationListId = ""
       return
     }
 
-    let listIDs = Set(checkvistManager.availableLists.map { String($0.id) })
+    let listIDs = Set(checkvistManager.repository.availableLists.map { String($0.id) })
 
     if !mergeDestinationListId.isEmpty, !listIDs.contains(mergeDestinationListId) {
       mergeDestinationListId = ""
@@ -298,15 +298,15 @@ extension SettingsView {
     }
 
     if mergeDestinationListId.isEmpty {
-      if listIDs.contains(checkvistManager.listId) {
-        mergeDestinationListId = checkvistManager.listId
-      } else if let first = checkvistManager.availableLists.first {
+      if listIDs.contains(checkvistManager.repository.listId) {
+        mergeDestinationListId = checkvistManager.repository.listId
+      } else if let first = checkvistManager.repository.availableLists.first {
         mergeDestinationListId = String(first.id)
       }
     }
 
     if mergeSourceListId.isEmpty || mergeSourceListId == mergeDestinationListId {
-      if let source = checkvistManager.availableLists.first(where: {
+      if let source = checkvistManager.repository.availableLists.first(where: {
         String($0.id) != mergeDestinationListId
       }) {
         mergeSourceListId = String(source.id)

@@ -232,6 +232,7 @@ private struct KanbanColumnView: View {
 private struct KanbanTaskCard: View {
   @Environment(AppCoordinator.self) var manager
   @Environment(NavigationState.self) var navigationState
+  @Environment(TaskListViewModel.self) var taskListViewModel
   let task: CheckvistTask
   let isSelected: Bool
   let childCount: Int
@@ -245,7 +246,7 @@ private struct KanbanTaskCard: View {
   private var isCompleting: Bool { manager.quickEntry.completingTaskId == task.id }
 
   private func showInAllView() {
-    manager.rootTaskView = .all
+    taskListViewModel.rootTaskView = .all
     navigationState.rootScopeFocusLevel = 0
     if childCount > 0 {
       navigationState.currentParentId = task.id

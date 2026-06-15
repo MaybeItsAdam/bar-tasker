@@ -1,59 +1,12 @@
 import Foundation
 
 extension AppCoordinator {
-  // MARK: - Priority Queue (forwarding to repository)
-
-  func savePriorityQueue(_ queues: [Int: [Int]]) {
-    repository.savePriorityQueue(queues)
-  }
-
-  @MainActor func removeTasksFromPriorityQueue(_ taskIds: Set<Int>) {
-    repository.removeTasksFromPriorityQueue(taskIds)
-  }
-
-  @MainActor func reconcilePriorityQueueWithOpenTasks() {
-    repository.reconcilePriorityQueueWithOpenTasks()
-  }
+  // MARK: - Pending-Obsidian reconciliation (genuine cross-manager helper)
 
   @MainActor func reconcilePendingObsidianSyncQueueWithOpenTasks() {
     integrations.reconcilePendingObsidianSyncQueueWithOpenTasks(
       openTaskIds: Set(repository.tasks.map(\.id)),
       listId: repository.listId
-    )
-  }
-
-  // MARK: - Loading (forwarding to repository)
-
-  @MainActor func beginLoading() {
-    repository.beginLoading()
-  }
-
-  @MainActor func endLoading() {
-    repository.endLoading()
-  }
-
-  @MainActor
-  func withLoadingState<T>(_ operation: () async throws -> T) async rethrows -> T {
-    try await repository.withLoadingState(operation)
-  }
-
-  @MainActor
-  func setAuthenticationRequiredErrorIfNeeded() {
-    repository.setAuthenticationRequiredErrorIfNeeded()
-  }
-
-  @MainActor
-  func runBooleanMutation(
-    failureMessage: String,
-    errorMessageBuilder: @escaping (Error) -> String = { "Error: \($0.localizedDescription)" },
-    action: () async throws -> Bool,
-    onSuccess: @MainActor () async -> Void
-  ) async {
-    await repository.runBooleanMutation(
-      failureMessage: failureMessage,
-      errorMessageBuilder: errorMessageBuilder,
-      action: action,
-      onSuccess: onSuccess
     )
   }
 

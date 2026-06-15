@@ -71,10 +71,6 @@ Owns the toggles that shape what's visible, *and* the rebuilt `cache`. These `di
 `showChildrenInMenus`. `cache: CacheState` is `@ObservationIgnored` and rebuilt by
 `ensureVisibleTasksCacheValid()`.
 
-> ⚠️ `AppCoordinator`'s setters for `rootTaskView` / `selectedRootDueBucketRawValue` /
-> `selectedRootTag` add a **persistence side-effect** (`preferencesStore.set(...)`) on top of
-> the VM property. Those side-effects must move into the VM's own `didSet` before the
-> forwarders can be deleted (gating work noted in the plan's Phase-3 outcome).
 
 ### Feature managers (each owns its slice + persists to `PreferencesStore`)
 | Manager | Owns | Cache-relevant |
@@ -95,10 +91,16 @@ Owns the toggles that shape what's visible, *and* the rebuilt `cache`. These `di
 `taskMutationService`, `syncService`, `undoService`, `lifecycle`, plus `commandExecutor` and
 `reachabilityMonitor`.
 
-Everything else exposed on `AppCoordinator` (`tasks`, `currentParentId`, `hideFuture`,
-`username`, `listId`, `availableLists`, `cache`, `activeCredentials`, …) is a **forwarding
-property** into one of the owners above. Use this table to find the real owner; prefer reading
-from it directly in new code.
+The Phase-3 forwarder cull is finished: `AppCoordinator` no longer re-exposes
+`tasks` / `currentParentId` / `hideFuture` / `username` / `listId` / `availableLists` /
+`cache` / `activeCredentials` / `errorMessage` / `isLoading` / `remoteKey` /
+`taskEisenhowerLevels` etc. Read those directly from their owner: views via
+`@Environment(TaskRepository.self)` / `@Environment(NavigationState.self)` /
+`@Environment(TaskListViewModel.self)`; non-view callers via `manager.repository.X` /
+`manager.navigationState.X` / `manager.taskListViewModel.X`. The Phase-3 services
+(`SyncService`, `TaskMutationService`, `TaskNavigationService`) all take a strong
+`TaskRepository` reference in their initializers and read auth/list state from there
+directly — no coordinator forwarder hop.
 
 ## Cache-invalidation producer list (who fires the bus)
 

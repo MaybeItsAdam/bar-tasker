@@ -2,8 +2,8 @@ import Foundation
 
 extension AppCoordinator {
   var hasCredentials: Bool {
-    !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      && !remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    !repository.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !repository.remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   var canAttemptLogin: Bool {
@@ -12,14 +12,14 @@ extension AppCoordinator {
 
   var checkvistConnectionState: CheckvistConnectionState {
     if !hasCredentials { return .disconnected }
-    if availableLists.isEmpty {
-      return isLoading ? .connecting : .awaitingConnect
+    if repository.availableLists.isEmpty {
+      return repository.isLoading ? .connecting : .awaitingConnect
     }
-    return .connected(listCount: availableLists.count)
+    return .connected(listCount: repository.availableLists.count)
   }
 
   var hasListSelection: Bool {
-    !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    !repository.listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   var canSyncRemotely: Bool { repository.canSyncRemotely }
@@ -46,8 +46,8 @@ extension AppCoordinator {
 
   var mcpClientConfigurationPreview: String {
     integrations.mcpIntegrationPlugin.makeClientConfigurationJSON(
-      credentials: activeCredentials,
-      listId: listId,
+      credentials: repository.activeCredentials,
+      listId: repository.listId,
       redactSecrets: true
     )
   }
@@ -66,11 +66,11 @@ extension AppCoordinator {
 
   /// Tasks visible at the current level, sorted by position
   var currentLevelTasks: [CheckvistTask] {
-    tasks.filter { ($0.parentId ?? 0) == navigationState.currentParentId }
+    repository.tasks.filter { ($0.parentId ?? 0) == navigationState.currentParentId }
   }
 
   var currentTask: CheckvistTask? {
-    if rootTaskView == .kanban {
+    if taskListViewModel.rootTaskView == .kanban {
       return kanban.currentKanbanTask
     }
     let level = visibleTasks
@@ -101,7 +101,7 @@ extension AppCoordinator {
   /// Children of the currently focused task
   var currentTaskChildren: [CheckvistTask] {
     guard let task = currentTask else { return [] }
-    return tasks.filter { ($0.parentId ?? 0) == task.id }
+    return repository.tasks.filter { ($0.parentId ?? 0) == task.id }
   }
 
   /// Visible tasks: searches recursively through subtasks when filter active.
@@ -129,7 +129,7 @@ extension AppCoordinator {
   var shouldShowRootScopeSection: Bool { !needsInitialSetup && !isSearchFilterActive }
   var rootScopeShowsFilterControls: Bool {
     guard shouldShowRootScopeSection && isRootLevel else { return false }
-    switch rootTaskView {
+    switch taskListViewModel.rootTaskView {
     case .due, .tags:
       return true
     case .all, .priority, .kanban, .eisenhower:
@@ -137,14 +137,9 @@ extension AppCoordinator {
     }
   }
 
-  var selectedRootDueBucket: RootDueBucket? {
-    get { RootDueBucket(rawValue: selectedRootDueBucketRawValue) }
-    set { selectedRootDueBucketRawValue = newValue?.rawValue ?? -1 }
-  }
-
   func shouldShowBreadcrumbPath(for task: CheckvistTask) -> Bool {
     let pid = task.parentId ?? 0
-    if isRootLevel && shouldShowRootScopeSection && rootTaskView != .all {
+    if isRootLevel && shouldShowRootScopeSection && taskListViewModel.rootTaskView != .all {
       return pid != 0
     }
     if isSearchFilterActive {
@@ -180,7 +175,7 @@ extension AppCoordinator {
   /// header. Other tasks return nil.
   func remainderSectionHeader(atVisibleIndex index: Int) -> String? {
     guard let start = remainderStartIndex, index == start else { return nil }
-    switch rootTaskView {
+    switch taskListViewModel.rootTaskView {
     case .due:
       return start == 0 ? "All tasks" : "Other tasks"
     case .tags:
@@ -253,8 +248,8 @@ extension AppCoordinator {
   var isSearchFilterActive: Bool { quickEntry.isSearchFilterActive }
 
   var shouldShowDueSectionHeaders: Bool {
-    isRootLevel && shouldShowRootScopeSection && rootTaskView == .due
-      && selectedRootDueBucket == nil
+    isRootLevel && shouldShowRootScopeSection && taskListViewModel.rootTaskView == .due
+      && taskListViewModel.selectedRootDueBucket == nil
   }
 
   private func hasAnyTag(_ task: CheckvistTask) -> Bool {
@@ -273,19 +268,19 @@ extension AppCoordinator {
   }
 
   private func taskMatchesActiveRootScope(_ task: CheckvistTask) -> Bool {
-    switch rootTaskView {
+    switch taskListViewModel.rootTaskView {
     case .all:
       return true
     case .due:
-      if let selectedRootDueBucket {
+      if let selectedRootDueBucket = taskListViewModel.selectedRootDueBucket {
         return rootDueBucket(for: task) == selectedRootDueBucket
       }
       return rootDueBucket(for: task) != .noDueDate
     case .tags:
-      if selectedRootTag.isEmpty {
+      if taskListViewModel.selectedRootTag.isEmpty {
         return hasAnyTag(task)
       }
-      return hasTag(task, tag: selectedRootTag)
+      return hasTag(task, tag: taskListViewModel.selectedRootTag)
     case .priority:
       return absolutePriorityRank(for: task) != nil || priorityRank(for: task) != nil
     case .kanban:
@@ -301,110 +296,9 @@ extension AppCoordinator {
   }
 
 
-  @MainActor func setPriorityForCurrentTask(_ rank: Int) {
-    guard rank >= 1, let task = currentTask else { return }
-
-    let scopeId = task.parentId ?? 0
-    var byParent = repository.priorityTaskIdsByParentId
-    // Remove this task from any existing scope it may have previously lived in.
-    for (pid, ids) in byParent {
-      let filtered = ids.filter { $0 != task.id }
-      if filtered.count != ids.count {
-        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
-        else { byParent[pid] = filtered }
-      }
-    }
-    var scope = byParent[scopeId] ?? []
-    let insertIndex = min(max(rank - 1, 0), scope.count)
-    scope.insert(task.id, at: insertIndex)
-    byParent[scopeId] = scope
-    savePriorityQueue(byParent)
-    errorMessage = nil
-
-    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      navigationState.currentSiblingIndex = newIndex
-    }
-  }
-
-  @MainActor func setAbsolutePriorityForCurrentTask(_ rank: Int) {
-    guard rank >= 1, let task = currentTask else { return }
-    repository.setAbsolutePriority(taskId: task.id, rank: rank)
-    errorMessage = nil
-
-    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      navigationState.currentSiblingIndex = newIndex
-    }
-  }
-
-  @MainActor func sendCurrentTaskToPriorityBack() {
-    guard let task = currentTask else { return }
-
-    let scopeId = task.parentId ?? 0
-    var byParent = repository.priorityTaskIdsByParentId
-    for (pid, ids) in byParent {
-      let filtered = ids.filter { $0 != task.id }
-      if filtered.count != ids.count {
-        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
-        else { byParent[pid] = filtered }
-      }
-    }
-    var scope = byParent[scopeId] ?? []
-    scope.append(task.id)
-    byParent[scopeId] = scope
-    savePriorityQueue(byParent)
-    errorMessage = nil
-
-    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      navigationState.currentSiblingIndex = newIndex
-    }
-  }
-
-  @MainActor func clearPriorityForCurrentTask() {
-    guard let task = currentTask else { return }
-    guard repository.prioritizedTaskIds.contains(task.id) else { return }
-    var byParent = repository.priorityTaskIdsByParentId
-    for (pid, ids) in byParent {
-      let filtered = ids.filter { $0 != task.id }
-      if filtered.count != ids.count {
-        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
-        else { byParent[pid] = filtered }
-      }
-    }
-    savePriorityQueue(byParent)
-    errorMessage = nil
-
-    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      navigationState.currentSiblingIndex = newIndex
-    } else {
-      taskNavigationService.clampSelectionToVisibleRange()
-    }
-  }
-
-  @MainActor func clearAbsolutePriorityForCurrentTask() {
-    guard let task = currentTask else { return }
-    guard repository.absolutePrioritizedTaskIds.contains(task.id) else { return }
-    repository.clearAbsolutePriority(taskId: task.id)
-    errorMessage = nil
-
-    if let newIndex = visibleTasks.firstIndex(where: { $0.id == task.id }) {
-      navigationState.currentSiblingIndex = newIndex
-    } else {
-      taskNavigationService.clampSelectionToVisibleRange()
-    }
-  }
-
   /// Returns true if task is a descendant of the given parentId (or IS at that level)
   func isDescendant(_ task: CheckvistTask, of rootId: Int) -> Bool {
     TaskFilterEngine.isDescendant(task, of: rootId, taskById: taskListViewModel.cache.taskById)
   }
-
-  func invalidateCaches() {
-    taskListViewModel.invalidateCaches()
-  }
-
-  func ensureVisibleTasksCacheValid() {
-    taskListViewModel.ensureVisibleTasksCacheValid()
-  }
-
 
 }

@@ -15,18 +15,20 @@ import SwiftUI
 /// breaking the coordinator dependency surface listed below; that is a
 /// separate piece of work and is called out in the architecture plan.
 ///
-/// Like the other Phase-3 services, this holds a `weak` reference to
-/// `AppCoordinator` for the cross-cutting state it has to read/write
-/// (`tasks`, `errorMessage`, navigation cursor) and for helpers
-/// that still live on the coordinator (`fetchTopTask`, `subtreeBlockRange`,
+/// Owns its raw task/auth state directly via a strong `TaskRepository`
+/// reference (`listId`, `errorMessage`, `activeCredentials`, the active sync
+/// plugin). Holds a `weak` reference to `AppCoordinator` for the cross-cutting
+/// helpers that still live there (`fetchTopTask` indirection, `subtreeBlockRange`,
 /// `isDescendant`, loading bracket, onboarding-dialog presentation,
-/// pending-Obsidian reconciliation).
+/// pending-Obsidian reconciliation, navigation cursor).
 @MainActor
 final class TaskMutationService {
   private weak var coordinator: AppCoordinator?
+  private let repository: TaskRepository
 
-  init(coordinator: AppCoordinator) {
+  init(coordinator: AppCoordinator, repository: TaskRepository) {
     self.coordinator = coordinator
+    self.repository = repository
   }
 
   // MARK: - Failure Handling
@@ -103,7 +105,7 @@ final class TaskMutationService {
 
     guard let action = CheckvistTaskAction(rawValue: endpoint) else { return }
     let ancestorTaskIDsToKeepOpen =
-      (!isUndo && endpoint == "close") ? ancestorTaskIDs(for: task, in: coordinator.tasks) : []
+      (!isUndo && endpoint == "close") ? ancestorTaskIDs(for: task, in: coordinator.repository.tasks) : []
 
     let optimisticSnapshot: OptimisticCompletionSnapshot? =
       (!isUndo && (endpoint == "close" || endpoint == "invalidate"))
@@ -111,10 +113,10 @@ final class TaskMutationService {
 
     do {
       let success = try await coordinator.repository.activeSyncPlugin.performTaskAction(
-        listId: coordinator.listId,
+        listId: repository.listId,
         taskId: task.id,
         action: action,
-        credentials: coordinator.activeCredentials
+        credentials: repository.activeCredentials
       )
       if success {
         await reopenAncestorTasks(ancestorTaskIDsToKeepOpen)
@@ -123,7 +125,7 @@ final class TaskMutationService {
         if let optimisticSnapshot {
           restoreTasksSnapshot(optimisticSnapshot)
         }
-        coordinator.errorMessage = "Failed to \(endpoint) task."
+        repository.errorMessage = "Failed to \(endpoint) task."
       }
     } catch {
       resolveMutationFailure(
@@ -140,7 +142,7 @@ final class TaskMutationService {
           if case CheckvistSessionError.authenticationUnavailable = error {
             return
           }
-          coordinator.errorMessage = "Error: \(error.localizedDescription)"
+          repository.errorMessage = "Error: \(error.localizedDescription)"
         }
       )
     }
@@ -160,7 +162,7 @@ final class TaskMutationService {
       coordinator.repository.enqueuePendingAction(
         PendingTaskAction(taskId: ancestorId, action: .reopen))
     }
-    coordinator.errorMessage = "Offline — will sync when connected."
+    repository.errorMessage = "Offline — will sync when connected."
   }
 
   // MARK: - Update
@@ -176,12 +178,12 @@ final class TaskMutationService {
     }
 
     // Optimistic local update so UI reflects the change immediately.
-    guard let index = coordinator.tasks.firstIndex(where: { $0.id == task.id }) else {
-      coordinator.errorMessage = "Task not found."
+    guard let index = coordinator.repository.tasks.firstIndex(where: { $0.id == task.id }) else {
+      repository.errorMessage = "Task not found."
       return
     }
-    let originalTask = coordinator.tasks[index]
-    coordinator.tasks[index] = CheckvistTask(
+    let originalTask = coordinator.repository.tasks[index]
+    coordinator.repository.tasks[index] = CheckvistTask(
       id: originalTask.id,
       content: content ?? originalTask.content,
       status: originalTask.status,
@@ -195,31 +197,31 @@ final class TaskMutationService {
 
     do {
       let success = try await coordinator.repository.activeSyncPlugin.updateTask(
-        listId: coordinator.listId,
+        listId: repository.listId,
         taskId: task.id,
         content: content,
         due: due,
-        credentials: coordinator.activeCredentials
+        credentials: repository.activeCredentials
       )
       if success {
         await coordinator.syncService.fetchTopTask()
       } else {
-        coordinator.tasks[index] = originalTask
-        coordinator.errorMessage = "Failed to update task."
+        coordinator.repository.tasks[index] = originalTask
+        repository.errorMessage = "Failed to update task."
       }
     } catch {
       resolveMutationFailure(
         whenOffline: {
           coordinator.repository.enqueuePendingMutation(
             taskId: task.id, content: content, due: due)
-          coordinator.errorMessage = "Offline — will sync when connected."
+          repository.errorMessage = "Offline — will sync when connected."
         },
         whenOnline: {
-          coordinator.tasks[index] = originalTask
+          coordinator.repository.tasks[index] = originalTask
           if case CheckvistSessionError.authenticationUnavailable = error {
-            coordinator.setAuthenticationRequiredErrorIfNeeded()
+            repository.setAuthenticationRequiredErrorIfNeeded()
           } else {
-            coordinator.errorMessage = "Error: \(error.localizedDescription)"
+            repository.errorMessage = "Error: \(error.localizedDescription)"
           }
         }
       )
@@ -237,12 +239,12 @@ final class TaskMutationService {
 
     let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedContent.isEmpty else {
-      coordinator.errorMessage = "Task content cannot be empty."
+      repository.errorMessage = "Task content cannot be empty."
       return
     }
 
-    guard !coordinator.listId.isEmpty else {
-      coordinator.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
+    guard !repository.listId.isEmpty else {
+      repository.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
       coordinator.presentOnboardingDialogIfNeeded()
       return
     }
@@ -254,9 +256,9 @@ final class TaskMutationService {
     )
     let optimisticTaskId = optimisticTask.id
 
-    coordinator.beginLoading()
-    defer { coordinator.endLoading() }
-    coordinator.errorMessage = nil
+    repository.beginLoading()
+    defer { repository.endLoading() }
+    repository.errorMessage = nil
 
     // Find current position to insert right below.
     var apiPosition = 0
@@ -268,7 +270,7 @@ final class TaskMutationService {
         apiPosition = targetPos + 1
       } else {
         let siblings =
-          coordinator.tasks.filter { ($0.parentId ?? 0) == coordinator.navigationState.currentParentId }
+          coordinator.repository.tasks.filter { ($0.parentId ?? 0) == coordinator.navigationState.currentParentId }
         if let idx = siblings.firstIndex(where: { $0.id == current.id }) {
           apiPosition = idx + 2
         }
@@ -282,18 +284,18 @@ final class TaskMutationService {
 
     do {
       let newTask = try await coordinator.repository.activeSyncPlugin.createTask(
-        listId: coordinator.listId,
+        listId: repository.listId,
         content: trimmedContent,
         parentId: parentIdForCreate,
         position: positionForCreate,
-        credentials: coordinator.activeCredentials
+        credentials: repository.activeCredentials
       )
       if let newTask {
         coordinator.undoService.lastAction = .add(taskId: newTask.id)
         await coordinator.syncService.fetchTopTask()
       } else {
         removeOptimisticTask(id: optimisticTaskId)
-        coordinator.errorMessage = "Failed to add task."
+        repository.errorMessage = "Failed to add task."
       }
     } catch {
       resolveMutationFailure(
@@ -307,9 +309,9 @@ final class TaskMutationService {
         whenOnline: {
           self.removeOptimisticTask(id: optimisticTaskId)
           if case CheckvistSessionError.authenticationUnavailable = error {
-            coordinator.setAuthenticationRequiredErrorIfNeeded()
+            repository.setAuthenticationRequiredErrorIfNeeded()
           } else {
-            coordinator.errorMessage = "Error adding task: \(error.localizedDescription)"
+            repository.errorMessage = "Error adding task: \(error.localizedDescription)"
           }
         }
       )
@@ -327,7 +329,7 @@ final class TaskMutationService {
       PendingTaskCreate(
         tempId: tempId, content: content, parentId: parentId, position: position))
     coordinator.undoService.lastAction = .add(taskId: tempId)
-    coordinator.errorMessage = "Offline — will sync when connected."
+    repository.errorMessage = "Offline — will sync when connected."
   }
 
   func addTaskAsChild(content: String, parentId: Int) async {
@@ -335,36 +337,36 @@ final class TaskMutationService {
 
     let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedContent.isEmpty else {
-      coordinator.errorMessage = "Task content cannot be empty."
+      repository.errorMessage = "Task content cannot be empty."
       return
     }
 
-    guard !coordinator.listId.isEmpty else {
-      coordinator.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
+    guard !repository.listId.isEmpty else {
+      repository.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
       coordinator.presentOnboardingDialogIfNeeded()
       return
     }
     let optimisticTask = insertOptimisticChildTask(content: trimmedContent, parentId: parentId)
     let optimisticTaskId = optimisticTask.id
 
-    coordinator.beginLoading()
-    defer { coordinator.endLoading() }
-    coordinator.errorMessage = nil
+    repository.beginLoading()
+    defer { repository.endLoading() }
+    repository.errorMessage = nil
 
     do {
       let newTask = try await coordinator.repository.activeSyncPlugin.createTask(
-        listId: coordinator.listId,
+        listId: repository.listId,
         content: trimmedContent,
         parentId: parentId,
         position: 1,
-        credentials: coordinator.activeCredentials
+        credentials: repository.activeCredentials
       )
       if let newTask {
         coordinator.undoService.lastAction = .add(taskId: newTask.id)
         await coordinator.syncService.fetchTopTask()
       } else {
         removeOptimisticTask(id: optimisticTaskId)
-        coordinator.errorMessage = "Failed to add task."
+        repository.errorMessage = "Failed to add task."
       }
     } catch {
       resolveMutationFailure(
@@ -375,9 +377,9 @@ final class TaskMutationService {
         whenOnline: {
           self.removeOptimisticTask(id: optimisticTaskId)
           if case CheckvistSessionError.authenticationUnavailable = error {
-            coordinator.setAuthenticationRequiredErrorIfNeeded()
+            repository.setAuthenticationRequiredErrorIfNeeded()
           } else {
-            coordinator.errorMessage = "Error: \(error.localizedDescription)"
+            repository.errorMessage = "Error: \(error.localizedDescription)"
           }
         }
       )
@@ -404,13 +406,13 @@ final class TaskMutationService {
     }
 
     guard let optimisticSnapshot = applyOptimisticCompletion(for: task.id) else {
-      coordinator.errorMessage = "Task not found."
+      repository.errorMessage = "Task not found."
       return
     }
     coordinator.reconcilePendingObsidianSyncQueueWithOpenTasks()
 
-    let listId = coordinator.listId
-    let credentials = coordinator.activeCredentials
+    let listId = repository.listId
+    let credentials = repository.activeCredentials
     let plugin = coordinator.repository.activeSyncPlugin
     let taskId = task.id
 
@@ -425,7 +427,7 @@ final class TaskMutationService {
           await MainActor.run {
             guard let self else { return }
             self.restoreTasksSnapshot(optimisticSnapshot)
-            coordinator?.errorMessage = "Failed to delete task."
+            coordinator?.repository.errorMessage = "Failed to delete task."
           }
         }
       } catch {
@@ -434,14 +436,14 @@ final class TaskMutationService {
           self.resolveMutationFailure(
             whenOffline: {
               coordinator.repository.enqueuePendingDelete(taskId)
-              coordinator.errorMessage = "Offline — will sync when connected."
+              self.repository.errorMessage = "Offline — will sync when connected."
             },
             whenOnline: {
               self.restoreTasksSnapshot(optimisticSnapshot)
               if case CheckvistSessionError.authenticationUnavailable = error {
-                coordinator.setAuthenticationRequiredErrorIfNeeded()
+                repository.setAuthenticationRequiredErrorIfNeeded()
               } else {
-                coordinator.errorMessage = "Error: \(error.localizedDescription)"
+                self.repository.errorMessage = "Error: \(error.localizedDescription)"
               }
             }
           )
@@ -461,7 +463,7 @@ final class TaskMutationService {
     let useSpecificLocation =
       preferSpecificLocation ?? (coordinator.preferences.quickAddLocationMode == .specificParentTask)
     if useSpecificLocation && coordinator.quickAddSpecificParentTaskIdValue == nil {
-      coordinator.errorMessage = "Set a valid Quick Add parent task ID in Preferences first."
+      repository.errorMessage = "Set a valid Quick Add parent task ID in Preferences first."
       return false
     }
 
@@ -477,12 +479,12 @@ final class TaskMutationService {
   func setQuickAddSpecificLocationToCurrentTask() {
     guard let coordinator else { return }
     guard let currentTask = coordinator.currentTask else {
-      coordinator.errorMessage = "No task selected."
+      repository.errorMessage = "No task selected."
       return
     }
     coordinator.preferences.quickAddSpecificParentTaskId = String(currentTask.id)
     coordinator.preferences.quickAddLocationMode = .specificParentTask
-    coordinator.errorMessage = nil
+    repository.errorMessage = nil
   }
 
   func submitQuickAddTask(content: String, useSpecificLocation: Bool) async {
@@ -493,7 +495,7 @@ final class TaskMutationService {
     let parentTaskId: Int?
     if useSpecificLocation {
       guard let specificTaskId = coordinator.quickAddSpecificParentTaskIdValue else {
-        coordinator.errorMessage = "Set a valid Quick Add parent task ID in Preferences first."
+        repository.errorMessage = "Set a valid Quick Add parent task ID in Preferences first."
         return
       }
       parentTaskId = specificTaskId
@@ -501,26 +503,26 @@ final class TaskMutationService {
       parentTaskId = nil
     }
 
-    guard !coordinator.listId.isEmpty else {
-      coordinator.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
+    guard !repository.listId.isEmpty else {
+      repository.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
       coordinator.presentOnboardingDialogIfNeeded()
       return
     }
 
-    coordinator.beginLoading()
-    defer { coordinator.endLoading() }
-    coordinator.errorMessage = nil
+    repository.beginLoading()
+    defer { repository.endLoading() }
+    repository.errorMessage = nil
 
     do {
       let createdTask = try await coordinator.repository.activeSyncPlugin.createTask(
-        listId: coordinator.listId,
+        listId: repository.listId,
         content: normalizedContent,
         parentId: parentTaskId,
         position: 1,
-        credentials: coordinator.activeCredentials
+        credentials: repository.activeCredentials
       )
       guard let createdTask else {
-        coordinator.errorMessage = "Quick add failed."
+        repository.errorMessage = "Quick add failed."
         return
       }
       coordinator.undoService.lastAction = .add(taskId: createdTask.id)
@@ -535,9 +537,9 @@ final class TaskMutationService {
         },
         whenOnline: {
           if case CheckvistSessionError.authenticationUnavailable = error {
-            coordinator.setAuthenticationRequiredErrorIfNeeded()
+            repository.setAuthenticationRequiredErrorIfNeeded()
           } else {
-            coordinator.errorMessage = "Quick add failed: \(error.localizedDescription)"
+            repository.errorMessage = "Quick add failed: \(error.localizedDescription)"
           }
         }
       )
@@ -558,7 +560,7 @@ final class TaskMutationService {
       parentId: parentId,
       level: nil
     )
-    coordinator.tasks.append(optimisticTask)
+    coordinator.repository.tasks.append(optimisticTask)
     queueOfflineCreate(
       tempId: optimisticTask.id, content: content, parentId: parentId, position: 1)
     coordinator.quickEntry.quickEntryMode = .search
@@ -579,7 +581,7 @@ final class TaskMutationService {
       )
     else {
       if coordinator.recurrence.recurrenceRule(for: completedTask) != nil {
-        coordinator.errorMessage = "Could not calculate next occurrence for recurring task."
+        repository.errorMessage = "Could not calculate next occurrence for recurring task."
       }
       return
     }
@@ -594,7 +596,7 @@ final class TaskMutationService {
 
     // After addTask + fetchTopTask, find the newly created task (same content,
     // next due).
-    if let newTask = coordinator.tasks.first(where: {
+    if let newTask = coordinator.repository.tasks.first(where: {
       $0.content == completedTask.content
         && $0.id != completedTaskId
         && coordinator.recurrence.recurrenceRulesByTaskId[$0.id] == nil
@@ -630,33 +632,33 @@ final class TaskMutationService {
       level: nil
     )
 
-    var insertIndex = coordinator.tasks.endIndex
+    var insertIndex = coordinator.repository.tasks.endIndex
     if insertAtTopOfCurrentLevel {
       if coordinator.navigationState.currentParentId == 0 {
         insertIndex =
-          coordinator.tasks.firstIndex(where: { ($0.parentId ?? 0) == 0 })
-          ?? coordinator.tasks.endIndex
-      } else if let parentRawIndex = coordinator.tasks.firstIndex(where: {
+          coordinator.repository.tasks.firstIndex(where: { ($0.parentId ?? 0) == 0 })
+          ?? coordinator.repository.tasks.endIndex
+      } else if let parentRawIndex = coordinator.repository.tasks.firstIndex(where: {
         $0.id == coordinator.navigationState.currentParentId
       }) {
         insertIndex = parentRawIndex + 1
       }
     } else if let target = afterTask,
-      let rawIndex = coordinator.tasks.firstIndex(where: { $0.id == target.id })
+      let rawIndex = coordinator.repository.tasks.firstIndex(where: { $0.id == target.id })
     {
       var endIndex = rawIndex + 1
-      while endIndex < coordinator.tasks.count
-        && coordinator.isDescendant(coordinator.tasks[endIndex], of: target.id)
+      while endIndex < coordinator.repository.tasks.count
+        && coordinator.isDescendant(coordinator.repository.tasks[endIndex], of: target.id)
       {
         endIndex += 1
       }
       insertIndex = endIndex
     }
 
-    if insertIndex <= coordinator.tasks.endIndex {
-      coordinator.tasks.insert(optimisticTask, at: insertIndex)
+    if insertIndex <= coordinator.repository.tasks.endIndex {
+      coordinator.repository.tasks.insert(optimisticTask, at: insertIndex)
     } else {
-      coordinator.tasks.append(optimisticTask)
+      coordinator.repository.tasks.append(optimisticTask)
     }
 
     if let insertedIndex = coordinator.currentLevelTasks.firstIndex(where: {
@@ -679,19 +681,19 @@ final class TaskMutationService {
     )
 
     guard let coordinator else { return optimisticTask }
-    if let parentRawIdx = coordinator.tasks.firstIndex(where: { $0.id == parentId }) {
-      coordinator.tasks.insert(optimisticTask, at: parentRawIdx + 1)
+    if let parentRawIdx = coordinator.repository.tasks.firstIndex(where: { $0.id == parentId }) {
+      coordinator.repository.tasks.insert(optimisticTask, at: parentRawIdx + 1)
     } else {
-      coordinator.tasks.append(optimisticTask)
+      coordinator.repository.tasks.append(optimisticTask)
     }
     return optimisticTask
   }
 
   private func removeOptimisticTask(id: Int) {
     guard let coordinator,
-      let index = coordinator.tasks.firstIndex(where: { $0.id == id })
+      let index = coordinator.repository.tasks.firstIndex(where: { $0.id == id })
     else { return }
-    coordinator.tasks.remove(at: index)
+    coordinator.repository.tasks.remove(at: index)
     coordinator.taskNavigationService.clampSelectionToVisibleRange()
   }
 
@@ -705,30 +707,30 @@ final class TaskMutationService {
 
   private func applyOptimisticCompletion(for taskId: Int) -> OptimisticCompletionSnapshot? {
     guard let coordinator else { return nil }
-    guard let removingRange = coordinator.subtreeBlockRange(for: taskId, in: coordinator.tasks)
+    guard let removingRange = coordinator.subtreeBlockRange(for: taskId, in: coordinator.repository.tasks)
     else { return nil }
-    let removedTaskIds = Set(coordinator.tasks[removingRange].map(\.id))
+    let removedTaskIds = Set(coordinator.repository.tasks[removingRange].map(\.id))
     let snapshot = OptimisticCompletionSnapshot(
-      tasks: coordinator.tasks,
+      tasks: coordinator.repository.tasks,
       priorityTaskIdsByParentId: coordinator.repository.priorityTaskIdsByParentId,
       absolutePriorityTaskIds: coordinator.repository.absolutePriorityTaskIds,
       timerByTaskId: coordinator.timer.timerByTaskId,
       pendingObsidianSyncTaskIds: coordinator.integrations.pendingObsidianSyncTaskIds
     )
-    coordinator.tasks.removeSubrange(removingRange)
-    coordinator.removeTasksFromPriorityQueue(removedTaskIds)
+    coordinator.repository.tasks.removeSubrange(removingRange)
+    repository.removeTasksFromPriorityQueue(removedTaskIds)
     coordinator.taskNavigationService.clampSelectionToVisibleRange()
     return snapshot
   }
 
   private func restoreTasksSnapshot(_ snapshot: OptimisticCompletionSnapshot) {
     guard let coordinator else { return }
-    coordinator.tasks = snapshot.tasks
-    coordinator.savePriorityQueue(snapshot.priorityTaskIdsByParentId)
+    coordinator.repository.tasks = snapshot.tasks
+    repository.savePriorityQueue(snapshot.priorityTaskIdsByParentId)
     coordinator.repository.saveAbsolutePriorityQueue(snapshot.absolutePriorityTaskIds)
     coordinator.timer.timerByTaskId = snapshot.timerByTaskId
     coordinator.integrations.savePendingObsidianSyncQueue(
-      snapshot.pendingObsidianSyncTaskIds, listId: coordinator.listId)
+      snapshot.pendingObsidianSyncTaskIds, listId: repository.listId)
     coordinator.taskNavigationService.clampSelectionToVisibleRange()
   }
 
@@ -764,19 +766,112 @@ final class TaskMutationService {
     for ancestorID in ancestorTaskIDs {
       do {
         _ = try await coordinator.repository.activeSyncPlugin.performTaskAction(
-          listId: coordinator.listId,
+          listId: repository.listId,
           taskId: ancestorID,
           action: .reopen,
-          credentials: coordinator.activeCredentials
+          credentials: repository.activeCredentials
         )
       } catch CheckvistSessionError.authenticationUnavailable {
-        coordinator.setAuthenticationRequiredErrorIfNeeded()
+        repository.setAuthenticationRequiredErrorIfNeeded()
         return
       } catch {
-        if coordinator.errorMessage == nil {
-          coordinator.errorMessage = "Task completed, but a parent task could not be kept open."
+        if repository.errorMessage == nil {
+          repository.errorMessage = "Task completed, but a parent task could not be kept open."
         }
       }
+    }
+  }
+
+  // MARK: - Priority mutations on the current task
+
+  @MainActor func setPriorityForCurrentTask(_ rank: Int) {
+    guard rank >= 1, let coordinator, let task = coordinator.currentTask else { return }
+
+    let scopeId = task.parentId ?? 0
+    var byParent = repository.priorityTaskIdsByParentId
+    for (pid, ids) in byParent {
+      let filtered = ids.filter { $0 != task.id }
+      if filtered.count != ids.count {
+        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
+        else { byParent[pid] = filtered }
+      }
+    }
+    var scope = byParent[scopeId] ?? []
+    let insertIndex = min(max(rank - 1, 0), scope.count)
+    scope.insert(task.id, at: insertIndex)
+    byParent[scopeId] = scope
+    repository.savePriorityQueue(byParent)
+    repository.errorMessage = nil
+
+    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      coordinator.navigationState.currentSiblingIndex = newIndex
+    }
+  }
+
+  @MainActor func setAbsolutePriorityForCurrentTask(_ rank: Int) {
+    guard rank >= 1, let coordinator, let task = coordinator.currentTask else { return }
+    repository.setAbsolutePriority(taskId: task.id, rank: rank)
+    repository.errorMessage = nil
+
+    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      coordinator.navigationState.currentSiblingIndex = newIndex
+    }
+  }
+
+  @MainActor func sendCurrentTaskToPriorityBack() {
+    guard let coordinator, let task = coordinator.currentTask else { return }
+
+    let scopeId = task.parentId ?? 0
+    var byParent = repository.priorityTaskIdsByParentId
+    for (pid, ids) in byParent {
+      let filtered = ids.filter { $0 != task.id }
+      if filtered.count != ids.count {
+        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
+        else { byParent[pid] = filtered }
+      }
+    }
+    var scope = byParent[scopeId] ?? []
+    scope.append(task.id)
+    byParent[scopeId] = scope
+    repository.savePriorityQueue(byParent)
+    repository.errorMessage = nil
+
+    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      coordinator.navigationState.currentSiblingIndex = newIndex
+    }
+  }
+
+  @MainActor func clearPriorityForCurrentTask() {
+    guard let coordinator, let task = coordinator.currentTask else { return }
+    guard repository.prioritizedTaskIds.contains(task.id) else { return }
+    var byParent = repository.priorityTaskIdsByParentId
+    for (pid, ids) in byParent {
+      let filtered = ids.filter { $0 != task.id }
+      if filtered.count != ids.count {
+        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
+        else { byParent[pid] = filtered }
+      }
+    }
+    repository.savePriorityQueue(byParent)
+    repository.errorMessage = nil
+
+    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      coordinator.navigationState.currentSiblingIndex = newIndex
+    } else {
+      coordinator.taskNavigationService.clampSelectionToVisibleRange()
+    }
+  }
+
+  @MainActor func clearAbsolutePriorityForCurrentTask() {
+    guard let coordinator, let task = coordinator.currentTask else { return }
+    guard repository.absolutePrioritizedTaskIds.contains(task.id) else { return }
+    repository.clearAbsolutePriority(taskId: task.id)
+    repository.errorMessage = nil
+
+    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      coordinator.navigationState.currentSiblingIndex = newIndex
+    } else {
+      coordinator.taskNavigationService.clampSelectionToVisibleRange()
     }
   }
 }

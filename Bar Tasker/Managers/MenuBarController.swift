@@ -329,6 +329,8 @@ class MenuBarController: NSObject {
         .font(Typography.interfaceFont)
         .environment(manager)
         .environment(manager.navigationState)
+        .environment(manager.taskListViewModel)
+        .environment(manager.repository)
     )
     popoverWindow.contentViewController = hostingController
     popoverWindow.isMovableByWindowBackground = false
@@ -456,7 +458,7 @@ class MenuBarController: NSObject {
 
   private func observeForPopoverSizing() {
     withObservationTracking {
-      _ = self.manager.rootTaskView
+      _ = self.manager.taskListViewModel.rootTaskView
     } onChange: {
       Task { @MainActor [weak self] in
         self?.reanchorPopoverToStatusItem()
@@ -475,11 +477,11 @@ class MenuBarController: NSObject {
       _ = self.manager.timer.timerMode
       _ = self.manager.preferences.maxTitleWidth
       _ = self.manager.integrations.pendingObsidianSyncTaskIds
-      _ = self.manager.tasks
+      _ = self.manager.repository.tasks
       _ = self.manager.navigationState.currentParentId
       _ = self.manager.navigationState.currentSiblingIndex
-      _ = self.manager.isLoading
-      _ = self.manager.errorMessage
+      _ = self.manager.repository.isLoading
+      _ = self.manager.repository.errorMessage
     } onChange: {
       Task { @MainActor [weak self] in
         self?.updateTitle()

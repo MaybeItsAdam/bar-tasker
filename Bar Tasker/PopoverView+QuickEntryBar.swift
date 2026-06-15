@@ -42,7 +42,7 @@ extension PopoverView {
           }.buttonStyle(PlainButtonStyle())
         }
 
-        if manager.isLoading {
+        if repository.isLoading {
           ProgressView().scaleEffect(0.6).frame(width: 16, height: 20)
         }
       }
@@ -120,7 +120,7 @@ extension PopoverView {
     .padding(.trailing, PopoverLayout.rowHorizontalPadding)
     .padding(.vertical, verticalPadding)
 
-    if let error = manager.errorMessage {
+    if let error = repository.errorMessage {
       Text(error)
         .font(.caption2)
         .foregroundColor(themeColor(.danger))
@@ -316,7 +316,7 @@ extension PopoverView {
     manager.quickEntry.quickEntryText = ""
     manager.quickEntry.quickEntryMode = .search
     manager.quickEntry.isQuickEntryFocused = false
-    manager.errorMessage = nil
+    repository.errorMessage = nil
     Task { await manager.taskMutationService.addTask(content: content, insertAfterTask: targetTask) }
   }
 
@@ -327,7 +327,7 @@ extension PopoverView {
     }
     let content = manager.quickEntry.quickEntryText
     manager.quickEntry.quickEntryText = ""
-    manager.errorMessage = nil
+    repository.errorMessage = nil
     manager.quickEntry.isQuickEntryFocused = true
     Task { await manager.taskMutationService.addTask(content: content, insertAtTopOfCurrentLevel: true) }
   }
@@ -345,7 +345,7 @@ extension PopoverView {
     manager.quickEntry.quickEntryText = ""
     manager.quickEntry.quickEntryMode = .search
     manager.quickEntry.isQuickEntryFocused = false
-    manager.errorMessage = nil
+    repository.errorMessage = nil
     Task { await manager.taskMutationService.addTaskAsChild(content: content, parentId: parent.id) }
   }
 

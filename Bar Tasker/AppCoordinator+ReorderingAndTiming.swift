@@ -61,8 +61,8 @@ extension AppCoordinator {
   }
 
   func childCountByTaskId() -> [Int: Int] {
-    ensureVisibleTasksCacheValid()
-    return cache.childCount
+    taskListViewModel.ensureVisibleTasksCacheValid()
+    return taskListViewModel.cache.childCount
   }
 
   func rolledUpElapsedByTaskId() -> [Int: TimeInterval] {
@@ -70,7 +70,7 @@ extension AppCoordinator {
     // ticks. Without this, callers only read the @ObservationIgnored cache
     // and never establish a dependency on `timer.timerByTaskId`.
     _ = timer.timerByTaskId
-    ensureVisibleTasksCacheValid()
-    return cache.rolledUpElapsed
+    taskListViewModel.ensureVisibleTasksCacheValid()
+    return taskListViewModel.cache.rolledUpElapsed
   }
 }

@@ -195,12 +195,12 @@ struct SettingsView: View {
     .onChange(of: pluginCardIDs) { _, _ in
       syncSelectedPluginCardIfNeeded()
     }
-    .onChange(of: checkvistManager.availableLists.map(\.id)) { _, _ in
+    .onChange(of: checkvistManager.repository.availableLists.map(\.id)) { _, _ in
       seedMergeSelectionsIfNeeded()
     }
-    .onChange(of: checkvistManager.listId) { _, _ in
-      if !checkvistManager.listId.isEmpty {
-        mergeDestinationListId = checkvistManager.listId
+    .onChange(of: checkvistManager.repository.listId) { _, _ in
+      if !checkvistManager.repository.listId.isEmpty {
+        mergeDestinationListId = checkvistManager.repository.listId
       }
     }
   }
@@ -461,7 +461,7 @@ struct ModeOrderList: View {
             .foregroundColor(.secondary)
           Text(mode.title)
           Spacer(minLength: 0)
-          if manager.rootTaskView == mode {
+          if manager.taskListViewModel.rootTaskView == mode {
             Text("Current")
               .font(.caption2)
               .foregroundColor(.secondary)

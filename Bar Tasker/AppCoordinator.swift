@@ -16,15 +16,7 @@ import SwiftUI
 
   let navigationState: NavigationState
 
-  var tasks: [CheckvistTask] {
-    get { repository.tasks }
-    set { repository.tasks = newValue }
-  }
-  var listId: String {
-    get { repository.listId }
-    set { repository.listId = newValue }
-  }
-    var statusMessage: String? = nil {
+  var statusMessage: String? = nil {
     didSet {
       if statusMessage != nil {
         Task { @MainActor in
@@ -34,31 +26,7 @@ import SwiftUI
       }
     }
   }
-  var errorMessage: String? {
-    get { repository.errorMessage }
-    set { repository.errorMessage = newValue }
-  }
 
-  var hideFuture: Bool {
-    get { taskListViewModel.hideFuture }
-    set { taskListViewModel.hideFuture = newValue }
-  }
-  var showChildrenInMenus: Bool {
-    get { taskListViewModel.showChildrenInMenus }
-    set { taskListViewModel.showChildrenInMenus = newValue }
-  }
-  var rootTaskView: RootTaskView {
-    get { taskListViewModel.rootTaskView }
-    set { taskListViewModel.rootTaskView = newValue }
-  }
-  var selectedRootDueBucketRawValue: Int {
-    get { taskListViewModel.selectedRootDueBucketRawValue }
-    set { taskListViewModel.selectedRootDueBucketRawValue = newValue }
-  }
-  var selectedRootTag: String {
-    get { taskListViewModel.selectedRootTag }
-    set { taskListViewModel.selectedRootTag = newValue }
-  }
   var orderedRootTaskViews: [RootTaskView] {
     if let data = UserDefaults.standard.data(forKey: "rootTaskViewOrder"),
       let rawValues = try? JSONDecoder().decode([Int].self, from: data)
@@ -112,14 +80,6 @@ import SwiftUI
 
   @ObservationIgnored var dismissedOnboardingDialogs: Set<OnboardingDialog>
 
-  var cache: CacheState {
-    taskListViewModel.cache
-  }
-
-  var taskEisenhowerLevels: [Int: EisenhowerLevel] {
-    repository.taskEisenhowerLevels
-  }
-
   @ObservationIgnored var isApplyingLaunchAtLoginChange = false
   @ObservationIgnored let preferencesStore = PreferencesStore()
   let userPluginManager: UserPluginManager
@@ -133,31 +93,14 @@ import SwiftUI
   /// kanban data-source protocol to repository/navigationState/taskListViewModel
   /// so AppCoordinator no longer has to conform to `KanbanTaskDataSource`.
   @ObservationIgnored private var kanbanDataSourceAdapter: KanbanTaskDataSourceAdapter!
+  /// Strong-held because `IntegrationCoordinator.dataSource` is `weak`. Same
+  /// role as `kanbanDataSourceAdapter` — bridges the protocol to
+  /// repository/coordinator so AppCoordinator needn't conform.
+  @ObservationIgnored private var integrationDataSourceAdapter: IntegrationDataSourceAdapter!
   /// Owned here (rather than on `LifecycleController`) so `deinit`, which is
   /// nonisolated, can call `stop()` without hopping back onto the main actor.
   @ObservationIgnored let reachabilityMonitor = NetworkReachabilityMonitor()
   var usesKeychainStorage: Bool { false }
-
-  var activeCredentials: CheckvistCredentials { repository.activeCredentials }
-
-  var username: String {
-    get { repository.username }
-    set { repository.username = newValue }
-  }
-  var usernameLower: String { username.lowercased() }
-
-  var remoteKey: String {
-    get { repository.remoteKey }
-    set { repository.remoteKey = newValue }
-  }
-  var availableLists: [CheckvistList] {
-    get { repository.availableLists }
-    set { repository.availableLists = newValue }
-  }
-  var isLoading: Bool {
-    get { repository.isLoading }
-    set { repository.isLoading = newValue }
-  }
 
   // swiftlint:disable function_body_length
   init(pluginRegistry: PluginRegistry, feedbackService: FeedbackService? = nil) {
@@ -279,9 +222,9 @@ import SwiftUI
       repository: repository,
       navigationState: navigationState
     )
-    self.taskMutationService = TaskMutationService(coordinator: self)
+    self.taskMutationService = TaskMutationService(coordinator: self, repository: repository)
     self.undoService = UndoService(performer: self.taskMutationService)
-    self.syncService = SyncService(coordinator: self)
+    self.syncService = SyncService(coordinator: self, repository: repository)
     self.lifecycle = LifecycleController(
       coordinator: self,
       reachabilityMonitor: reachabilityMonitor
@@ -300,7 +243,12 @@ import SwiftUI
     )
     self.kanbanDataSourceAdapter = kanbanDataSourceAdapter
     kanban.dataSource = kanbanDataSourceAdapter
-    integrations.dataSource = self
+    let integrationDataSourceAdapter = IntegrationDataSourceAdapter(
+      repository: repository,
+      coordinator: self
+    )
+    self.integrationDataSourceAdapter = integrationDataSourceAdapter
+    integrations.dataSource = integrationDataSourceAdapter
     integrations.onIntegrationStateChanged = { [weak self] in
       self?.refreshOnboardingDialogState()
     }
@@ -319,7 +267,6 @@ import SwiftUI
   // swiftlint:enable function_body_length
 }
 
-extension AppCoordinator: IntegrationDataSource {}
 
 extension TaskMutationService: UndoActionPerforming {}
 
@@ -336,7 +283,7 @@ extension AppCoordinator {
 
   @MainActor func setRecurrenceRule(_ raw: String, for task: CheckvistTask) {
     if let error = recurrence.setRecurrenceRule(raw, for: task) {
-      errorMessage = error
+      repository.errorMessage = error
     }
   }
 
@@ -370,8 +317,8 @@ extension AppCoordinator {
   @MainActor func addTaskInKanbanColumn(rawContent: String, column: KanbanColumn) {
     let trimmed = rawContent.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
-    guard !listId.isEmpty else {
-      errorMessage = "Choose a Checkvist list in Preferences to add tasks."
+    guard !repository.listId.isEmpty else {
+      repository.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
       return
     }
 
@@ -383,11 +330,11 @@ extension AppCoordinator {
       id: optimisticId, content: content, status: 0, due: due,
       position: nil, parentId: nil, level: nil
     )
-    tasks.append(optimisticTask)
+    repository.tasks.append(optimisticTask)
     kanban.kanbanSelectedTaskId = optimisticId
 
-    let listId = self.listId
-    let credentials = self.activeCredentials
+    let listId = repository.listId
+    let credentials = repository.activeCredentials
     let plugin = repository.activeSyncPlugin
 
     Task { [weak self] in
@@ -411,22 +358,22 @@ extension AppCoordinator {
             }
             self.undoService.lastAction = .add(taskId: newTask.id)
             // Replace optimistic task with the real one.
-            if let idx = self.tasks.firstIndex(where: { $0.id == optimisticId }) {
-              self.tasks[idx] = CheckvistTask(
+            if let idx = self.repository.tasks.firstIndex(where: { $0.id == optimisticId }) {
+              self.repository.tasks[idx] = CheckvistTask(
                 id: newTask.id, content: content, status: 0, due: due,
                 position: newTask.position, parentId: nil, level: nil
               )
             }
             self.kanban.kanbanSelectedTaskId = newTask.id
           } else {
-            self.tasks.removeAll { $0.id == optimisticId }
-            self.errorMessage = "Failed to add task."
+            self.repository.tasks.removeAll { $0.id == optimisticId }
+            self.repository.errorMessage = "Failed to add task."
           }
         }
       } catch {
         await MainActor.run { [weak self] in
-          self?.tasks.removeAll { $0.id == optimisticId }
-          self?.errorMessage = "Error adding task: \(error.localizedDescription)"
+          self?.repository.tasks.removeAll { $0.id == optimisticId }
+          self?.repository.errorMessage = "Error adding task: \(error.localizedDescription)"
         }
       }
     }
@@ -439,9 +386,9 @@ extension AppCoordinator {
     undoService.lastAction = .update(
       taskId: task.id, oldContent: task.content, oldDue: task.due)
 
-    guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
-    let originalTask = tasks[index]
-    tasks[index] = CheckvistTask(
+    guard let index = repository.tasks.firstIndex(where: { $0.id == task.id }) else { return }
+    let originalTask = repository.tasks[index]
+    repository.tasks[index] = CheckvistTask(
       id: originalTask.id,
       content: content ?? originalTask.content,
       status: originalTask.status,
@@ -453,8 +400,8 @@ extension AppCoordinator {
       updatedAt: originalTask.updatedAt
     )
 
-    let listId = self.listId
-    let credentials = self.activeCredentials
+    let listId = repository.listId
+    let credentials = repository.activeCredentials
     let plugin = repository.activeSyncPlugin
     let taskId = task.id
 
@@ -470,10 +417,10 @@ extension AppCoordinator {
         if !success {
           await MainActor.run { [weak self] in
             guard let self else { return }
-            if let idx = self.tasks.firstIndex(where: { $0.id == taskId }) {
-              self.tasks[idx] = originalTask
+            if let idx = self.repository.tasks.firstIndex(where: { $0.id == taskId }) {
+              self.repository.tasks[idx] = originalTask
             }
-            self.errorMessage = "Failed to sync task move."
+            self.repository.errorMessage = "Failed to sync task move."
           }
         }
       } catch {
@@ -481,9 +428,9 @@ extension AppCoordinator {
           guard let self else { return }
           if !self.repository.isNetworkReachable {
             self.repository.pendingTaskMutations[taskId] = (content: content, due: due)
-          } else if let idx = self.tasks.firstIndex(where: { $0.id == taskId }) {
-            self.tasks[idx] = originalTask
-            self.errorMessage = "Failed to sync task move."
+          } else if let idx = self.repository.tasks.firstIndex(where: { $0.id == taskId }) {
+            self.repository.tasks[idx] = originalTask
+            self.repository.errorMessage = "Failed to sync task move."
           }
         }
       }

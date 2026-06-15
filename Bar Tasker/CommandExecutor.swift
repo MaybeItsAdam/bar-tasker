@@ -19,15 +19,15 @@ final class CommandExecutor {
       _ = await manager.syncService.loadCheckvistLists(assignFirstIfMissing: false)
       return
     case .uploadOfflineTasks:
-      if manager.availableLists.isEmpty {
+      if manager.repository.availableLists.isEmpty {
         _ = await manager.syncService.loadCheckvistLists(assignFirstIfMissing: false)
       }
       let destinationListId =
-        manager.listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        ? manager.availableLists.first.map { String($0.id) } ?? ""
-        : manager.listId
+        manager.repository.listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? manager.repository.availableLists.first.map { String($0.id) } ?? ""
+        : manager.repository.listId
       guard !destinationListId.isEmpty else {
-        manager.errorMessage = "No Checkvist list available for upload."
+        manager.repository.errorMessage = "No Checkvist list available for upload."
         return
       }
       _ = await manager.syncService.uploadOfflineTasksToCheckvist(destinationListId: destinationListId)
@@ -50,19 +50,19 @@ final class CommandExecutor {
       return
     case .list(let query):
       guard !query.isEmpty else {
-        manager.errorMessage = "Missing list query. Try: list inbox"
+        manager.repository.errorMessage = "Missing list query. Try: list inbox"
         return
       }
-      if manager.availableLists.isEmpty {
+      if manager.repository.availableLists.isEmpty {
         _ = await manager.syncService.fetchLists()
       }
       guard
-        let found = manager.availableLists.first(where: { $0.name.lowercased().contains(query) })
+        let found = manager.repository.availableLists.first(where: { $0.name.lowercased().contains(query) })
       else {
-        manager.errorMessage = "No list matching \"\(query)\"."
+        manager.repository.errorMessage = "No list matching \"\(query)\"."
         return
       }
-      manager.listId = "\(found.id)"
+      manager.repository.listId = "\(found.id)"
       manager.navigationState.currentParentId = 0
       manager.navigationState.currentSiblingIndex = 0
       manager.quickEntry.searchText = ""
@@ -74,13 +74,13 @@ final class CommandExecutor {
       return
     case .undone:
       if manager.undoService.lastAction == nil {
-        manager.errorMessage = "Nothing to undo."
+        manager.repository.errorMessage = "Nothing to undo."
       } else {
         await manager.undoService.undo()
       }
       return
     case .toggleHideFuture:
-      manager.hideFuture.toggle()
+      manager.taskListViewModel.hideFuture.toggle()
       return
     case .pauseTimer:
       if manager.timer.timerRunning { manager.timer.pauseTimer() } else { manager.timer.resumeTimer() }
@@ -111,7 +111,7 @@ final class CommandExecutor {
       if let view {
         manager.taskNavigationService.setRootTaskView(view)
       } else {
-        manager.errorMessage = "Unknown tab: \(raw). Try: tab all|due|tags|priority|kanban|eisenhower"
+        manager.repository.errorMessage = "Unknown tab: \(raw). Try: tab all|due|tags|priority|kanban|eisenhower"
       }
       return
     case .cycleTab(let direction):
@@ -124,20 +124,20 @@ final class CommandExecutor {
       _ = manager.taskMutationService.beginQuickAddEntry()
       return
     case .kanbanMove(let direction):
-      manager.rootTaskView = .kanban
+      manager.taskListViewModel.rootTaskView = .kanban
       manager.moveCurrentTaskToKanbanColumn(direction: direction)
       return
     case .kanbanFocus(let direction):
-      manager.rootTaskView = .kanban
+      manager.taskListViewModel.rootTaskView = .kanban
       manager.kanban.focusKanbanColumn(direction: direction)
       return
     case .kanbanShowInAll:
       guard let task = manager.kanban.currentKanbanTask else {
-        manager.errorMessage = "No kanban task selected."
+        manager.repository.errorMessage = "No kanban task selected."
         return
       }
       let childCounts = manager.childCountByTaskId()
-      manager.rootTaskView = .all
+      manager.taskListViewModel.rootTaskView = .all
       manager.navigationState.rootScopeFocusLevel = 0
       if childCounts[task.id, default: 0] > 0 {
         manager.navigationState.currentParentId = task.id
@@ -147,16 +147,16 @@ final class CommandExecutor {
       }
       return
     case .kanbanDrillIn:
-      manager.rootTaskView = .kanban
+      manager.taskListViewModel.rootTaskView = .kanban
       manager.kanban.enterSelectedTaskAsScope()
       return
     case .kanbanPopOut:
-      manager.rootTaskView = .kanban
+      manager.taskListViewModel.rootTaskView = .kanban
       manager.kanban.exitToParentScope()
       return
     case .kanbanFocusMode:
       guard let task = manager.currentTask else {
-        manager.errorMessage = "No task selected."
+        manager.repository.errorMessage = "No task selected."
         return
       }
       manager.focusSessionManager.presentPrompt(forTaskId: task.id)
@@ -165,13 +165,13 @@ final class CommandExecutor {
       manager.preferences.showTaskBreadcrumbContext.toggle()
       return
     case .toggleChildrenInMenus:
-      manager.showChildrenInMenus.toggle()
+      manager.taskListViewModel.showChildrenInMenus.toggle()
       manager.statusMessage =
-        manager.showChildrenInMenus ? "Showing siblings + children" : "Showing siblings only"
+        manager.taskListViewModel.showChildrenInMenus ? "Showing siblings + children" : "Showing siblings only"
       return
     case .editAtStart:
       guard let task = manager.currentTask else {
-        manager.errorMessage = "No task selected."
+        manager.repository.errorMessage = "No task selected."
         return
       }
       manager.quickEntry.quickEntryMode = .editTask
@@ -186,14 +186,14 @@ final class CommandExecutor {
       manager.quickEntry.isQuickEntryFocused = true
       return
     case .unknown(let raw):
-      manager.errorMessage = "Unknown command: \(raw)"
+      manager.repository.errorMessage = "Unknown command: \(raw)"
       return
     default:
       break
     }
 
     guard let task = manager.currentTask else {
-      manager.errorMessage = "No task selected."
+      manager.repository.errorMessage = "No task selected."
       return
     }
 
@@ -205,7 +205,7 @@ final class CommandExecutor {
       await manager.taskMutationService.invalidateCurrentTask()
     case .due(let raw):
       guard !raw.isEmpty else {
-        manager.errorMessage = "Missing due date/time. Try: due today 14:30"
+        manager.repository.errorMessage = "Missing due date/time. Try: due today 14:30"
         return
       }
       let resolved = manager.resolveDueDateWithConfig(raw)
@@ -214,7 +214,7 @@ final class CommandExecutor {
       await manager.taskMutationService.updateTask(task: task, due: "")
     case .setStart(let raw):
       guard !raw.isEmpty else {
-        manager.errorMessage = "Missing start date/time. Try: start tomorrow 9am"
+        manager.repository.errorMessage = "Missing start date/time. Try: start tomorrow 9am"
         return
       }
       manager.startDates.setStartDate(for: task, rawInput: raw)
@@ -222,7 +222,7 @@ final class CommandExecutor {
       manager.startDates.clearStartDate(for: task)
     case .setRecurrence(let raw):
       guard !raw.isEmpty else {
-        manager.errorMessage = "Missing repeat rule. Try: repeat daily, repeat every 3 days"
+        manager.repository.errorMessage = "Missing repeat rule. Try: repeat daily, repeat every 3 days"
         return
       }
       manager.setRecurrenceRule(raw, for: task)
@@ -255,7 +255,7 @@ final class CommandExecutor {
       manager.taskNavigationService.enterChildren()
     case .tag(let tagName):
       guard !tagName.isEmpty else {
-        manager.errorMessage = "Missing tag name. Try: tag urgent"
+        manager.repository.errorMessage = "Missing tag name. Try: tag urgent"
         return
       }
       let tagged =
@@ -265,7 +265,7 @@ final class CommandExecutor {
       manager.statusMessage = "Added tag: #\(tagName)"
     case .untag(let tagName):
       guard !tagName.isEmpty else {
-        manager.errorMessage = "Missing tag name. Try: untag urgent"
+        manager.repository.errorMessage = "Missing tag name. Try: untag urgent"
         return
       }
       let cleaned = task.content.replacingOccurrences(of: " #\(tagName)", with: "")
@@ -288,11 +288,11 @@ final class CommandExecutor {
       manager.statusMessage = "Importance: \(level)"
       manager.statusMessage = "Importance: \(level)"
     case .priority(let rank):
-      manager.setPriorityForCurrentTask(rank)
+      manager.taskMutationService.setPriorityForCurrentTask(rank)
     case .priorityBack:
-      manager.sendCurrentTaskToPriorityBack()
+      manager.taskMutationService.sendCurrentTaskToPriorityBack()
     case .clearPriority:
-      manager.clearPriorityForCurrentTask()
+      manager.taskMutationService.clearPriorityForCurrentTask()
     case .syncObsidian:
       await manager.integrations.syncTaskToObsidian(taskId: nil, openMode: .standard)
     case .syncObsidianNewWindow:

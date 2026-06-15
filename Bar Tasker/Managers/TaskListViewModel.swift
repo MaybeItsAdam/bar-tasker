@@ -42,6 +42,14 @@ import Observation
     }
   }
 
+  /// Typed wrapper over `selectedRootDueBucketRawValue` (−1 == "no selection").
+  /// Lived on `AppCoordinator` previously; moved here so the raw forwarder can
+  /// be deleted and views read the selection from its real owner.
+  var selectedRootDueBucket: RootDueBucket? {
+    get { RootDueBucket(rawValue: selectedRootDueBucketRawValue) }
+    set { selectedRootDueBucketRawValue = newValue?.rawValue ?? -1 }
+  }
+
   /// When true, non-kanban menus (Due, Tags, Priority, Eisenhower) show the entire
   /// subtree under `currentParentId` (siblings of the selection plus all of their
   /// descendants), matching kanban filtering. When false, they show only direct
