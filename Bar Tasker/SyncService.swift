@@ -718,3 +718,59 @@ final class SyncService {
     )
   }
 }
+
+// MARK: - Conflict Resolution & Sync Strategies
+extension SyncService {
+  func overwriteLocalWithRemoteTasks() async {
+    guard let coordinator else { return }
+    let remoteTasks = coordinator.repository.tasks
+    let nextId = (remoteTasks.map(\.id).max() ?? 0) + 1
+    let payload = OfflineTaskStorePayload(openTasks: remoteTasks, archivedTasks: [], nextTaskId: nextId)
+    coordinator.repository.localTaskStore.save(payload)
+    coordinator.repository.errorMessage = "Successfully overwrote local tasks with remote list."
+  }
+
+  func overwriteRemoteWithLocalTasks(destinationListId: String) async -> Bool {
+    guard let coordinator else { return false }
+    let loginSucceeded = await login()
+    guard loginSucceeded else { return false }
+
+    repository.beginLoading()
+    defer { repository.endLoading() }
+
+    do {
+      // 1. Fetch current remote tasks to delete
+      let remoteTasks = try await coordinator.repository.activeSyncPlugin.fetchOpenTasks(
+        listId: destinationListId,
+        credentials: repository.activeCredentials
+      )
+
+      // 2. Delete all remote tasks
+      for task in remoteTasks {
+        _ = try await coordinator.repository.activeSyncPlugin.deleteTask(
+          listId: destinationListId,
+          taskId: task.id,
+          credentials: repository.activeCredentials
+        )
+      }
+
+      // 3. Upload all local tasks
+      let localTasks = coordinator.repository.localTaskStore.load().openTasks
+      _ = try await coordinator.repository.copyTasks(localTasks, to: destinationListId)
+
+      // 4. Refresh local tasks
+      if destinationListId == repository.listId {
+        await fetchTopTask()
+      }
+
+      repository.errorMessage = "Successfully overwrote remote list with local tasks."
+      return true
+    } catch CheckvistSessionError.authenticationUnavailable {
+      repository.setAuthenticationRequiredErrorIfNeeded()
+      return false
+    } catch {
+      repository.errorMessage = "Failed to overwrite remote: \(error.localizedDescription)"
+      return false
+    }
+  }
+}

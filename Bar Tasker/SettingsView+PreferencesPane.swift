@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Preferences pane for `SettingsView` plus its Checkvist workspace summary
 /// helpers and the auto/manual list-loading routines. Pulled out of the main
@@ -11,65 +12,91 @@ import SwiftUI
 extension SettingsView {
   var preferencesPane: some View {
     Group {
-      Section(header: Text("Checkvist")) {
-        checkvistWorkspaceSummary
-      }
-
-      if checkvistManager.repository.checkvistIntegrationEnabled {
-      Section(header: Text("Merge Lists")) {
+      Section(header: Text("Tools")) {
         VStack(alignment: .leading, spacing: 10) {
-          Text("Copy open tasks from one Checkvist list into another.")
+          Text("Export Tasks")
+            .font(.headline)
+          Text("Save your current task list to a file for backup or use in other apps.")
             .font(.caption)
             .foregroundColor(themeColor(.textSecondary))
 
-          if checkvistManager.repository.availableLists.count >= 2 {
-            Picker("From", selection: $mergeSourceListId) {
-              ForEach(checkvistManager.repository.availableLists) { list in
-                Text("\(list.name) (\(list.id))").tag(String(list.id))
-              }
+          HStack(spacing: 8) {
+            Button("Export to Markdown...") {
+              exportTasks(format: .markdown)
             }
-            .pickerStyle(.menu)
-
-            Picker("Into", selection: $mergeDestinationListId) {
-              ForEach(checkvistManager.repository.availableLists) { list in
-                Text("\(list.name) (\(list.id))").tag(String(list.id))
-              }
+            Button("Export to JSON...") {
+              exportTasks(format: .json)
             }
-            .pickerStyle(.menu)
-
-            HStack {
-              Button("Use Active List as Destination") {
-                mergeDestinationListId = checkvistManager.repository.listId
-              }
-              .disabled(checkvistManager.repository.listId.isEmpty)
-
-              Button("Merge Open Tasks") {
-                Task {
-                  _ = await checkvistManager.syncService.mergeOpenTasksBetweenLists(
-                    sourceListId: mergeSourceListId,
-                    destinationListId: mergeDestinationListId
-                  )
-                }
-              }
-              .disabled(
-                checkvistManager.repository.isLoading || isLoadingCheckvistLists || mergeSourceListId.isEmpty
-                  || mergeDestinationListId.isEmpty
-                  || mergeSourceListId == mergeDestinationListId
-                  || !checkvistManager.repository.canAttemptLogin
-              )
-            }
-          } else if checkvistManager.repository.canAttemptLogin {
-            Text("Connect and load at least two Checkvist lists to enable merging.")
-              .font(.caption)
-              .foregroundColor(themeColor(.textSecondary))
-          } else {
-            Text("Add your Checkvist account above, then load lists to enable merging.")
+          }
+          .disabled(checkvistManager.repository.tasks.isEmpty)
+          
+          if checkvistManager.repository.tasks.isEmpty {
+            Text("No tasks available to export.")
               .font(.caption)
               .foregroundColor(themeColor(.textSecondary))
           }
         }
         .padding(.top, 4)
-      }
+
+        if checkvistManager.repository.checkvistIntegrationEnabled {
+          VStack(alignment: .leading, spacing: 10) {
+            Divider()
+              .padding(.vertical, 8)
+            
+            Text("Merge Lists")
+              .font(.headline)
+            Text("Copy open tasks from one Checkvist list into another.")
+              .font(.caption)
+              .foregroundColor(themeColor(.textSecondary))
+
+            if checkvistManager.repository.availableLists.count >= 2 {
+              Picker("From", selection: $mergeSourceListId) {
+                ForEach(checkvistManager.repository.availableLists) { list in
+                  Text("\(list.name) (\(list.id))").tag(String(list.id))
+                }
+              }
+              .pickerStyle(.menu)
+
+              Picker("Into", selection: $mergeDestinationListId) {
+                ForEach(checkvistManager.repository.availableLists) { list in
+                  Text("\(list.name) (\(list.id))").tag(String(list.id))
+                }
+              }
+              .pickerStyle(.menu)
+
+              HStack {
+                Button("Use Active List as Destination") {
+                  mergeDestinationListId = checkvistManager.repository.listId
+                }
+                .disabled(checkvistManager.repository.listId.isEmpty)
+
+                Button("Merge Open Tasks") {
+                  Task {
+                    _ = await checkvistManager.syncService.mergeOpenTasksBetweenLists(
+                      sourceListId: mergeSourceListId,
+                      destinationListId: mergeDestinationListId
+                    )
+                  }
+                }
+                .disabled(
+                  checkvistManager.repository.isLoading || isLoadingCheckvistLists || mergeSourceListId.isEmpty
+                    || mergeDestinationListId.isEmpty
+                    || mergeSourceListId == mergeDestinationListId
+                    || !checkvistManager.repository.canAttemptLogin
+                )
+              }
+            } else if checkvistManager.repository.canAttemptLogin {
+              Text("Connect and load at least two Checkvist lists to enable merging.")
+                .font(.caption)
+                .foregroundColor(themeColor(.textSecondary))
+            } else {
+              Text("Add your Checkvist account in Plugins settings, then load lists to enable merging.")
+                .font(.caption)
+                .foregroundColor(themeColor(.textSecondary))
+            }
+          }
+          .padding(.top, 4)
+        }
       }
 
       Section(header: Text("Preferences")) {
@@ -160,103 +187,85 @@ extension SettingsView {
     }
   }
 
-  fileprivate var checkvistWorkspaceSummary: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(alignment: .top, spacing: 10) {
-        Image(systemName: checkvistSummaryIconName)
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundColor(checkvistSummaryTint)
-          .frame(width: 18)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(checkvistSummaryTitle)
-            .font(.system(size: 12, weight: .semibold))
-          Text(checkvistSummarySubtitle)
-            .font(.caption)
-            .foregroundColor(themeColor(.textSecondary))
-            .fixedSize(horizontal: false, vertical: true)
+  enum ExportFormat {
+    case markdown
+    case json
+  }
+
+  private func exportTasks(format: ExportFormat) {
+    let savePanel = NSSavePanel()
+    savePanel.allowedContentTypes = format == .markdown ? [UTType(filenameExtension: "md") ?? .plainText] : [.json]
+    savePanel.canCreateDirectories = true
+    savePanel.nameFieldStringValue = format == .markdown ? "tasks.md" : "tasks.json"
+    
+    savePanel.begin { response in
+      guard response == .OK, let url = savePanel.url else { return }
+      
+      let tasks = checkvistManager.repository.tasks
+      let content: String
+      switch format {
+      case .markdown:
+        content = exportTasksToMarkdown(tasks)
+      case .json:
+        do {
+          let encoder = JSONEncoder()
+          encoder.outputFormatting = .prettyPrinted
+          let data = try encoder.encode(tasks)
+          content = String(data: data, encoding: .utf8) ?? ""
+        } catch {
+          checkvistManager.repository.errorMessage = "Failed to export JSON: \(error.localizedDescription)"
+          return
         }
-        Spacer(minLength: 0)
-        Button(checkvistSummaryButtonTitle) {
-          navState.select(pane: .plugins)
+      }
+      
+      do {
+        try content.write(to: url, atomically: true, encoding: .utf8)
+      } catch {
+        checkvistManager.repository.errorMessage = "Failed to save file: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  private func exportTasksToMarkdown(_ tasks: [CheckvistTask]) -> String {
+    var childrenMap: [Int: [CheckvistTask]] = [:]
+    var taskMap: [Int: CheckvistTask] = [:]
+    for t in tasks {
+      taskMap[t.id] = t
+      let parentId = t.parentId ?? 0
+      childrenMap[parentId, default: []].append(t)
+    }
+    
+    for (parentId, childList) in childrenMap {
+      childrenMap[parentId] = childList.sorted { 
+        ($0.position ?? Int.max) < ($1.position ?? Int.max)
+      }
+    }
+    
+    let rootTasks = tasks.filter { t in
+      let pId = t.parentId ?? 0
+      return pId == 0 || taskMap[pId] == nil
+    }.sorted {
+      ($0.position ?? Int.max) < ($1.position ?? Int.max)
+    }
+    
+    var lines: [String] = []
+    
+    func appendNode(task: CheckvistTask, level: Int) {
+      let indent = String(repeating: "  ", count: level)
+      let box = task.status == 1 ? "[x]" : "[ ]"
+      lines.append("\(indent)- \(box) \(task.content)")
+      if let children = childrenMap[task.id] {
+        for child in children {
+          appendNode(task: child, level: level + 1)
         }
       }
-
-      if let errorMessage = checkvistManager.repository.errorMessage {
-        Text(errorMessage)
-          .foregroundColor(themeColor(.danger))
-          .font(.caption)
-      }
     }
-    .padding(.top, 4)
-  }
-
-  fileprivate var checkvistSummaryIconName: String {
-    if !checkvistManager.repository.checkvistIntegrationEnabled { return "tray" }
-    switch checkvistManager.repository.checkvistConnectionState {
-    case .disconnected: return "circle.dashed"
-    case .connecting: return "arrow.triangle.2.circlepath"
-    case .awaitingConnect: return "bolt.horizontal.circle"
-    case .connected: return checkvistManager.repository.canSyncRemotely ? "checkmark.circle.fill" : "tray"
+    
+    for root in rootTasks {
+      appendNode(task: root, level: 0)
     }
-  }
-
-  fileprivate var checkvistSummaryTint: Color {
-    if !checkvistManager.repository.checkvistIntegrationEnabled { return themeColor(.textSecondary) }
-    switch checkvistManager.repository.checkvistConnectionState {
-    case .disconnected: return themeColor(.textSecondary)
-    case .connecting: return themeColor(.link)
-    case .awaitingConnect: return themeColor(.warning)
-    case .connected:
-      return checkvistManager.repository.canSyncRemotely
-        ? themeColor(.success) : themeColor(.textSecondary)
-    }
-  }
-
-  fileprivate var checkvistSummaryTitle: String {
-    if !checkvistManager.repository.checkvistIntegrationEnabled { return "Offline mode" }
-    switch checkvistManager.repository.checkvistConnectionState {
-    case .disconnected:
-      return "Not connected"
-    case .connecting:
-      return "Connecting…"
-    case .awaitingConnect:
-      return "Credentials entered"
-    case .connected:
-      if let active = checkvistManager.repository.availableLists.first(where: {
-        String($0.id) == checkvistManager.repository.listId
-      }) {
-        return "Syncing with “\(active.name)”"
-      }
-      if !checkvistManager.repository.listId.isEmpty {
-        return "Syncing with list \(checkvistManager.repository.listId)"
-      }
-      return "Offline workspace active"
-    }
-  }
-
-  fileprivate var checkvistSummarySubtitle: String {
-    if !checkvistManager.repository.checkvistIntegrationEnabled {
-      return "Checkvist sync is turned off. Enable the plugin to sync your tasks."
-    }
-    switch checkvistManager.repository.checkvistConnectionState {
-    case .disconnected:
-      return "Bar Tasker is running in offline mode. Connect Checkvist to sync your tasks."
-    case .connecting:
-      return "Signing in and loading your lists."
-    case .awaitingConnect:
-      return "Open Checkvist settings to finish connecting."
-    case .connected(let listCount):
-      let listWord = listCount == 1 ? "list" : "lists"
-      return "Connected as \(checkvistManager.repository.username). \(listCount) \(listWord) available."
-    }
-  }
-
-  fileprivate var checkvistSummaryButtonTitle: String {
-    if !checkvistManager.repository.checkvistIntegrationEnabled { return "Enable Checkvist" }
-    switch checkvistManager.repository.checkvistConnectionState {
-    case .disconnected, .awaitingConnect: return "Set Up Checkvist"
-    case .connecting, .connected: return "Checkvist Settings"
-    }
+    
+    return lines.joined(separator: "\n")
   }
 
   @MainActor

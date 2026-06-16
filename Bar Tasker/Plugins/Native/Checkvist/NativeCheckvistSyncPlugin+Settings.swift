@@ -20,6 +20,8 @@ private struct CheckvistSyncPluginSettingsView: View {
   @State private var isLoadingLists = false
   @State private var didAutoloadLists = false
   @State private var uploadDestinationListId = ""
+  @State private var showingOverwriteLocalAlert = false
+  @State private var showingOverwriteRemoteAlert = false
 
   private var connectionState: CheckvistConnectionState {
     manager.repository.checkvistConnectionState
@@ -142,7 +144,7 @@ private struct CheckvistSyncPluginSettingsView: View {
       }
 
       if case .connected = connectionState {
-        uploadOfflineTasksSection
+        offlineSyncAndConflictResolutionSection
       }
       }
     }
@@ -297,50 +299,95 @@ private struct CheckvistSyncPluginSettingsView: View {
     return "Bar Tasker is syncing with list ID \(manager.repository.listId)."
   }
 
-  private var uploadOfflineTasksSection: some View {
-    Section(header: Text("Upload Offline Tasks")) {
+  private var offlineSyncAndConflictResolutionSection: some View {
+    Section(header: Text("Offline Sync & Conflict Resolution")) {
       VStack(alignment: .leading, spacing: 10) {
-        Text("Copy tasks created in the offline workspace into a Checkvist list.")
+        Text("Your offline workspace currently has \(manager.repository.offlineOpenTaskCount) tasks.")
           .font(.caption)
           .foregroundColor(.secondary)
 
-        Text(
-          manager.repository.offlineOpenTaskCount == 1
-            ? "1 offline task is ready to upload."
-            : "\(manager.repository.offlineOpenTaskCount) offline tasks are ready to upload."
-        )
-        .font(.caption)
-        .foregroundColor(.secondary)
+        Text("Select a strategy to synchronize your local offline tasks with the remote Checkvist list:")
+          .font(.caption)
+          .foregroundColor(.secondary)
+          .padding(.bottom, 4)
 
         if !manager.repository.availableLists.isEmpty {
-          Picker("Destination List", selection: $uploadDestinationListId) {
+          Picker("Checkvist List", selection: $uploadDestinationListId) {
             ForEach(manager.repository.availableLists) { list in
               Text("\(list.name) (\(list.id))").tag(String(list.id))
             }
           }
           .pickerStyle(.menu)
+        }
 
-          HStack {
-            Button("Use Active List") {
-              uploadDestinationListId = manager.repository.listId
-            }
-            .disabled(manager.repository.listId.isEmpty)
-
-            Button("Upload Offline Tasks") {
+        VStack(alignment: .leading, spacing: 12) {
+          // Option 1: Merge
+          VStack(alignment: .leading, spacing: 4) {
+            Button("Merge Local Tasks with Remote") {
               Task {
                 _ = await manager.syncService.uploadOfflineTasksToCheckvist(
                   destinationListId: uploadDestinationListId
                 )
               }
             }
-            .disabled(
-              isBusy || uploadDestinationListId.isEmpty
-                || manager.repository.offlineOpenTaskCount == 0 || !manager.repository.canAttemptLogin
-            )
+            .buttonStyle(.bordered)
+            .disabled(isBusy || manager.repository.offlineOpenTaskCount == 0 || uploadDestinationListId.isEmpty)
+
+            Text("Uploads all local offline tasks to the selected remote list without deleting anything.")
+              .font(.caption2)
+              .foregroundColor(.secondary)
+          }
+
+          // Option 2: Overwrite Local (Use Remote)
+          VStack(alignment: .leading, spacing: 4) {
+            Button("Keep Remote (Overwrite Local)") {
+              showingOverwriteLocalAlert = true
+            }
+            .buttonStyle(.bordered)
+            .disabled(isBusy || manager.repository.listId.isEmpty)
+
+            Text("Replaces all local offline tasks with the tasks from the selected remote Checkvist list.")
+              .font(.caption2)
+              .foregroundColor(.secondary)
+          }
+
+          // Option 3: Overwrite Remote (Use Local)
+          VStack(alignment: .leading, spacing: 4) {
+            Button("Keep Local (Overwrite Remote)", role: .destructive) {
+              showingOverwriteRemoteAlert = true
+            }
+            .buttonStyle(.bordered)
+            .disabled(isBusy || uploadDestinationListId.isEmpty)
+
+            Text("Deletes all tasks currently on the remote Checkvist list and uploads your local offline tasks.")
+              .font(.caption2)
+              .foregroundColor(.secondary)
           }
         }
       }
       .padding(.top, 4)
+      .alert("Overwrite Local Tasks?", isPresented: $showingOverwriteLocalAlert) {
+        Button("Cancel", role: .cancel) { }
+        Button("Overwrite", role: .destructive) {
+          Task {
+            await manager.syncService.overwriteLocalWithRemoteTasks()
+          }
+        }
+      } message: {
+        Text("Are you sure you want to overwrite your local tasks? This will replace your local offline tasks with the remote list tasks.")
+      }
+      .alert("Overwrite Remote List?", isPresented: $showingOverwriteRemoteAlert) {
+        Button("Cancel", role: .cancel) { }
+        Button("Overwrite", role: .destructive) {
+          Task {
+            _ = await manager.syncService.overwriteRemoteWithLocalTasks(
+              destinationListId: uploadDestinationListId
+            )
+          }
+        }
+      } message: {
+        Text("Are you sure you want to overwrite the remote list? This will delete all tasks currently on the remote Checkvist list and upload your local tasks.")
+      }
     }
   }
 

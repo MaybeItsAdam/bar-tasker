@@ -322,12 +322,14 @@ struct SettingsView: View {
       // Detail
       Group {
         if let selectedPluginCard {
-          switch selectedPluginCard.source {
-          case .builtIn:
-            Form { pluginSettingsView(for: selectedPluginCard) }
-              .formStyle(.grouped)
-          case .user(let plugin):
-            userPluginDetailView(for: plugin)
+          ScrollView {
+            switch selectedPluginCard.source {
+            case .builtIn:
+              Form { pluginSettingsView(for: selectedPluginCard) }
+                .formStyle(.grouped)
+            case .user(let plugin):
+              userPluginDetailView(for: plugin)
+            }
           }
         } else {
           ContentUnavailableView(
