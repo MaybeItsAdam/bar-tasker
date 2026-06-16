@@ -44,6 +44,7 @@ Open Preferences (`Cmd+,`) and configure:
 5. Quick-add hotkey and target location
 6. Obsidian inbox folder (optional)
 7. MCP integration controls (optional)
+8. Launch at login toggle (under general Preferences to start the app automatically on system boot)
 
 On first use, optional onboarding boxes can guide setup for Checkvist, Obsidian, and Google Calendar.  
 Each box is dismissable so the app remains usable in offline-first mode.

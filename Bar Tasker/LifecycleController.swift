@@ -25,6 +25,7 @@ final class LifecycleController {
   func start() {
     setupChildCallbacks()
     setupNetworkMonitor()
+    syncLaunchAtLogin()
   }
 
   // MARK: - Child callbacks
@@ -148,6 +149,17 @@ final class LifecycleController {
         coordinator.preferences.launchAtLogin = false
         coordinator.isApplyingLaunchAtLoginChange = false
       }
+    }
+  }
+
+  private func syncLaunchAtLogin() {
+    guard let coordinator else { return }
+    guard #available(macOS 13.0, *) else { return }
+    let registered = SMAppService.mainApp.status == .enabled
+    if registered != coordinator.preferences.launchAtLogin {
+      coordinator.isApplyingLaunchAtLoginChange = true
+      coordinator.preferences.launchAtLogin = registered
+      coordinator.isApplyingLaunchAtLoginChange = false
     }
   }
 }
