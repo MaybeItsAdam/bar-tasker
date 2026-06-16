@@ -54,7 +54,7 @@ final class TaskMutationService {
   // MARK: - Mark Done / Reopen / Invalidate
 
   func markCurrentTaskDone() async {
-    guard let coordinator, let task = coordinator.currentTask else { return }
+    guard let coordinator, let task = coordinator.taskListViewModel.currentTask else { return }
 
     // Multi-step haptic pattern for stronger tactile feedback. Each sleep
     // must propagate CancellationError so navigating away or switching tasks
@@ -82,12 +82,12 @@ final class TaskMutationService {
   }
 
   func reopenCurrentTask() async {
-    guard let coordinator, let task = coordinator.currentTask else { return }
+    guard let coordinator, let task = coordinator.taskListViewModel.currentTask else { return }
     await taskAction(task, endpoint: "reopen")
   }
 
   func invalidateCurrentTask() async {
-    guard let coordinator, let task = coordinator.currentTask else { return }
+    guard let coordinator, let task = coordinator.taskListViewModel.currentTask else { return }
     await taskAction(task, endpoint: "invalidate")
   }
 
@@ -245,7 +245,7 @@ final class TaskMutationService {
 
     guard !repository.listId.isEmpty else {
       repository.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
-      coordinator.presentOnboardingDialogIfNeeded()
+      coordinator.onboardingService.presentOnboardingDialogIfNeeded()
       return
     }
 
@@ -262,7 +262,7 @@ final class TaskMutationService {
 
     // Find current position to insert right below.
     var apiPosition = 0
-    let target = insertAfterTask ?? coordinator.currentTask
+    let target = insertAfterTask ?? coordinator.taskListViewModel.currentTask
     if insertAtTopOfCurrentLevel {
       apiPosition = 1
     } else if let current = target {
@@ -343,7 +343,7 @@ final class TaskMutationService {
 
     guard !repository.listId.isEmpty else {
       repository.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
-      coordinator.presentOnboardingDialogIfNeeded()
+      coordinator.onboardingService.presentOnboardingDialogIfNeeded()
       return
     }
     let optimisticTask = insertOptimisticChildTask(content: trimmedContent, parentId: parentId)
@@ -401,7 +401,10 @@ final class TaskMutationService {
     // instead of round-tripping a create+delete through the server.
     if coordinator.repository.cancelPendingCreate(tempId: task.id) {
       _ = applyOptimisticCompletion(for: task.id)
-      coordinator.reconcilePendingObsidianSyncQueueWithOpenTasks()
+      coordinator.integrations.reconcilePendingObsidianSyncQueueWithOpenTasks(
+        openTaskIds: Set(coordinator.repository.tasks.map(\.id)),
+        listId: coordinator.repository.listId
+      )
       return
     }
 
@@ -409,7 +412,10 @@ final class TaskMutationService {
       repository.errorMessage = "Task not found."
       return
     }
-    coordinator.reconcilePendingObsidianSyncQueueWithOpenTasks()
+    coordinator.integrations.reconcilePendingObsidianSyncQueueWithOpenTasks(
+      openTaskIds: Set(coordinator.repository.tasks.map(\.id)),
+      listId: coordinator.repository.listId
+    )
 
     let listId = repository.listId
     let credentials = repository.activeCredentials
@@ -441,7 +447,7 @@ final class TaskMutationService {
             whenOnline: {
               self.restoreTasksSnapshot(optimisticSnapshot)
               if case CheckvistSessionError.authenticationUnavailable = error {
-                repository.setAuthenticationRequiredErrorIfNeeded()
+                self.repository.setAuthenticationRequiredErrorIfNeeded()
               } else {
                 self.repository.errorMessage = "Error: \(error.localizedDescription)"
               }
@@ -462,7 +468,7 @@ final class TaskMutationService {
     guard let coordinator else { return false }
     let useSpecificLocation =
       preferSpecificLocation ?? (coordinator.preferences.quickAddLocationMode == .specificParentTask)
-    if useSpecificLocation && coordinator.quickAddSpecificParentTaskIdValue == nil {
+    if useSpecificLocation && coordinator.preferences.quickAddSpecificParentTaskIdValue == nil {
       repository.errorMessage = "Set a valid Quick Add parent task ID in Preferences first."
       return false
     }
@@ -478,7 +484,7 @@ final class TaskMutationService {
 
   func setQuickAddSpecificLocationToCurrentTask() {
     guard let coordinator else { return }
-    guard let currentTask = coordinator.currentTask else {
+    guard let currentTask = coordinator.taskListViewModel.currentTask else {
       repository.errorMessage = "No task selected."
       return
     }
@@ -494,7 +500,7 @@ final class TaskMutationService {
 
     let parentTaskId: Int?
     if useSpecificLocation {
-      guard let specificTaskId = coordinator.quickAddSpecificParentTaskIdValue else {
+      guard let specificTaskId = coordinator.preferences.quickAddSpecificParentTaskIdValue else {
         repository.errorMessage = "Set a valid Quick Add parent task ID in Preferences first."
         return
       }
@@ -505,7 +511,7 @@ final class TaskMutationService {
 
     guard !repository.listId.isEmpty else {
       repository.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
-      coordinator.presentOnboardingDialogIfNeeded()
+      coordinator.onboardingService.presentOnboardingDialogIfNeeded()
       return
     }
 
@@ -661,7 +667,7 @@ final class TaskMutationService {
       coordinator.repository.tasks.append(optimisticTask)
     }
 
-    if let insertedIndex = coordinator.currentLevelTasks.firstIndex(where: {
+    if let insertedIndex = coordinator.taskListViewModel.currentLevelTasks.firstIndex(where: {
       $0.id == optimisticTask.id
     }) {
       coordinator.navigationState.currentSiblingIndex = insertedIndex
@@ -707,7 +713,7 @@ final class TaskMutationService {
 
   private func applyOptimisticCompletion(for taskId: Int) -> OptimisticCompletionSnapshot? {
     guard let coordinator else { return nil }
-    guard let removingRange = coordinator.subtreeBlockRange(for: taskId, in: coordinator.repository.tasks)
+    guard let removingRange = coordinator.taskListViewModel.subtreeBlockRange(for: taskId, in: coordinator.repository.tasks)
     else { return nil }
     let removedTaskIds = Set(coordinator.repository.tasks[removingRange].map(\.id))
     let snapshot = OptimisticCompletionSnapshot(
@@ -785,7 +791,7 @@ final class TaskMutationService {
   // MARK: - Priority mutations on the current task
 
   @MainActor func setPriorityForCurrentTask(_ rank: Int) {
-    guard rank >= 1, let coordinator, let task = coordinator.currentTask else { return }
+    guard rank >= 1, let coordinator, let task = coordinator.taskListViewModel.currentTask else { return }
 
     let scopeId = task.parentId ?? 0
     var byParent = repository.priorityTaskIdsByParentId
@@ -803,23 +809,23 @@ final class TaskMutationService {
     repository.savePriorityQueue(byParent)
     repository.errorMessage = nil
 
-    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+    if let newIndex = coordinator.taskListViewModel.visibleTasks.firstIndex(where: { $0.id == task.id }) {
       coordinator.navigationState.currentSiblingIndex = newIndex
     }
   }
 
   @MainActor func setAbsolutePriorityForCurrentTask(_ rank: Int) {
-    guard rank >= 1, let coordinator, let task = coordinator.currentTask else { return }
+    guard rank >= 1, let coordinator, let task = coordinator.taskListViewModel.currentTask else { return }
     repository.setAbsolutePriority(taskId: task.id, rank: rank)
     repository.errorMessage = nil
 
-    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+    if let newIndex = coordinator.taskListViewModel.visibleTasks.firstIndex(where: { $0.id == task.id }) {
       coordinator.navigationState.currentSiblingIndex = newIndex
     }
   }
 
   @MainActor func sendCurrentTaskToPriorityBack() {
-    guard let coordinator, let task = coordinator.currentTask else { return }
+    guard let coordinator, let task = coordinator.taskListViewModel.currentTask else { return }
 
     let scopeId = task.parentId ?? 0
     var byParent = repository.priorityTaskIdsByParentId
@@ -836,13 +842,13 @@ final class TaskMutationService {
     repository.savePriorityQueue(byParent)
     repository.errorMessage = nil
 
-    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+    if let newIndex = coordinator.taskListViewModel.visibleTasks.firstIndex(where: { $0.id == task.id }) {
       coordinator.navigationState.currentSiblingIndex = newIndex
     }
   }
 
   @MainActor func clearPriorityForCurrentTask() {
-    guard let coordinator, let task = coordinator.currentTask else { return }
+    guard let coordinator, let task = coordinator.taskListViewModel.currentTask else { return }
     guard repository.prioritizedTaskIds.contains(task.id) else { return }
     var byParent = repository.priorityTaskIdsByParentId
     for (pid, ids) in byParent {
@@ -855,7 +861,7 @@ final class TaskMutationService {
     repository.savePriorityQueue(byParent)
     repository.errorMessage = nil
 
-    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+    if let newIndex = coordinator.taskListViewModel.visibleTasks.firstIndex(where: { $0.id == task.id }) {
       coordinator.navigationState.currentSiblingIndex = newIndex
     } else {
       coordinator.taskNavigationService.clampSelectionToVisibleRange()
@@ -863,12 +869,12 @@ final class TaskMutationService {
   }
 
   @MainActor func clearAbsolutePriorityForCurrentTask() {
-    guard let coordinator, let task = coordinator.currentTask else { return }
+    guard let coordinator, let task = coordinator.taskListViewModel.currentTask else { return }
     guard repository.absolutePrioritizedTaskIds.contains(task.id) else { return }
     repository.clearAbsolutePriority(taskId: task.id)
     repository.errorMessage = nil
 
-    if let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+    if let newIndex = coordinator.taskListViewModel.visibleTasks.firstIndex(where: { $0.id == task.id }) {
       coordinator.navigationState.currentSiblingIndex = newIndex
     } else {
       coordinator.taskNavigationService.clampSelectionToVisibleRange()

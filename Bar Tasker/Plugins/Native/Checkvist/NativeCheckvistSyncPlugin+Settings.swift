@@ -5,7 +5,7 @@ extension NativeCheckvistSyncPlugin: PluginSettingsPageProviding {
   var settingsIconSystemName: String { "checkmark.circle" }
 
   func sidebarStatusLabel(manager: AppCoordinator) -> String {
-    manager.checkvistIntegrationEnabled ? "Enabled" : "Disabled"
+    manager.repository.checkvistIntegrationEnabled ? "Enabled" : "Disabled"
   }
 
   func makeSettingsView(manager: AppCoordinator) -> AnyView {
@@ -22,7 +22,7 @@ private struct CheckvistSyncPluginSettingsView: View {
   @State private var uploadDestinationListId = ""
 
   private var connectionState: CheckvistConnectionState {
-    manager.checkvistConnectionState
+    manager.repository.checkvistConnectionState
   }
 
   private var isBusy: Bool {
@@ -44,8 +44,8 @@ private struct CheckvistSyncPluginSettingsView: View {
         Toggle(
           "Enable Checkvist sync",
           isOn: Binding(
-            get: { manager.checkvistIntegrationEnabled },
-            set: { manager.checkvistIntegrationEnabled = $0 }
+            get: { manager.repository.checkvistIntegrationEnabled },
+            set: { manager.repository.checkvistIntegrationEnabled = $0 }
           )
         )
         Text(
@@ -55,7 +55,7 @@ private struct CheckvistSyncPluginSettingsView: View {
         .foregroundColor(.secondary)
       }
 
-      if manager.checkvistIntegrationEnabled {
+      if manager.repository.checkvistIntegrationEnabled {
       Section(header: Text("Connection")) {
         VStack(alignment: .leading, spacing: 14) {
           connectionStatusBanner
@@ -103,7 +103,7 @@ private struct CheckvistSyncPluginSettingsView: View {
               Task { await loadLists(assignFirstIfMissing: false) }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(isBusy || !manager.canAttemptLogin)
+            .disabled(isBusy || !manager.repository.canAttemptLogin)
 
             if isBusy {
               ProgressView().scaleEffect(0.7)
@@ -149,7 +149,7 @@ private struct CheckvistSyncPluginSettingsView: View {
     .task {
       guard !didAutoloadLists else { return }
       didAutoloadLists = true
-      if manager.canAttemptLogin && manager.repository.availableLists.isEmpty {
+      if manager.repository.canAttemptLogin && manager.repository.availableLists.isEmpty {
         await loadLists(assignFirstIfMissing: false)
       }
       seedUploadDestinationIfNeeded()
@@ -305,9 +305,9 @@ private struct CheckvistSyncPluginSettingsView: View {
           .foregroundColor(.secondary)
 
         Text(
-          manager.offlineOpenTaskCount == 1
+          manager.repository.offlineOpenTaskCount == 1
             ? "1 offline task is ready to upload."
-            : "\(manager.offlineOpenTaskCount) offline tasks are ready to upload."
+            : "\(manager.repository.offlineOpenTaskCount) offline tasks are ready to upload."
         )
         .font(.caption)
         .foregroundColor(.secondary)
@@ -335,7 +335,7 @@ private struct CheckvistSyncPluginSettingsView: View {
             }
             .disabled(
               isBusy || uploadDestinationListId.isEmpty
-                || manager.offlineOpenTaskCount == 0 || !manager.canAttemptLogin
+                || manager.repository.offlineOpenTaskCount == 0 || !manager.repository.canAttemptLogin
             )
           }
         }

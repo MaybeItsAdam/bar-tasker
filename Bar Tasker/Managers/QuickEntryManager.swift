@@ -13,7 +13,7 @@ import Observation
   var isQuickEntryFocused: Bool = false
   var editCursorAtEnd: Bool = true  // true = append (a), false = insert (i)
   var pendingDeleteConfirmation: Bool = false
-  var completingTaskId: Int? = nil
+  var completingTaskId: Int?
   var commandSuggestionIndex: Int = 0
   var keyBuffer: String = ""
 

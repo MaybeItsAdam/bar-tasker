@@ -5,7 +5,7 @@ import SwiftUI
 
 @MainActor
 @Observable final class PreferencesManager {
-  @ObservationIgnored private let preferencesStore: PreferencesStore
+  @ObservationIgnored let preferencesStore: PreferencesStore
 
   @ObservationIgnored var onLaunchAtLoginChanged: ((Bool) -> Void)?
   @ObservationIgnored var onIgnoreKeychainInDebugChanged: (() -> Void)?
@@ -103,6 +103,9 @@ import SwiftUI
   var namedTimeEodHour: Int {
     didSet { preferencesStore.set(namedTimeEodHour, for: .namedTimeEodHour) }
   }
+  var appFontName: String {
+    didSet { preferencesStore.set(appFontName, for: .appFontName) }
+  }
 
   init(preferencesStore: PreferencesStore) {
     self.preferencesStore = preferencesStore
@@ -158,6 +161,23 @@ import SwiftUI
     self.namedTimeAfternoonHour = preferencesStore.int(.namedTimeAfternoonHour, default: 14)
     self.namedTimeEveningHour = preferencesStore.int(.namedTimeEveningHour, default: 18)
     self.namedTimeEodHour = preferencesStore.int(.namedTimeEodHour, default: 17)
+    self.appFontName = preferencesStore.string(.appFontName, default: "System Font")
+  }
+
+  var quickAddSpecificParentTaskIdValue: Int? {
+    let raw = quickAddSpecificParentTaskId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !raw.isEmpty, let value = Int(raw), value > 0 else { return nil }
+    return value
+  }
+
+  func resolveDueDate(_ input: String) -> String {
+    let config = BarTaskerDateParsingConfig(
+      morningHour: namedTimeMorningHour,
+      afternoonHour: namedTimeAfternoonHour,
+      eveningHour: namedTimeEveningHour,
+      eodHour: namedTimeEodHour
+    )
+    return CommandEngine.resolveDueDate(input, config: config)
   }
 
   var configurableShortcutActions: [ConfigurableShortcutAction] {

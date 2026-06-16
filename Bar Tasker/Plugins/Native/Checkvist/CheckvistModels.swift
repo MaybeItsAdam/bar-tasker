@@ -208,7 +208,7 @@ struct CheckvistTask: Codable, Identifiable, Sendable, Equatable {
     )
   }
 
-  nonisolated(unsafe) private static let dueDateFormatters: [DateFormatter] = {
+  private static let dueDateFormatters: [DateFormatter] = {
     let locale = Locale(identifier: "en_US_POSIX")
 
     let dateOnly = DateFormatter()

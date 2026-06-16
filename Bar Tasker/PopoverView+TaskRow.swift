@@ -34,7 +34,7 @@ extension PopoverView {
 
     HStack(alignment: .top, spacing: PopoverLayout.rowContentSpacing) {
       VStack(alignment: .leading, spacing: 3) {
-        if manager.shouldShowBreadcrumbPath(for: task) {
+        if taskListViewModel.shouldShowBreadcrumbPath(for: task) {
           let includeCurrentParent =
             manager.preferences.showTaskBreadcrumbContext
             && !(manager.quickEntry.quickEntryMode == .search && !manager.quickEntry.searchText.isEmpty)
@@ -54,7 +54,7 @@ extension PopoverView {
             text: Bindable(manager).quickEntry.quickEntryText,
             isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
             cursorAtEnd: manager.quickEntry.editCursorAtEnd,
-            font: Typography.taskNSFont(ofSize: 13),
+            font: Typography.taskNSFont(ofSize: 13, name: manager.preferences.appFontName),
             placeholder: "Edit task…",
             onSubmit: { submitAction() },
             onTab: {},
@@ -399,13 +399,13 @@ extension PopoverView {
   func formatTaskContent(_ text: String) -> Text {
     let pattern = "([@#][a-zA-Z0-9_\\-]+)"
     guard let regex = try? NSRegularExpression(pattern: pattern) else {
-      return Text(text).font(Typography.taskFont(size: 13)).foregroundColor(
+      return Text(text).font(Typography.taskFont(size: 13, name: manager.preferences.appFontName)).foregroundColor(
         themeColor(.textPrimary))
     }
 
     let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
     guard !matches.isEmpty else {
-      return Text(text).font(Typography.taskFont(size: 13)).foregroundColor(
+      return Text(text).font(Typography.taskFont(size: 13, name: manager.preferences.appFontName)).foregroundColor(
         themeColor(.textPrimary))
     }
 
@@ -420,7 +420,7 @@ extension PopoverView {
         let preceding = String(text[lastEnd..<matchRange.lowerBound])
         resultText =
           resultText
-          + Text(preceding).font(Typography.taskFont(size: 13))
+          + Text(preceding).font(Typography.taskFont(size: 13, name: manager.preferences.appFontName))
           .foregroundColor(themeColor(.textPrimary))
       }
 
@@ -430,7 +430,7 @@ extension PopoverView {
       // Markdown trick: We can't actually nest complex View backgrounds inside a concatenated Text in standard SwiftUI without iOS 15 AttributedString APIs,
       // but we CAN use basic inline styling like bolding and foreground colors.
       let tagText = Text(tagStr)
-        .font(Typography.taskFont(size: 12, weight: .bold))
+        .font(Typography.taskFont(size: 12, name: manager.preferences.appFontName, weight: .bold))
         .foregroundColor(themeColor(.link))
 
       resultText = resultText + tagText
@@ -442,7 +442,7 @@ extension PopoverView {
       let trailing = String(text[lastEnd..<text.endIndex])
       resultText =
         resultText
-        + Text(trailing).font(Typography.taskFont(size: 13))
+        + Text(trailing).font(Typography.taskFont(size: 13, name: manager.preferences.appFontName))
         .foregroundColor(themeColor(.textPrimary))
     }
 

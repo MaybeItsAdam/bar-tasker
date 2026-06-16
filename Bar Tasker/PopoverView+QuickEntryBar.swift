@@ -169,7 +169,7 @@ extension PopoverView {
     case .quickAddDefault:
       return "Quick add to list root"
     case .quickAddSpecific:
-      if let taskId = manager.quickAddSpecificParentTaskIdValue {
+      if let taskId = manager.preferences.quickAddSpecificParentTaskIdValue {
         return "Quick add under task #\(taskId)"
       }
       return "Quick add under specific task (set parent ID in Preferences)"
@@ -179,7 +179,7 @@ extension PopoverView {
   var quickEntryNSFont: NSFont {
     switch manager.quickEntry.quickEntryMode {
     case .addSibling, .addChild, .editTask, .quickAddDefault, .quickAddSpecific:
-      return Typography.taskNSFont(ofSize: 13)
+      return Typography.taskNSFont(ofSize: 13, name: manager.preferences.appFontName)
     case .search, .command:
       return Typography.interfaceNSFont(ofSize: 13)
     }
@@ -232,7 +232,7 @@ extension PopoverView {
     case .addChild: submitChild()
     case .editTask:
       guard !manager.quickEntry.quickEntryText.isEmpty else { return }
-      if let task = manager.currentTask {
+      if let task = taskListViewModel.currentTask {
         let newContent = manager.quickEntry.quickEntryText
         escapeAction()
         Task { await manager.taskMutationService.updateTask(task: task, content: newContent) }
@@ -312,7 +312,7 @@ extension PopoverView {
       return
     }
     let content = manager.quickEntry.quickEntryText
-    let targetTask = manager.currentTask
+    let targetTask = taskListViewModel.currentTask
     manager.quickEntry.quickEntryText = ""
     manager.quickEntry.quickEntryMode = .search
     manager.quickEntry.isQuickEntryFocused = false
@@ -333,7 +333,7 @@ extension PopoverView {
   }
 
   func submitChild() {
-    guard !manager.quickEntry.quickEntryText.isEmpty, let parent = manager.currentTask else {
+    guard !manager.quickEntry.quickEntryText.isEmpty, let parent = taskListViewModel.currentTask else {
       if manager.quickEntry.quickEntryText.isEmpty {
         manager.quickEntry.quickEntryText = ""
         manager.quickEntry.quickEntryMode = .search

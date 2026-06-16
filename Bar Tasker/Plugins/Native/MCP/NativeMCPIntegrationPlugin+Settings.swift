@@ -24,7 +24,7 @@ private struct MCPIntegrationPluginSettingsView: View {
       if manager.integrations.mcpIntegrationEnabled {
         VStack(alignment: .leading, spacing: 8) {
           Text("MCP Server")
-          if manager.hasResolvedMCPServerCommand {
+          if !manager.integrations.mcpServerCommandPath.isEmpty {
             Text(manager.integrations.mcpServerCommandPath)
               .font(.caption)
               .textSelection(.enabled)
@@ -48,7 +48,11 @@ private struct MCPIntegrationPluginSettingsView: View {
           }
 
           ScrollView {
-            Text(manager.mcpClientConfigurationPreview)
+            Text(manager.integrations.mcpIntegrationPlugin.makeClientConfigurationJSON(
+              credentials: manager.repository.activeCredentials,
+              listId: manager.repository.listId,
+              redactSecrets: true
+            ))
               .font(.system(.caption, design: .monospaced))
               .textSelection(.enabled)
               .frame(maxWidth: .infinity, alignment: .leading)

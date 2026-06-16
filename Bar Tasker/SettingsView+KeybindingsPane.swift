@@ -97,7 +97,7 @@ extension SettingsView {
               Button("Use selected task") {
                 checkvistManager.taskMutationService.setQuickAddSpecificLocationToCurrentTask()
               }
-              .disabled(checkvistManager.currentTask == nil)
+              .disabled(checkvistManager.taskListViewModel.currentTask == nil)
             }
             Text("Quick Add creates new tasks as children of this task ID.")
               .font(.caption)
@@ -420,7 +420,8 @@ extension SettingsView {
         .init(keys: "Shift+Space", action: "Invalidate task", note: nil),
         .init(keys: "Enter", action: "Add sibling", note: nil),
         .init(keys: "Shift+Enter / Tab", action: "Add child", note: nil),
-        .init(keys: "Shift+Tab", action: "Unindent selected task", note: nil),
+        .init(keys: "Cmd+← / Shift+Tab", action: "Unindent selected task", note: nil),
+        .init(keys: "Cmd+→", action: "Indent selected task", note: nil),
         .init(keys: "Cmd+↑ / Cmd+↓", action: "Move task", note: nil),
         .init(keys: "Delete", action: "Delete task", note: "Uses delete confirmation setting"),
         .init(keys: "u", action: "Undo last action", note: nil),

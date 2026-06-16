@@ -73,12 +73,7 @@ import SwiftUI
   let focusSessionManager: FocusSessionManager
 
   let preferences: PreferencesManager
-  var onboardingCompleted: Bool {
-    didSet { preferencesStore.set(onboardingCompleted, for: .onboardingCompleted) }
-  }
-  var activeOnboardingDialog: OnboardingDialog?
-
-  @ObservationIgnored var dismissedOnboardingDialogs: Set<OnboardingDialog>
+  var onboardingService: OnboardingService!
 
   @ObservationIgnored var isApplyingLaunchAtLoginChange = false
   @ObservationIgnored let preferencesStore = PreferencesStore()
@@ -161,11 +156,7 @@ import SwiftUI
       preferencesStore: preferencesStore,
       cacheInvalidationBus: cacheInvalidationBus
     )
-    if let storedOnboarding = storedOnboardingCompletedFlag {
-      self.onboardingCompleted = storedOnboarding
-    } else {
-      self.onboardingCompleted = !storedUsername.isEmpty && !storedListId.isEmpty
-    }
+    // OnboardingService will compute onboardingCompleted in its init.
 
     if storedPluginSelectionOnboardingCompletedFlag == nil {
       let storedObsidianIntegrationEnabled = preferencesStore.optionalBool(
@@ -196,17 +187,18 @@ import SwiftUI
     self.recurrence = RecurrenceManager(preferencesStore: preferencesStore)
     let quickEntry = QuickEntryManager(cacheInvalidationBus: cacheInvalidationBus)
     self.quickEntry = quickEntry
-    self.integrations = IntegrationCoordinator(
+    let integrations = IntegrationCoordinator(
       preferencesStore: preferencesStore,
       obsidianPlugin: resolvedObsidianPlugin,
       googleCalendarPlugin: resolvedGoogleCalendarPlugin,
       mcpIntegrationPlugin: resolvedMCPIntegrationPlugin,
       initialListId: storedListId
     )
-    self.activeOnboardingDialog = nil
-    let persistedDismissedDialogs = preferencesStore.stringArray(.dismissedOnboardingDialogs)
-    self.dismissedOnboardingDialogs = Set(
-      persistedDismissedDialogs.compactMap(OnboardingDialog.init(rawValue:))
+    self.integrations = integrations
+    self.onboardingService = OnboardingService(
+      preferencesStore: preferencesStore,
+      repository: repository,
+      integrations: integrations
     )
 
     self.taskListViewModel = TaskListViewModel(
@@ -214,7 +206,8 @@ import SwiftUI
       navigationState: navigationState,
       timer: timer,
       quickEntry: quickEntry,
-      preferencesStore: preferencesStore
+      kanban: kanban,
+      preferences: preferences
     )
 
     self.taskNavigationService = TaskNavigationService(
@@ -250,10 +243,10 @@ import SwiftUI
     self.integrationDataSourceAdapter = integrationDataSourceAdapter
     integrations.dataSource = integrationDataSourceAdapter
     integrations.onIntegrationStateChanged = { [weak self] in
-      self?.refreshOnboardingDialogState()
+      self?.onboardingService.refreshOnboardingDialogState()
     }
     Task { @MainActor [weak self] in
-      self?.presentOnboardingDialogIfNeeded()
+      self?.onboardingService.presentOnboardingDialogIfNeeded()
     }
   }
 
@@ -435,5 +428,106 @@ extension AppCoordinator {
         }
       }
     }
+  }
+
+  // MARK: - Keychain / Debug / Command execution
+
+  func handleCredentialStorageModeChanged() {
+    let current = repository.remoteKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    if usesKeychainStorage {
+      if !current.isEmpty {
+        repository.checkvistSyncPlugin.persistRemoteKey(current, useKeychainStorage: true)
+      } else {
+        repository.hasAttemptedRemoteKeyBootstrap = false
+        loadRemoteKeyFromKeychainIfNeeded()
+      }
+    } else {
+      repository.checkvistSyncPlugin.persistRemoteKeyForDebugStorageMode(current)
+    }
+  }
+
+  @MainActor func loadCredentialsFromKeychain() {
+    repository.hasAttemptedRemoteKeyBootstrap = false
+    loadRemoteKeyFromKeychainIfNeeded()
+  }
+
+  func loadRemoteKeyFromKeychainIfNeeded() {
+    let currentState = RemoteKeyBootstrapState(
+      remoteKey: repository.remoteKey,
+      hasAttemptedBootstrap: repository.hasAttemptedRemoteKeyBootstrap
+    )
+    let nextState = RemoteKeyBootstrapPolicy.bootstrap(
+      state: currentState,
+      usesKeychainStorage: usesKeychainStorage,
+      loadFromKeychain: { repository.checkvistSyncPlugin.loadRemoteKeyFromKeychain() }
+    )
+    repository.remoteKey = nextState.remoteKey
+    repository.hasAttemptedRemoteKeyBootstrap = nextState.hasAttemptedBootstrap
+  }
+
+  @MainActor func toggleDebugKeychainStorageMode() {
+    #if DEBUG
+      preferences.ignoreKeychainInDebug.toggle()
+      repository.errorMessage =
+        preferences.ignoreKeychainInDebug
+        ? "Dev mode: keychain disabled (no password prompts)."
+        : "Dev mode: keychain enabled."
+    #endif
+  }
+
+  @MainActor func resetOnboardingForDebug() {
+    #if DEBUG
+      repository.checkvistSyncPlugin.clearAuthentication()
+      repository.errorMessage = nil
+      let resetState = OnboardingResetPolicy.reset(
+        OnboardingResetState(
+          remoteKey: repository.remoteKey,
+          onboardingCompleted: onboardingService.onboardingCompleted,
+          username: repository.username,
+          listId: repository.listId,
+          availableListsCount: repository.availableLists.count,
+          tasksCount: repository.tasks.count,
+          currentParentId: navigationState.currentParentId,
+          currentSiblingIndex: navigationState.currentSiblingIndex
+        ))
+
+      onboardingService.onboardingCompleted = resetState.onboardingCompleted
+      repository.username = resetState.username
+      repository.listId = resetState.listId
+      repository.availableLists = []
+      repository.tasks = []
+      navigationState.currentParentId = resetState.currentParentId
+      navigationState.currentSiblingIndex = resetState.currentSiblingIndex
+
+      preferencesStore.remove(.checkvistUsername)
+      preferencesStore.remove(.checkvistListId)
+      preferencesStore.remove(.onboardingCompleted)
+      preferencesStore.remove(.pluginSelectionOnboardingCompleted)
+      onboardingService.dismissedOnboardingDialogs = []
+      onboardingService.activeOnboardingDialog = nil
+      preferencesStore.remove(.dismissedOnboardingDialogs)
+      onboardingService.presentOnboardingDialogIfNeeded()
+    #endif
+  }
+
+  @MainActor func executeCommandInput(_ input: String) async {
+    let parsed = CommandEngine.parse(input)
+    logger.log("Executing command: \(input, privacy: .public)")
+    await commandExecutor.execute(parsed: parsed)
+    if case .unknown(let raw) = parsed {
+      logger.error("Unknown command: \(raw, privacy: .public)")
+    }
+  }
+
+  // Setup is non-blocking: the app can always run in offline-first mode.
+  var needsInitialSetup: Bool { false }
+
+  var activePluginSettingsPages: [any PluginSettingsPageProviding] {
+    [
+      repository.checkvistSyncPlugin as any Plugin,
+      integrations.obsidianPlugin as any Plugin,
+      integrations.googleCalendarPlugin as any Plugin,
+      integrations.mcpIntegrationPlugin as any Plugin,
+    ].compactMap { $0 as? any PluginSettingsPageProviding }
   }
 }

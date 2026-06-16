@@ -9,6 +9,8 @@ import Observation
   @ObservationIgnored private let timer: TimerManager
   @ObservationIgnored private let quickEntry: QuickEntryManager
   @ObservationIgnored private let preferencesStore: PreferencesStore
+  @ObservationIgnored private let preferences: PreferencesManager
+  @ObservationIgnored private weak var kanban: KanbanManager?
 
   // MARK: - State
   var hideFuture: Bool = false {
@@ -65,13 +67,16 @@ import Observation
     navigationState: NavigationState,
     timer: TimerManager,
     quickEntry: QuickEntryManager,
-    preferencesStore: PreferencesStore
+    kanban: KanbanManager?,
+    preferences: PreferencesManager
   ) {
     self.repository = repository
     self.navigationState = navigationState
     self.timer = timer
     self.quickEntry = quickEntry
-    self.preferencesStore = preferencesStore
+    self.kanban = kanban
+    self.preferences = preferences
+    self.preferencesStore = preferences.preferencesStore
 
     // Load persisted view-shaping state. These assignments run inside `init`,
     // so the `didSet` write-throughs above don't fire.
@@ -289,9 +294,19 @@ import Observation
     return cache.remainderStartIndex
   }
 
-  private var isRootLevel: Bool { navigationState.currentParentId == 0 }
+  var isRootLevel: Bool { navigationState.currentParentId == 0 }
 
-  private var shouldShowRootScopeSection: Bool { !quickEntry.isSearchFilterActive }
+  var shouldShowRootScopeSection: Bool { !quickEntry.isSearchFilterActive }
+
+  var rootScopeShowsFilterControls: Bool {
+    guard shouldShowRootScopeSection && isRootLevel else { return false }
+    switch rootTaskView {
+    case .due, .tags:
+      return true
+    case .all, .priority, .kanban, .eisenhower:
+      return false
+    }
+  }
 
   private var shouldShowDueSectionHeaders: Bool {
     isRootLevel && shouldShowRootScopeSection && rootTaskView == .due
@@ -378,5 +393,114 @@ import Observation
       result[taskId] = segments.joined(separator: ".")
     }
     return result
+  }
+
+  // MARK: - Task Scoping & Timing Helpers
+
+  /// Tasks visible at the current level, sorted by position
+  var currentLevelTasks: [CheckvistTask] {
+    repository.tasks.filter { ($0.parentId ?? 0) == navigationState.currentParentId }
+  }
+
+  var currentTask: CheckvistTask? {
+    if rootTaskView == .kanban {
+      return kanban?.currentKanbanTask
+    }
+    let level = visibleTasks
+    guard !level.isEmpty else { return nil }
+    let clampedIndex = min(max(navigationState.currentSiblingIndex, 0), level.count - 1)
+    return level[clampedIndex]
+  }
+
+  var currentTaskText: String { currentTask?.content ?? "" }
+
+  /// Breadcrumb chain from root down to (but not including) current task
+  var breadcrumbs: [CheckvistTask] {
+    ensureVisibleTasksCacheValid()
+    var result: [CheckvistTask] = []
+    var parentId = navigationState.currentParentId
+    while parentId != 0 {
+      if let parent = cache.taskById[parentId] {
+        result.append(parent)
+        parentId = parent.parentId ?? 0
+      } else {
+        break
+      }
+    }
+    result.reverse()
+    return result
+  }
+
+  /// Children of the currently focused task
+  var currentTaskChildren: [CheckvistTask] {
+    guard let task = currentTask else { return [] }
+    return repository.tasks.filter { ($0.parentId ?? 0) == task.id }
+  }
+
+  var visibleTasks: [CheckvistTask] {
+    _ = repository.tasks
+    _ = navigationState.currentParentId
+    _ = quickEntry.searchText
+    _ = quickEntry.quickEntryMode
+    _ = rootTaskView
+    _ = selectedRootDueBucketRawValue
+    _ = selectedRootTag
+    _ = hideFuture
+    _ = showChildrenInMenus
+    ensureVisibleTasksCacheValid()
+    return cache.visibleTasks
+  }
+
+  func shouldShowBreadcrumbPath(for task: CheckvistTask) -> Bool {
+    let pid = task.parentId ?? 0
+    if isRootLevel && shouldShowRootScopeSection && rootTaskView != .all {
+      return pid != 0
+    }
+    if isSearchFilterActive {
+      return pid != navigationState.currentParentId
+    }
+    if preferences.showTaskBreadcrumbContext {
+      return pid != 0
+    }
+    return false
+  }
+
+  var isSearchFilterActive: Bool { quickEntry.isSearchFilterActive }
+
+  func subtreeBlockRange(for taskId: Int, in flatTasks: [CheckvistTask]) -> Range<Int>? {
+    guard let start = flatTasks.firstIndex(where: { $0.id == taskId }) else { return nil }
+
+    var end = start + 1
+    while end < flatTasks.count {
+      let candidate = flatTasks[end]
+      if isDescendant(candidate, of: taskId) {
+        end += 1
+      } else {
+        break
+      }
+    }
+    return start..<end
+  }
+
+  func totalElapsed(forTaskId taskId: Int) -> TimeInterval {
+    rolledUpElapsedByTaskId()[taskId] ?? 0
+  }
+
+  func totalElapsed(for task: CheckvistTask) -> TimeInterval {
+    totalElapsed(forTaskId: task.id)
+  }
+
+  func childCountByTaskId() -> [Int: Int] {
+    ensureVisibleTasksCacheValid()
+    return cache.childCount
+  }
+
+  func rolledUpElapsedByTaskId() -> [Int: TimeInterval] {
+    // Touch the observable dictionary so SwiftUI re-renders on per-second
+    // ticks. Without this, callers only read the @ObservationIgnored cache
+    // and never establish a dependency on `timer.timerByTaskId`.
+    _ = timer.timerByTaskId
+    ensureVisibleTasksCacheValid()
+    return cache.rolledUpElapsed
   }
 }

@@ -68,6 +68,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
   case sequenceUrgency
   case sequenceImportance
   case sequenceMatrixCoord
+  case copyTask
+  case indentTask
 
   var id: String { rawValue }
 
@@ -140,6 +142,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .sequenceUrgency: return "Sequence: urgency"
     case .sequenceImportance: return "Sequence: importance"
     case .sequenceMatrixCoord: return "Sequence: matrix coordinates"
+    case .copyTask: return "Copy task to clipboard"
+    case .indentTask: return "Indent task"
     }
   }
 
@@ -155,7 +159,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .markDone, .invalidateTask, .addSibling, .addChild, .unindentTask, .editTaskAtEnd,
       .editTaskAtStart, .deleteTask, .moveTaskUp, .moveTaskDown, .undo, .clearPriority,
       .clearAbsolutePriority, .pushPriorityBack, .setPriorityRank, .setAbsolutePriorityRank,
-      .kanbanMoveLeft, .kanbanMoveRight:
+      .kanbanMoveLeft, .kanbanMoveRight, .copyTask, .indentTask:
       return "Task Actions"
     case .openCommandPalette, .closeOrCancel, .focusSearch, .sequenceDue, .sequenceDueToday,
       .sequenceStart, .sequenceRepeat, .sequenceTag, .sequenceUntag, .sequenceToggleContext,
@@ -186,7 +190,7 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .invalidateTask: return "shift+space"
     case .addSibling: return "enter"
     case .addChild: return "shift+enter,tab"
-    case .unindentTask: return "shift+tab"
+    case .unindentTask: return "cmd+left,shift+tab"
     case .closeOrCancel: return "escape"
     case .editTaskAtEnd: return "f2,a"
     case .editTaskAtStart: return "i"
@@ -223,8 +227,9 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .pushPriorityBack: return "="
     case .setPriorityRank: return "1,2,3,4,5,6,7,8,9"
     case .setAbsolutePriorityRank:
-      return
-        "ctrl+cmd+option+shift+1,ctrl+cmd+option+shift+2,ctrl+cmd+option+shift+3,ctrl+cmd+option+shift+4,ctrl+cmd+option+shift+5,ctrl+cmd+option+shift+6,ctrl+cmd+option+shift+7,ctrl+cmd+option+shift+8,ctrl+cmd+option+shift+9"
+      return "ctrl+cmd+option+shift+1,ctrl+cmd+option+shift+2,ctrl+cmd+option+shift+3,"
+        + "ctrl+cmd+option+shift+4,ctrl+cmd+option+shift+5,ctrl+cmd+option+shift+6,"
+        + "ctrl+cmd+option+shift+7,ctrl+cmd+option+shift+8,ctrl+cmd+option+shift+9"
     case .kanbanMoveLeft: return "cmd+left"
     case .kanbanMoveRight: return "cmd+right"
     case .kanbanFocusLeft: return "left,h"
@@ -238,6 +243,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .sequenceUrgency: return "mu"
     case .sequenceImportance: return "mi"
     case .sequenceMatrixCoord: return "mm"
+    case .copyTask: return "cmd+c"
+    case .indentTask: return "cmd+right"
     }
   }
 }

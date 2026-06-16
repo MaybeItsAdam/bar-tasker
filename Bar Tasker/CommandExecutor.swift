@@ -136,7 +136,7 @@ final class CommandExecutor {
         manager.repository.errorMessage = "No kanban task selected."
         return
       }
-      let childCounts = manager.childCountByTaskId()
+      let childCounts = manager.taskListViewModel.childCountByTaskId()
       manager.taskListViewModel.rootTaskView = .all
       manager.navigationState.rootScopeFocusLevel = 0
       if childCounts[task.id, default: 0] > 0 {
@@ -155,7 +155,7 @@ final class CommandExecutor {
       manager.kanban.exitToParentScope()
       return
     case .kanbanFocusMode:
-      guard let task = manager.currentTask else {
+      guard let task = manager.taskListViewModel.currentTask else {
         manager.repository.errorMessage = "No task selected."
         return
       }
@@ -170,7 +170,7 @@ final class CommandExecutor {
         manager.taskListViewModel.showChildrenInMenus ? "Showing siblings + children" : "Showing siblings only"
       return
     case .editAtStart:
-      guard let task = manager.currentTask else {
+      guard let task = manager.taskListViewModel.currentTask else {
         manager.repository.errorMessage = "No task selected."
         return
       }
@@ -192,7 +192,7 @@ final class CommandExecutor {
       break
     }
 
-    guard let task = manager.currentTask else {
+    guard let task = manager.taskListViewModel.currentTask else {
       manager.repository.errorMessage = "No task selected."
       return
     }
@@ -208,7 +208,7 @@ final class CommandExecutor {
         manager.repository.errorMessage = "Missing due date/time. Try: due today 14:30"
         return
       }
-      let resolved = manager.resolveDueDateWithConfig(raw)
+      let resolved = manager.preferences.resolveDueDate(raw)
       await manager.taskMutationService.updateTask(task: task, due: resolved)
     case .clearDue:
       await manager.taskMutationService.updateTask(task: task, due: "")

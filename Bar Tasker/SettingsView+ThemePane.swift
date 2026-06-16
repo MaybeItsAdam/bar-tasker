@@ -25,6 +25,21 @@ extension SettingsView {
         .font(.caption)
         .foregroundColor(themeColor(.textSecondary))
 
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Font Family")
+        Picker("", selection: preferenceBinding(\.appFontName)) {
+          Text("System Font").tag("System Font")
+          Text("SF Mono").tag("SF Mono")
+          Text("Lilex").tag("Lilex")
+          Text("Menlo").tag("Menlo")
+          Text("Monaco").tag("Monaco")
+          Text("Courier").tag("Courier")
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+      }
+      .padding(.top, 6)
+
       Divider()
         .padding(.vertical, 6)
 

@@ -103,7 +103,7 @@ struct PendingTaskUpdate: Sendable, Codable {
   // MARK: - UI State
 
   var isLoading: Bool = false
-  var errorMessage: String? = nil
+  var errorMessage: String?
   var isNetworkReachable: Bool = true {
     didSet { cacheInvalidationBus.invalidate() }
   }
@@ -235,6 +235,13 @@ struct PendingTaskUpdate: Sendable, Codable {
   var canAttemptLogin: Bool { hasCredentials }
   var hasListSelection: Bool {
     !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+  var checkvistConnectionState: CheckvistConnectionState {
+    if !hasCredentials { return .disconnected }
+    if availableLists.isEmpty {
+      return isLoading ? .connecting : .awaitingConnect
+    }
+    return .connected(listCount: availableLists.count)
   }
   /// True when the Checkvist integration is enabled, credentials are present,
   /// and the user has chosen a list — i.e. when the remote sync plugin is the
@@ -524,8 +531,6 @@ extension TaskRepository {
     reconcileEisenhowerLevels()
   }
 }
-
-
 
 // MARK: - Eisenhower Matrix
 

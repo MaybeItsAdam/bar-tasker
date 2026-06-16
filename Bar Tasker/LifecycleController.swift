@@ -45,22 +45,22 @@ final class LifecycleController {
     repository.onUsernameChanged = { [weak coordinator] in
       guard let coordinator else { return }
       coordinator.repository.checkvistSyncPlugin.clearAuthentication()
-      coordinator.refreshOnboardingDialogState()
+      coordinator.onboardingService.refreshOnboardingDialogState()
     }
     repository.onRemoteKeyChanged = { [weak coordinator] newKey in
       guard let coordinator else { return }
       coordinator.repository.checkvistSyncPlugin.clearAuthentication()
       coordinator.repository.checkvistSyncPlugin.persistRemoteKey(
         newKey, useKeychainStorage: coordinator.usesKeychainStorage)
-      coordinator.refreshOnboardingDialogState()
+      coordinator.onboardingService.refreshOnboardingDialogState()
     }
     repository.onListIdChanged = { [weak coordinator] listId in
       guard let coordinator else { return }
       coordinator.integrations.loadPendingObsidianSyncQueue(for: listId)
-      coordinator.refreshOnboardingDialogState()
+      coordinator.onboardingService.refreshOnboardingDialogState()
     }
     repository.onCheckvistIntegrationEnabledChanged = { [weak coordinator] in
-      coordinator?.refreshOnboardingDialogState()
+      coordinator?.onboardingService.refreshOnboardingDialogState()
     }
 
     // Other manager callbacks (non-cache concerns only).
@@ -76,7 +76,7 @@ final class LifecycleController {
       coordinator?.preferences.shortcutBinding(for: action) ?? action.defaultBinding
     }
     coordinator.startDates.dateResolver = { [weak coordinator] input in
-      coordinator?.resolveDueDateWithConfig(input) ?? input
+      coordinator?.preferences.resolveDueDate(input) ?? input
     }
     coordinator.integrations.onError = { [weak coordinator] err in
       coordinator?.repository.errorMessage = err

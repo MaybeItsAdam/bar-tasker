@@ -133,11 +133,6 @@ protocol GoogleCalendarIntegrationPlugin: Plugin {
 struct GoogleCalendarEventCreationOutcome: Sendable {
   let urlToOpen: URL?
   let usedGoogleCalendarAPI: Bool
-
-  init(urlToOpen: URL?, usedGoogleCalendarAPI: Bool) {
-    self.urlToOpen = urlToOpen
-    self.usedGoogleCalendarAPI = usedGoogleCalendarAPI
-  }
 }
 
 @MainActor

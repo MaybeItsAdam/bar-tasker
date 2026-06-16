@@ -30,7 +30,7 @@ struct EisenhowerMatrixView: View {
       }
       return (task.parentId ?? 0) == scopeId
     }
-    let currentSelectedId = manager.currentTask?.id
+    let currentSelectedId = taskListViewModel.currentTask?.id
 
     GeometryReader { proxy in
       let size = min(proxy.size.width, proxy.size.height) - 40

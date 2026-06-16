@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import OSLog
@@ -7,8 +8,9 @@ import OSLog
   @ObservationIgnored private let logger = Logger(subsystem: "uk.co.maybeitsadam.bar-tasker", category: "timer")
   @ObservationIgnored private let preferencesStore: PreferencesStore
   @ObservationIgnored private let cacheInvalidationBus: CacheInvalidationBus
-
-  var timedTaskId: Int? = nil
+  @ObservationIgnored private var sleepObserver: NSObjectProtocol?
+  
+  var timedTaskId: Int?
   var timerByTaskId: [Int: TimeInterval] = [:] {
     didSet {
       let encoded = Dictionary(uniqueKeysWithValues: timerByTaskId.map { (String($0.key), $0.value) })
@@ -26,12 +28,12 @@ import OSLog
       if timerMode == .disabled { stopTimer() }
     }
   }
-  @ObservationIgnored var timerTask: Task<Void, Never>? = nil
+  @ObservationIgnored var timerTask: Task<Void, Never>?
 
   /// Called on the main actor after every per-second increment with
   /// `(taskId, newElapsed)`. Used by `FocusSessionManager` to detect when
   /// the focus block has ended.
-  @ObservationIgnored var onTick: ((Int, TimeInterval) -> Void)? = nil
+  @ObservationIgnored var onTick: ((Int, TimeInterval) -> Void)?
 
   var timerIsEnabled: Bool { timerMode != .disabled }
   var timerIsVisible: Bool { timerMode == .visible }
@@ -45,6 +47,22 @@ import OSLog
     self.timerBarLeading = preferencesStore.bool(.timerBarLeading, default: false)
     self.timerMode = TimerMode(rawValue: preferencesStore.int(.timerMode, default: 0)) ?? .visible
     self.timerByTaskId = Self.timerDictionaryFromDefaults(preferencesStore: preferencesStore)
+    
+    self.sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.willSleepNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor in
+        self?.pauseTimer()
+      }
+    }
+  }
+
+  deinit {
+    if let observer = sleepObserver {
+      NSWorkspace.shared.notificationCenter.removeObserver(observer)
+    }
   }
 
   // MARK: - Timer Operations
@@ -52,7 +70,11 @@ import OSLog
   func toggleTimer(forTaskId taskId: Int) {
     guard timerIsEnabled else { return }
     if timedTaskId == taskId {
-      timerRunning ? pauseTimer() : resumeTimer()
+      if timerRunning {
+        pauseTimer()
+      } else {
+        resumeTimer()
+      }
     } else {
       pauseTimer()
       timedTaskId = taskId

@@ -35,11 +35,11 @@ enum PopoverLayout {
     // Top strip + first divider.
     var fixedHeight: CGFloat = topStripHeight + dividerHeight
 
-    if !manager.breadcrumbs.isEmpty || manager.navigationState.currentParentId != 0 {
+    if !manager.taskListViewModel.breadcrumbs.isEmpty || manager.navigationState.currentParentId != 0 {
       fixedHeight += 30 + dividerHeight
     }
-    if manager.shouldShowRootScopeSection {
-      fixedHeight += (manager.rootScopeShowsFilterControls ? 72 : 40) + dividerHeight
+    if manager.taskListViewModel.shouldShowRootScopeSection {
+      fixedHeight += (manager.taskListViewModel.rootScopeShowsFilterControls ? 72 : 40) + dividerHeight
     }
     if manager.preferences.showTaskBreadcrumbContext {
       fixedHeight += 24 + dividerHeight
@@ -54,7 +54,7 @@ enum PopoverLayout {
       !manager.quickEntry.pendingDeleteConfirmation
       && manager.quickEntry.quickEntryMode == .search
       && (manager.quickEntry.isQuickEntryFocused || !manager.quickEntry.searchText.isEmpty)
-      && (!manager.visibleTasks.isEmpty || !manager.quickEntry.searchText.isEmpty)
+      && (!manager.taskListViewModel.visibleTasks.isEmpty || !manager.quickEntry.searchText.isEmpty)
     let showsQuickAddPrompt =
       !manager.quickEntry.pendingDeleteConfirmation
       && (manager.quickEntry.quickEntryMode == .quickAddDefault
@@ -71,7 +71,7 @@ enum PopoverLayout {
       fixedHeight += 220
     }
     if !manager.quickEntry.pendingDeleteConfirmation,
-      let activeOnboardingDialog = manager.activeOnboardingDialog
+      let activeOnboardingDialog = manager.onboardingService.activeOnboardingDialog
     {
       switch activeOnboardingDialog {
       case .pluginSelection:
@@ -95,10 +95,10 @@ enum PopoverLayout {
     let taskAreaHeight: CGFloat
     if manager.repository.isLoading && manager.repository.tasks.isEmpty {
       taskAreaHeight = 90
-    } else if manager.visibleTasks.isEmpty {
+    } else if manager.taskListViewModel.visibleTasks.isEmpty {
       taskAreaHeight = 150
     } else {
-      let visibleTasks = manager.visibleTasks
+      let visibleTasks = manager.taskListViewModel.visibleTasks
       let sectionRows = manager.taskListViewModel.rootDueSectionCount(in: visibleTasks)
       let visibleRows = CGFloat(min(visibleTasks.count + sectionRows, 8))
       taskAreaHeight = max(110, visibleRows * 34)
@@ -377,7 +377,7 @@ struct PopoverView: View {
       topBevelArea
       Divider()
 
-      if manager.shouldShowRootScopeSection {
+      if taskListViewModel.shouldShowRootScopeSection {
         rootScopeSection
         Divider()
       }
@@ -412,7 +412,7 @@ struct PopoverView: View {
 
       // Prompt + autocomplete at bottom so tasks remain visible above.
       if !manager.quickEntry.pendingDeleteConfirmation {
-        if manager.activeOnboardingDialog != nil {
+        if manager.onboardingService.activeOnboardingDialog != nil {
           onboardingInlineBar()
         } else {
           if shouldShowBottomPrompt {
@@ -428,7 +428,7 @@ struct PopoverView: View {
     .clipShape(RoundedRectangle(cornerRadius: PopoverLayout.cornerRadius))
     .overlay(focusOverlay)
     .onAppear {
-      manager.presentOnboardingDialogIfNeeded()
+      manager.onboardingService.presentOnboardingDialogIfNeeded()
     }
     // Watch the composer visibility from a persistent parent so that when navigating
     // out of an empty scope (which unmounts `emptyStateView`), we still get a chance
@@ -469,7 +469,7 @@ struct PopoverView: View {
   }
 
   private var isRootFilteredView: Bool {
-    manager.isRootLevel && manager.shouldShowRootScopeSection && taskListViewModel.rootTaskView != .all
+    taskListViewModel.isRootLevel && taskListViewModel.shouldShowRootScopeSection && taskListViewModel.rootTaskView != .all
   }
 
   /// True when the user has zero tasks anywhere — distinct from "filter excludes all tasks".
@@ -478,7 +478,7 @@ struct PopoverView: View {
   }
 
   private var emptyStateTitle: String {
-    if manager.isSearchFilterActive {
+    if taskListViewModel.isSearchFilterActive {
       return "No matches"
     }
 
@@ -511,7 +511,7 @@ struct PopoverView: View {
   }
 
   private var emptyStateMessage: String? {
-    if manager.isSearchFilterActive {
+    if taskListViewModel.isSearchFilterActive {
       return "Refine or clear your search to see tasks."
     }
 
@@ -547,11 +547,11 @@ struct PopoverView: View {
 
   var shouldShowEmptyListComposer: Bool {
     let baseConditions =
-      manager.visibleTasks.isEmpty
+      taskListViewModel.visibleTasks.isEmpty
       && !repository.isLoading
       && !manager.quickEntry.pendingDeleteConfirmation
-      && manager.activeOnboardingDialog == nil
-      && !manager.isSearchFilterActive
+      && manager.onboardingService.activeOnboardingDialog == nil
+      && !taskListViewModel.isSearchFilterActive
       && manager.quickEntry.quickEntryMode != .command
       && manager.quickEntry.quickEntryMode != .quickAddDefault
       && manager.quickEntry.quickEntryMode != .quickAddSpecific
@@ -566,7 +566,7 @@ struct PopoverView: View {
     let showsSearchPrompt =
       manager.quickEntry.quickEntryMode == .search
       && (manager.quickEntry.isQuickEntryFocused || !manager.quickEntry.searchText.isEmpty)
-      && (!manager.visibleTasks.isEmpty || !manager.quickEntry.searchText.isEmpty)
+      && (!taskListViewModel.visibleTasks.isEmpty || !manager.quickEntry.searchText.isEmpty)
     let showsQuickAddPrompt =
       (manager.quickEntry.quickEntryMode == .quickAddDefault || manager.quickEntry.quickEntryMode == .quickAddSpecific)
       && (manager.quickEntry.isQuickEntryFocused || !manager.quickEntry.quickEntryText.isEmpty)
@@ -608,7 +608,7 @@ struct PopoverView: View {
 
   @ViewBuilder
   private func onboardingInlineBar() -> some View {
-    if let dialog = manager.activeOnboardingDialog {
+    if let dialog = manager.onboardingService.activeOnboardingDialog {
       if dialog == .pluginSelection {
         pluginSelectionOnboardingBar
       } else {
@@ -633,7 +633,7 @@ struct PopoverView: View {
             .controlSize(.small)
 
             Button {
-              manager.dismissActiveOnboardingDialog(permanently: true)
+              manager.onboardingService.dismissActiveOnboardingDialog(permanently: true)
             } label: {
               Image(systemName: "xmark")
                 .font(.system(size: 10, weight: .bold))
@@ -668,15 +668,15 @@ struct PopoverView: View {
         pluginToggleRow(
           label: "Checkvist",
           isOn: Binding(
-            get: { manager.checkvistIntegrationEnabled },
+            get: { manager.repository.checkvistIntegrationEnabled },
             set: { on in
-              manager.checkvistIntegrationEnabled = on
+              manager.repository.checkvistIntegrationEnabled = on
               if on && repository.username.isEmpty {
                 AppDelegate.shared.menuSettings(pane: .plugins)
               }
             }
           ),
-          prompt: manager.checkvistIntegrationEnabled && repository.username.isEmpty
+          prompt: manager.repository.checkvistIntegrationEnabled && repository.username.isEmpty
             ? "Connect to sync tasks" : nil,
           onPromptTap: { AppDelegate.shared.menuSettings(pane: .plugins) }
         )
@@ -704,7 +704,7 @@ struct PopoverView: View {
 
       HStack(spacing: 8) {
         Button("Done") {
-          manager.completePluginSelectionOnboarding()
+          manager.onboardingService.completePluginSelectionOnboarding()
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.small)
@@ -755,7 +755,7 @@ struct PopoverView: View {
         "Preferences",
         {
           AppDelegate.shared.menuSettings()
-          manager.completePluginSelectionOnboarding()
+          manager.onboardingService.completePluginSelectionOnboarding()
         }
       )
     case .checkvist:
@@ -765,7 +765,7 @@ struct PopoverView: View {
         "Set Up",
         {
           AppDelegate.shared.menuSettings(pane: .plugins)
-          manager.dismissActiveOnboardingDialog(permanently: true)
+          manager.onboardingService.dismissActiveOnboardingDialog(permanently: true)
         }
       )
     case .obsidian:
@@ -775,7 +775,7 @@ struct PopoverView: View {
         "Choose Folder",
         {
           _ = manager.integrations.chooseObsidianInboxFolder()
-          manager.dismissActiveOnboardingDialog(permanently: true)
+          manager.onboardingService.dismissActiveOnboardingDialog(permanently: true)
         }
       )
     case .googleCalendar:
@@ -785,7 +785,7 @@ struct PopoverView: View {
         "Enable",
         {
           manager.integrations.googleCalendarIntegrationEnabled = true
-          manager.dismissActiveOnboardingDialog(permanently: true)
+          manager.onboardingService.dismissActiveOnboardingDialog(permanently: true)
         }
       )
     case .mcp:
@@ -796,7 +796,7 @@ struct PopoverView: View {
         {
           manager.integrations.mcpIntegrationEnabled = true
           manager.integrations.refreshMCPServerCommandPath()
-          manager.dismissActiveOnboardingDialog(permanently: true)
+          manager.onboardingService.dismissActiveOnboardingDialog(permanently: true)
         }
       )
     }
@@ -830,12 +830,12 @@ struct PopoverView: View {
               manager.kanban.kanbanFilterParentId = nil
             }
           }.buttonStyle(PlainButtonStyle()).font(.caption2).foregroundColor(themeColor(.link))
-          ForEach(manager.breadcrumbs) { crumb in
+          ForEach(taskListViewModel.breadcrumbs) { crumb in
             Image(systemName: "chevron.right").font(.system(size: 8)).foregroundColor(
               themeColor(.textSecondary))
             Button(crumb.content) { manager.taskNavigationService.navigate(to: crumb) }
               .buttonStyle(PlainButtonStyle())
-              .font(Typography.taskFont(size: 11))
+              .font(Typography.taskFont(size: 11, name: manager.preferences.appFontName))
               .foregroundColor(themeColor(.link))
               .lineLimit(1)
           }
@@ -999,13 +999,13 @@ struct PopoverView: View {
     .onAppear {
       if taskListViewModel.rootTaskView != .kanban
         && navigationState.currentParentId == 0
-        && manager.visibleTasks.isEmpty
+        && taskListViewModel.visibleTasks.isEmpty
         && navigationState.rootScopeFocusLevel == 0
       {
         navigationState.rootScopeFocusLevel = 1
       }
     }
-    .onChange(of: manager.visibleTasks.count) { _, count in
+    .onChange(of: taskListViewModel.visibleTasks.count) { _, count in
       if taskListViewModel.rootTaskView != .kanban
         && navigationState.currentParentId == 0
         && count == 0
@@ -1081,7 +1081,7 @@ struct PopoverView: View {
   }
 
   var taskList: some View {
-    let visibleTasks = manager.visibleTasks
+    let visibleTasks = taskListViewModel.visibleTasks
 
     return Group {
       if repository.isLoading && repository.tasks.isEmpty {
@@ -1094,8 +1094,8 @@ struct PopoverView: View {
         emptyStateView
       } else {
         ScrollViewReader { proxy in
-          let childCountsByTaskId = manager.childCountByTaskId()
-          let elapsedByTaskId = manager.rolledUpElapsedByTaskId()
+          let childCountsByTaskId = taskListViewModel.childCountByTaskId()
+          let elapsedByTaskId = taskListViewModel.rolledUpElapsedByTaskId()
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(Array(visibleTasks.enumerated()), id: \.element.id) { index, task in
@@ -1136,7 +1136,7 @@ struct PopoverView: View {
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
           .onChange(of: navigationState.currentSiblingIndex) { _, _ in
-            if let currentTask = manager.currentTask {
+            if let currentTask = taskListViewModel.currentTask {
               proxy.scrollTo(currentTask.id, anchor: .center)
             }
           }
@@ -1160,7 +1160,7 @@ struct PopoverView: View {
     HStack {
       Spacer()
       VStack(spacing: 10) {
-        Image(systemName: manager.isSearchFilterActive ? "magnifyingglass" : "tray")
+        Image(systemName: taskListViewModel.isSearchFilterActive ? "magnifyingglass" : "tray")
           .font(.title2)
           .foregroundColor(themeColor(.textSecondary))
         Text(emptyStateTitle)
@@ -1197,7 +1197,7 @@ struct PopoverView: View {
         QuickEntryField(
           text: Bindable(manager).quickEntry.quickEntryText,
           isFocused: Bindable(manager).quickEntry.isQuickEntryFocused,
-          font: Typography.taskNSFont(ofSize: 13),
+          font: Typography.taskNSFont(ofSize: 13, name: manager.preferences.appFontName),
           placeholder: "Add first task",
           onSubmit: { submitEmptyStateAdd() },
           onTab: { submitEmptyStateAdd() },
@@ -1245,7 +1245,7 @@ struct PopoverView: View {
     HStack(spacing: 8) {
       Image(systemName: "trash")
         .foregroundColor(themeColor(.danger)).font(.system(size: 13))
-      Text("Delete \"\(manager.currentTask?.content.prefix(30) ?? "")\"?")
+      Text("Delete \"\(taskListViewModel.currentTask?.content.prefix(30) ?? "")\"?")
         .font(.system(size: 13)).foregroundColor(themeColor(.textPrimary)).lineLimit(1)
       Spacer()
       Text("⏎ confirm  Esc cancel")

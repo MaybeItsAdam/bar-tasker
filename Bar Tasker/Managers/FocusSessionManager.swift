@@ -29,14 +29,14 @@ import Observation
   @ObservationIgnored private var breakTickerTask: Task<Void, Never>?
 
   /// Task ID for which the focus-start prompt is showing.
-  var promptTaskId: Int? = nil
+  var promptTaskId: Int?
 
   /// Active focus session (set during `.running` and `.focusCompleted`; cleared
   /// during break phases since the session itself has ended).
-  var session: ActiveSession? = nil
+  var session: ActiveSession?
 
   /// Current phase. `nil` means no session is in progress.
-  var phase: Phase? = nil
+  var phase: Phase?
 
   /// User-configurable focus duration in minutes. Persisted.
   var durationMinutes: Int {
@@ -66,16 +66,16 @@ import Observation
 
   /// Last task that was focused on — used so "start another session" after a
   /// break can re-arm the same task. Cleared when the session ends fully.
-  @ObservationIgnored private(set) var lastFocusedTaskId: Int? = nil
+  @ObservationIgnored private(set) var lastFocusedTaskId: Int?
 
   /// Invoked when a phase transition deserves the user's attention
   /// (focus complete, break complete). Wired up by `AppDelegate` to open
   /// the popover and play a sound.
-  @ObservationIgnored var onAlert: (() -> Void)? = nil
+  @ObservationIgnored var onAlert: (() -> Void)?
 
   /// Invoked when the focus block ends and the work timer should stop.
   /// Wired up by `AppCoordinator` so we don't directly depend on `TimerManager`.
-  @ObservationIgnored var onFocusBlockEnded: (() -> Void)? = nil
+  @ObservationIgnored var onFocusBlockEnded: (() -> Void)?
 
   init(
     preferencesStore: PreferencesStore,

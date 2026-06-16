@@ -72,7 +72,7 @@ class MenuBarController: NSObject {
   }
 
   func updateTitle() {
-    let rawTaskText = manager.currentTaskText
+    let rawTaskText = manager.taskListViewModel.currentTaskText
     let baseTaskText = menuBarDisplayTaskText(rawTaskText)
     let taskText =
       manager.integrations.pendingSyncMenuBarPrefix.isEmpty
@@ -89,10 +89,10 @@ class MenuBarController: NSObject {
     let pStyle = NSMutableParagraphStyle()
     pStyle.lineBreakMode = .byClipping
     let menuBarFontSize = NSFont.menuBarFont(ofSize: 0).pointSize
-    let font = Typography.taskNSFont(ofSize: menuBarFontSize)
+    let font = Typography.taskNSFont(ofSize: menuBarFontSize, name: manager.preferences.appFontName)
     let horizontalPadding: CGFloat = 16
-    let currentTaskId = manager.currentTask?.id
-    let elapsedForCurrentTask = currentTaskId.map { manager.totalElapsed(forTaskId: $0) } ?? 0
+    let currentTaskId = manager.taskListViewModel.currentTask?.id
+    let elapsedForCurrentTask = currentTaskId.map { manager.taskListViewModel.totalElapsed(forTaskId: $0) } ?? 0
     let timerStr = manager.timer.timerBarString(
       currentTaskId: currentTaskId,
       totalElapsedForCurrentTask: elapsedForCurrentTask
@@ -469,7 +469,7 @@ class MenuBarController: NSObject {
 
   private func observeForTitleUpdates() {
     withObservationTracking {
-      _ = self.manager.currentTaskText
+      _ = self.manager.taskListViewModel.currentTaskText
       _ = self.manager.timer.timerBarLeading
       _ = self.manager.timer.timerRunning
       _ = self.manager.timer.timedTaskId

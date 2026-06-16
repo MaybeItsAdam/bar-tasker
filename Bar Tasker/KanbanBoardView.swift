@@ -4,6 +4,7 @@ import SwiftUI
 
 struct KanbanBoardView: View {
   @Environment(AppCoordinator.self) var manager
+  @Environment(TaskListViewModel.self) var taskListViewModel
 
   private func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
@@ -17,7 +18,7 @@ struct KanbanBoardView: View {
 
   var body: some View {
     let columns = manager.kanban.kanbanColumns
-    let childCounts = manager.childCountByTaskId()
+    let childCounts = taskListViewModel.childCountByTaskId()
     let effectiveSelectedId = manager.kanban.currentKanbanTask?.id
     VStack(spacing: 0) {
       if isFilterActive {

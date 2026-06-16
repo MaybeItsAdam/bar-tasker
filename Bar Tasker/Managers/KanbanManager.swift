@@ -43,7 +43,7 @@ enum KanbanMoveOutcome {
   }
   /// Task ID of the selected card in kanban view. Decoupled from currentSiblingIndex
   /// so selection survives task-list refreshes and view switches.
-  var kanbanSelectedTaskId: Int? = nil {
+  var kanbanSelectedTaskId: Int? {
     didSet { cacheInvalidationBus.invalidate() }
   }
   /// When true, kanban shows only subtasks of `currentParentId`
@@ -52,11 +52,11 @@ enum KanbanMoveOutcome {
   }
   /// When set, kanban shows the full subtree under this task ID (excluding the root task itself).
   /// This overrides `kanbanFilterSubtasks`.
-  var kanbanFilterParentId: Int? = nil {
+  var kanbanFilterParentId: Int? {
     didSet { cacheInvalidationBus.invalidate() }
   }
   /// Column ID currently showing the inline add field (nil = none).
-  var addingToColumnId: UUID? = nil
+  var addingToColumnId: UUID?
   /// Text for the inline add field.
   var addText: String = ""
   /// Per-column manual order overlay. Maps column UUID string → ordered task IDs.
@@ -743,7 +743,7 @@ enum KanbanMoveOutcome {
   /// Returns (content, due) with column attributes applied to raw user input.
   func contentAndDueForNewTask(rawContent: String, in column: KanbanColumn) -> (content: String, due: String?) {
     var content = rawContent
-    var due: String? = nil
+    var due: String?
 
     guard let condition = column.conditions.first(where: { $0.isWritable }) else {
       return (content, due)

@@ -2,17 +2,6 @@ import AppKit
 import SwiftUI
 
 enum Typography {
-  private static let lilexCandidates = [
-    "Lilex",
-    "LilexNerdFont",
-    "Lilex Nerd Font",
-    "LilexNerdFont-Regular",
-  ]
-
-  private static let resolvedLilexFontName: String? = {
-    lilexCandidates.first(where: { NSFont(name: $0, size: 13) != nil })
-  }()
-
   static var interfaceFont: Font {
     .system(.body, design: .default)
   }
@@ -21,15 +10,15 @@ enum Typography {
     .systemFont(ofSize: size)
   }
 
-  static func taskFont(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-    if let resolvedLilexFontName {
-      return Font.custom(resolvedLilexFontName, size: size).weight(weight)
+  static func taskFont(size: CGFloat, name: String = "System Font", weight: Font.Weight = .regular) -> Font {
+    if name != "System Font", !name.isEmpty {
+      return Font.custom(name, size: size).weight(weight)
     }
     return .system(size: size, weight: weight, design: .default)
   }
 
-  static func taskNSFont(ofSize size: CGFloat) -> NSFont {
-    if let resolvedLilexFontName, let font = NSFont(name: resolvedLilexFontName, size: size) {
+  static func taskNSFont(ofSize size: CGFloat, name: String = "System Font") -> NSFont {
+    if name != "System Font", !name.isEmpty, let font = NSFont(name: name, size: size) {
       return font
     }
     return .systemFont(ofSize: size)

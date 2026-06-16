@@ -47,6 +47,7 @@ final class PreferencesStore {
     case focusDurationMinutes
     case focusBreakDurationMinutes
     case kanbanManualOrderByColumnId
+    case appFontName
   }
 
   private let defaults: UserDefaults

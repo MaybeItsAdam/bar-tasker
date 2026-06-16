@@ -42,7 +42,7 @@ final class TaskNavigationService {
     guard
       let nextIndex = logic.nextSiblingIndex(
         currentSiblingIndex: navigationState.currentSiblingIndex,
-        visibleCount: coordinator.visibleTasks.count)
+        visibleCount: coordinator.taskListViewModel.visibleTasks.count)
     else { return }
     navigationState.currentSiblingIndex = nextIndex
   }
@@ -52,7 +52,7 @@ final class TaskNavigationService {
     guard
       let previousIndex = logic.previousSiblingIndex(
         currentSiblingIndex: navigationState.currentSiblingIndex,
-        visibleCount: coordinator.visibleTasks.count)
+        visibleCount: coordinator.taskListViewModel.visibleTasks.count)
     else { return }
     navigationState.currentSiblingIndex = previousIndex
   }
@@ -61,8 +61,8 @@ final class TaskNavigationService {
     guard let coordinator else { return }
     guard
       let selection = logic.enterChildren(
-        currentTask: coordinator.currentTask,
-        childCount: coordinator.currentTaskChildren.count)
+        currentTask: coordinator.taskListViewModel.currentTask,
+        childCount: coordinator.taskListViewModel.currentTaskChildren.count)
     else { return }
     navigationState.rootScopeFocusLevel = selection.rootScopeFocusLevel
     navigationState.currentParentId = selection.currentParentId
@@ -94,7 +94,7 @@ final class TaskNavigationService {
       coordinator.kanban.clampKanbanSelection()
       return
     }
-    let maxIndex = max(coordinator.visibleTasks.count - 1, 0)
+    let maxIndex = max(coordinator.taskListViewModel.visibleTasks.count - 1, 0)
     if navigationState.currentSiblingIndex > maxIndex {
       navigationState.currentSiblingIndex = maxIndex
     }
@@ -109,7 +109,7 @@ final class TaskNavigationService {
     // dispatches on `rootTaskView` and would otherwise return the kanban
     // selection, not the task the user had highlighted in the source view.
     let capturedParentId = navigationState.currentParentId
-    let capturedTask = coordinator.currentTask
+    let capturedTask = coordinator.taskListViewModel.currentTask
     coordinator.taskListViewModel.rootTaskView = view
 
     // Preserve drill-in across view switches. Previously we reset
@@ -117,7 +117,7 @@ final class TaskNavigationService {
     // flipped tabs. Try to keep the same task selected by re-finding it in
     // the new view.
     if let task = capturedTask,
-      let newIndex = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id })
+      let newIndex = coordinator.taskListViewModel.visibleTasks.firstIndex(where: { $0.id == task.id })
     {
       navigationState.currentSiblingIndex = newIndex
     } else {
@@ -157,7 +157,7 @@ final class TaskNavigationService {
 
   func cycleRootScopeFilter(direction: Int) {
     guard let coordinator else { return }
-    guard coordinator.shouldShowRootScopeSection else { return }
+    guard coordinator.taskListViewModel.shouldShowRootScopeSection else { return }
     switch coordinator.taskListViewModel.rootTaskView {
     case .all, .priority, .eisenhower, .kanban:
       return
@@ -189,7 +189,7 @@ final class TaskNavigationService {
 
   func selectRootScopeFilter(at index: Int) {
     guard let coordinator else { return }
-    guard coordinator.shouldShowRootScopeSection, index >= 0 else { return }
+    guard coordinator.taskListViewModel.shouldShowRootScopeSection, index >= 0 else { return }
     switch coordinator.taskListViewModel.rootTaskView {
     case .all, .priority, .eisenhower, .kanban:
       return

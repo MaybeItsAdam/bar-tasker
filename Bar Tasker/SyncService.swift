@@ -38,7 +38,7 @@ final class SyncService {
 
   func fetchTopTask() async {
     guard let coordinator else { return }
-    if coordinator.canSyncRemotely && repository.listId.isEmpty { return }
+    if coordinator.repository.canSyncRemotely && repository.listId.isEmpty { return }
 
     repository.errorMessage = nil
 
@@ -54,7 +54,10 @@ final class SyncService {
         coordinator.repository.activeSyncPlugin.persistTaskCache(
           listId: repository.listId, tasks: fetchedTasks)
         repository.reconcilePriorityQueueWithOpenTasks()
-        coordinator.reconcilePendingObsidianSyncQueueWithOpenTasks()
+        coordinator.integrations.reconcilePendingObsidianSyncQueueWithOpenTasks(
+          openTaskIds: Set(coordinator.repository.tasks.map(\.id)),
+          listId: coordinator.repository.listId
+        )
         if coordinator.taskListViewModel.rootTaskView == .kanban {
           coordinator.kanban.clampKanbanSelection()
         } else if coordinator.navigationState.currentSiblingIndex >= fetchedTasks.count {
@@ -79,8 +82,8 @@ final class SyncService {
             coordinator.navigationState.currentParentId = 0
           }
         }
-        if !repository.listId.isEmpty && coordinator.canAttemptLogin {
-          coordinator.onboardingCompleted = true
+        if !repository.listId.isEmpty && coordinator.repository.canAttemptLogin {
+          coordinator.onboardingService.onboardingCompleted = true
         }
       }
     } catch CheckvistSessionError.authenticationUnavailable {
@@ -451,7 +454,7 @@ final class SyncService {
   /// place the task on the wrong side of the neighbour.
   private func moveDueTaskByCopyingDate(task: CheckvistTask, direction: Int) {
     guard let coordinator else { return }
-    let visible = coordinator.visibleTasks
+    let visible = coordinator.taskListViewModel.visibleTasks
     guard let idx = visible.firstIndex(where: { $0.id == task.id }) else { return }
     let newIdx = idx + direction
     guard visible.indices.contains(newIdx) else { return }
@@ -487,9 +490,9 @@ final class SyncService {
     // happened at all.
     let neighbourTargetPosition = max(1, targetPosition - direction)
 
-    if let movingRange = coordinator.subtreeBlockRange(for: task.id, in: coordinator.repository.tasks),
+    if let movingRange = coordinator.taskListViewModel.subtreeBlockRange(for: task.id, in: coordinator.repository.tasks),
       let neighbourRange =
-        coordinator.subtreeBlockRange(for: neighbour.id, in: coordinator.repository.tasks)
+        coordinator.taskListViewModel.subtreeBlockRange(for: neighbour.id, in: coordinator.repository.tasks)
     {
       var updated = coordinator.repository.tasks
       let movingBlock = Array(updated[movingRange])
@@ -517,7 +520,7 @@ final class SyncService {
       coordinator.repository.tasks = updated
       // Keep selection anchored to the moved task in the currently visible
       // list.
-      if let visibleIdx = coordinator.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+      if let visibleIdx = coordinator.taskListViewModel.visibleTasks.firstIndex(where: { $0.id == task.id }) {
         coordinator.navigationState.currentSiblingIndex = visibleIdx
       }
     }
@@ -533,7 +536,7 @@ final class SyncService {
   /// other's slot.
   func movePriorityTask(_ task: CheckvistTask, direction: Int) {
     guard let coordinator else { return }
-    let visible = coordinator.visibleTasks
+    let visible = coordinator.taskListViewModel.visibleTasks
     guard let idx = visible.firstIndex(where: { $0.id == task.id }) else { return }
     let newIdx = idx + direction
     guard visible.indices.contains(newIdx) else { return }

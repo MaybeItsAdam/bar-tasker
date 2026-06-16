@@ -15,7 +15,7 @@ extension SettingsView {
         checkvistWorkspaceSummary
       }
 
-      if checkvistManager.checkvistIntegrationEnabled {
+      if checkvistManager.repository.checkvistIntegrationEnabled {
       Section(header: Text("Merge Lists")) {
         VStack(alignment: .leading, spacing: 10) {
           Text("Copy open tasks from one Checkvist list into another.")
@@ -55,10 +55,10 @@ extension SettingsView {
                 checkvistManager.repository.isLoading || isLoadingCheckvistLists || mergeSourceListId.isEmpty
                   || mergeDestinationListId.isEmpty
                   || mergeSourceListId == mergeDestinationListId
-                  || !checkvistManager.canAttemptLogin
+                  || !checkvistManager.repository.canAttemptLogin
               )
             }
-          } else if checkvistManager.canAttemptLogin {
+          } else if checkvistManager.repository.canAttemptLogin {
             Text("Connect and load at least two Checkvist lists to enable merging.")
               .font(.caption)
               .foregroundColor(themeColor(.textSecondary))
@@ -191,30 +191,30 @@ extension SettingsView {
   }
 
   fileprivate var checkvistSummaryIconName: String {
-    if !checkvistManager.checkvistIntegrationEnabled { return "tray" }
-    switch checkvistManager.checkvistConnectionState {
+    if !checkvistManager.repository.checkvistIntegrationEnabled { return "tray" }
+    switch checkvistManager.repository.checkvistConnectionState {
     case .disconnected: return "circle.dashed"
     case .connecting: return "arrow.triangle.2.circlepath"
     case .awaitingConnect: return "bolt.horizontal.circle"
-    case .connected: return checkvistManager.canSyncRemotely ? "checkmark.circle.fill" : "tray"
+    case .connected: return checkvistManager.repository.canSyncRemotely ? "checkmark.circle.fill" : "tray"
     }
   }
 
   fileprivate var checkvistSummaryTint: Color {
-    if !checkvistManager.checkvistIntegrationEnabled { return themeColor(.textSecondary) }
-    switch checkvistManager.checkvistConnectionState {
+    if !checkvistManager.repository.checkvistIntegrationEnabled { return themeColor(.textSecondary) }
+    switch checkvistManager.repository.checkvistConnectionState {
     case .disconnected: return themeColor(.textSecondary)
     case .connecting: return themeColor(.link)
     case .awaitingConnect: return themeColor(.warning)
     case .connected:
-      return checkvistManager.canSyncRemotely
+      return checkvistManager.repository.canSyncRemotely
         ? themeColor(.success) : themeColor(.textSecondary)
     }
   }
 
   fileprivate var checkvistSummaryTitle: String {
-    if !checkvistManager.checkvistIntegrationEnabled { return "Offline mode" }
-    switch checkvistManager.checkvistConnectionState {
+    if !checkvistManager.repository.checkvistIntegrationEnabled { return "Offline mode" }
+    switch checkvistManager.repository.checkvistConnectionState {
     case .disconnected:
       return "Not connected"
     case .connecting:
@@ -235,10 +235,10 @@ extension SettingsView {
   }
 
   fileprivate var checkvistSummarySubtitle: String {
-    if !checkvistManager.checkvistIntegrationEnabled {
+    if !checkvistManager.repository.checkvistIntegrationEnabled {
       return "Checkvist sync is turned off. Enable the plugin to sync your tasks."
     }
-    switch checkvistManager.checkvistConnectionState {
+    switch checkvistManager.repository.checkvistConnectionState {
     case .disconnected:
       return "Bar Tasker is running in offline mode. Connect Checkvist to sync your tasks."
     case .connecting:
@@ -252,8 +252,8 @@ extension SettingsView {
   }
 
   fileprivate var checkvistSummaryButtonTitle: String {
-    if !checkvistManager.checkvistIntegrationEnabled { return "Enable Checkvist" }
-    switch checkvistManager.checkvistConnectionState {
+    if !checkvistManager.repository.checkvistIntegrationEnabled { return "Enable Checkvist" }
+    switch checkvistManager.repository.checkvistConnectionState {
     case .disconnected, .awaitingConnect: return "Set Up Checkvist"
     case .connecting, .connected: return "Checkvist Settings"
     }
@@ -264,7 +264,7 @@ extension SettingsView {
     guard !didAutoloadCheckvistLists else { return }
     didAutoloadCheckvistLists = true
 
-    if checkvistManager.checkvistIntegrationEnabled, checkvistManager.canAttemptLogin,
+    if checkvistManager.repository.checkvistIntegrationEnabled, checkvistManager.repository.canAttemptLogin,
       checkvistManager.repository.availableLists.isEmpty
     {
       await loadCheckvistLists(assignFirstIfMissing: false)

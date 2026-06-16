@@ -43,7 +43,7 @@ struct KeyboardShortcutRouter {
       }
       return false
     }
-    if manager.activeOnboardingDialog != nil {
+    if manager.onboardingService.activeOnboardingDialog != nil {
       // Do not trigger task shortcuts while onboarding UI is active.
       manager.quickEntry.keyBuffer = ""
       if event.keyCode == 53 {
@@ -131,23 +131,23 @@ struct KeyboardShortcutRouter {
     }
     let isRepeat = event.isARepeat
     let chars = event.charactersIgnoringModifiers ?? ""
-    if !manager.shouldShowRootScopeSection && manager.navigationState.rootScopeFocusLevel != 0 {
+    if !manager.taskListViewModel.shouldShowRootScopeSection && manager.navigationState.rootScopeFocusLevel != 0 {
       manager.navigationState.rootScopeFocusLevel = 0
     }
-    let rootScopeFocused = manager.shouldShowRootScopeSection && manager.navigationState.rootScopeFocusLevel > 0
+    let rootScopeFocused = manager.taskListViewModel.shouldShowRootScopeSection && manager.navigationState.rootScopeFocusLevel > 0
     // Allow UP arrow to enter the scope row when at the top of the current view.
     // In kanban mode, visibleTasks is intentionally empty (kanban uses per-column task lists),
     // so we check the focused column's first task instead.
     let canFocusRootScopeFromListTop: Bool
     if manager.taskListViewModel.rootTaskView == .kanban {
       canFocusRootScopeFromListTop =
-        manager.shouldShowRootScopeSection
+        manager.taskListViewModel.shouldShowRootScopeSection
         && manager.kanban.isAtTopOfFocusedColumn
     } else {
       canFocusRootScopeFromListTop =
-        manager.shouldShowRootScopeSection
+        manager.taskListViewModel.shouldShowRootScopeSection
         && manager.navigationState.currentSiblingIndex == 0
-        && (!manager.visibleTasks.isEmpty || manager.navigationState.currentParentId == 0)
+        && (!manager.taskListViewModel.visibleTasks.isEmpty || manager.navigationState.currentParentId == 0)
     }
 
     #if DEBUG
@@ -200,7 +200,7 @@ struct KeyboardShortcutRouter {
       if event.keyCode == 36 {  // Return - confirm delete.
         manager.quickEntry.pendingDeleteConfirmation = false
         Task {
-          if let task = manager.currentTask {
+          if let task = manager.taskListViewModel.currentTask {
             await manager.taskMutationService.deleteTask(task)
             updateTitle()
           }
@@ -217,7 +217,7 @@ struct KeyboardShortcutRouter {
 
     // Root scope keyboard navigation:
     // Ctrl+←/→ switches root tabs. Ctrl+↑/↓ cycles Due bucket or Tag filter.
-    if manager.shouldShowRootScopeSection && !isFocused {
+    if manager.taskListViewModel.shouldShowRootScopeSection && !isFocused {
       if matches(.rootCycleTabPrevious) {
         manager.taskNavigationService.cycleRootTaskView(direction: -1)
         return true
@@ -252,7 +252,7 @@ struct KeyboardShortcutRouter {
       }
       if matches(.kanbanShowInAll) {
         if !isRepeat, let task = manager.kanban.currentKanbanTask {
-          let childCounts = manager.childCountByTaskId()
+          let childCounts = manager.taskListViewModel.childCountByTaskId()
           manager.taskListViewModel.rootTaskView = .all
           manager.navigationState.rootScopeFocusLevel = 0
           if childCounts[task.id, default: 0] > 0 {
@@ -286,7 +286,7 @@ struct KeyboardShortcutRouter {
       return true
     }
     if !isFocused && !rootScopeFocused && matches(.kanbanFocusMode) {
-      if !isRepeat, let task = manager.currentTask {
+      if !isRepeat, let task = manager.taskListViewModel.currentTask {
         manager.focusSessionManager.presentPrompt(forTaskId: task.id)
         updateTitle()
       }
@@ -312,11 +312,11 @@ struct KeyboardShortcutRouter {
     // Cmd+↑/↓ - reorder. Optimistic UI is applied synchronously in moveTask;
     // the API request is queued so key repeat coalesces into the reorder queue.
     if matches(.moveTaskDown) {
-      Task { if let task = manager.currentTask { await manager.syncService.moveTask(task, direction: 1) } }
+      Task { if let task = manager.taskListViewModel.currentTask { await manager.syncService.moveTask(task, direction: 1) } }
       return true
     }
     if matches(.moveTaskUp) {
-      Task { if let task = manager.currentTask { await manager.syncService.moveTask(task, direction: -1) } }
+      Task { if let task = manager.taskListViewModel.currentTask { await manager.syncService.moveTask(task, direction: -1) } }
       return true
     }
 
@@ -343,7 +343,7 @@ struct KeyboardShortcutRouter {
     // Up/Down arrows - list navigation + root scope navigation.
     if !isFocused && matches(.nextTask) {
       if rootScopeFocused {
-        if manager.navigationState.rootScopeFocusLevel == 1 && manager.rootScopeShowsFilterControls {
+        if manager.navigationState.rootScopeFocusLevel == 1 && manager.taskListViewModel.rootScopeShowsFilterControls {
           manager.navigationState.rootScopeFocusLevel = 2
         } else {
           manager.navigationState.rootScopeFocusLevel = 0
@@ -366,7 +366,7 @@ struct KeyboardShortcutRouter {
         return true
       }
       if canFocusRootScopeFromListTop {
-        manager.navigationState.rootScopeFocusLevel = manager.rootScopeShowsFilterControls ? 2 : 1
+        manager.navigationState.rootScopeFocusLevel = manager.taskListViewModel.rootScopeShowsFilterControls ? 2 : 1
         return true
       }
       if manager.taskListViewModel.rootTaskView == .kanban {
@@ -500,7 +500,15 @@ struct KeyboardShortcutRouter {
       if isFocused { return false }
       if rootScopeFocused { return true }
       if !isRepeat {
-        Task { if let task = manager.currentTask { await manager.syncService.unindentTask(task) } }
+        Task { if let task = manager.taskListViewModel.currentTask { await manager.syncService.unindentTask(task) } }
+      }
+      return true
+    }
+    if matches(.indentTask) {
+      if isFocused { return false }
+      if rootScopeFocused { return true }
+      if !isRepeat {
+        Task { if let task = manager.taskListViewModel.currentTask { await manager.syncService.indentTask(task) } }
       }
       return true
     }
@@ -538,8 +546,19 @@ struct KeyboardShortcutRouter {
     if !isFocused && matches(.editTaskAtEnd) {
       manager.quickEntry.quickEntryMode = .editTask
       manager.quickEntry.editCursorAtEnd = true
-      manager.quickEntry.quickEntryText = manager.currentTask?.content ?? ""
+      manager.quickEntry.quickEntryText = manager.taskListViewModel.currentTask?.content ?? ""
       manager.quickEntry.isQuickEntryFocused = true
+      return true
+    }
+
+    // Copy task to clipboard
+    if !isFocused && matches(.copyTask) {
+      if !isRepeat, let task = manager.taskListViewModel.currentTask {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(task.content, forType: .string)
+        manager.statusMessage = "Copied task to clipboard"
+      }
       return true
     }
 
@@ -554,7 +573,7 @@ struct KeyboardShortcutRouter {
         manager.quickEntry.isQuickEntryFocused = false
       } else {
         Task {
-          if let task = manager.currentTask {
+          if let task = manager.taskListViewModel.currentTask {
             await manager.taskMutationService.deleteTask(task)
             updateTitle()
           }
@@ -598,7 +617,7 @@ struct KeyboardShortcutRouter {
     }
 
     // z/x/c/v/b/n/m - lower root filter shortcuts (Due/Tags row options).
-    if !isFocused && manager.rootScopeShowsFilterControls {
+    if !isFocused && manager.taskListViewModel.rootScopeShowsFilterControls {
       let rootFilterActions: [ConfigurableShortcutAction] = [
         .rootFilter1, .rootFilter2, .rootFilter3, .rootFilter4, .rootFilter5, .rootFilter6,
         .rootFilter7,
@@ -660,7 +679,7 @@ struct KeyboardShortcutRouter {
         let importance = Double(normalizedChars)
       {
         manager.quickEntry.keyBuffer = ""
-        if let task = manager.currentTask {
+        if let task = manager.taskListViewModel.currentTask {
           manager.repository.setUrgency(taskId: task.id, level: urgency)
           manager.repository.setImportance(taskId: task.id, level: importance)
           manager.repository.errorMessage = nil
@@ -706,7 +725,7 @@ struct KeyboardShortcutRouter {
         }
         if manager.preferences.shortcutMatchesSequence(action: .sequenceOpenLink, sequence: sequence)
         {
-          if let task = manager.currentTask { manager.integrations.openTaskLink(task: task) }
+          if let task = manager.taskListViewModel.currentTask { manager.integrations.openTaskLink(task: task) }
           return true
         }
         if manager.preferences.shortcutMatchesSequence(
@@ -770,7 +789,7 @@ struct KeyboardShortcutRouter {
     // p - toggle timer on current task.
     if !isFocused && matches(.toggleTimer) {
       if !isRepeat && manager.timer.timerIsEnabled {
-        if let task = manager.currentTask {
+        if let task = manager.taskListViewModel.currentTask {
           manager.timer.toggleTimer(forTaskId: task.id)
         }
       }
@@ -874,7 +893,7 @@ struct KeyboardShortcutRouter {
     if !isFocused && matches(.editTaskAtStart) {
       manager.quickEntry.quickEntryMode = .editTask
       manager.quickEntry.editCursorAtEnd = false
-      manager.quickEntry.quickEntryText = manager.currentTask?.content ?? ""
+      manager.quickEntry.quickEntryText = manager.taskListViewModel.currentTask?.content ?? ""
       manager.quickEntry.isQuickEntryFocused = true
       return true
     }

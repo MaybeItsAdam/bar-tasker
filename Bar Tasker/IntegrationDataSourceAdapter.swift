@@ -23,5 +23,5 @@ final class IntegrationDataSourceAdapter: IntegrationDataSource {
   var tasks: [CheckvistTask] { repository.tasks }
   var listId: String { repository.listId }
   var activeCredentials: CheckvistCredentials { repository.activeCredentials }
-  var currentTask: CheckvistTask? { coordinator?.currentTask }
+  var currentTask: CheckvistTask? { coordinator?.taskListViewModel.currentTask }
 }
