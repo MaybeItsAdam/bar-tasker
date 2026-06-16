@@ -505,7 +505,6 @@ private final class BarTaskerMCPMessageWriter {
   }
 }
 
-// swiftlint:disable type_body_length
 final class MCPServer {
   private let reader = BarTaskerMCPMessageReader()
   private let writer = BarTaskerMCPMessageWriter()
@@ -566,7 +565,6 @@ final class MCPServer {
     }
   }
 
-  // swiftlint:disable:next cyclomatic_complexity function_body_length
   private func handle(message: Any) async throws {
     guard let request = message as? [String: Any] else {
       throw BarTaskerMCPJsonRpcError(
@@ -695,7 +693,6 @@ final class MCPServer {
       message: "Method not found: \(method)")
   }
 
-  // swiftlint:disable:next function_body_length
   private func callTool(name: String, arguments: [String: Any]) async -> [String: Any] {
     do {
       switch name {
@@ -1038,5 +1035,4 @@ final class MCPServer {
     return value
   }
 }
-// swiftlint:enable type_body_length
 // swiftlint:enable file_length

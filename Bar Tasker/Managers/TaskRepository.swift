@@ -262,7 +262,6 @@ struct PendingTaskUpdate: Sendable, Codable {
 
   // MARK: - Init
 
-  // swiftlint:disable function_body_length
   init(
     preferencesStore: PreferencesStore,
     checkvistSyncPlugin: any CheckvistSyncPlugin,
@@ -355,7 +354,6 @@ struct PendingTaskUpdate: Sendable, Codable {
       pendingOfflineWorkStore.clear()
     }
   }
-  // swiftlint:enable function_body_length
 }
 
 // MARK: - Loading Helpers

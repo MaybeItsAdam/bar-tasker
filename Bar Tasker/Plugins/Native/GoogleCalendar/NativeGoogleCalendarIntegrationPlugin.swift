@@ -5,7 +5,6 @@ import Observation
 import Security
 
 @MainActor
-// swiftlint:disable type_body_length
 @Observable final class NativeGoogleCalendarIntegrationPlugin: GoogleCalendarIntegrationPlugin
 {
   let pluginIdentifier = "native.google.calendar.integration"
@@ -575,7 +574,6 @@ import Security
     return payload.clientID == clientID && !payload.refreshToken.isEmpty
   }
 }
-// swiftlint:enable type_body_length
 
 private struct GoogleCalendarCreateEventPayload: Encodable {
   struct EventDatePayload: Encodable {

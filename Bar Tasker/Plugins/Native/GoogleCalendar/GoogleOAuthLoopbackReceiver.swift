@@ -120,8 +120,7 @@ final class GoogleOAuthLoopbackReceiver: @unchecked Sendable {
       return
     }
     connection.start(queue: queue)
-    connection.receive(minimumIncompleteLength: 1, maximumLength: 4_096) {
-      [weak self] data, _, _, receiveError in
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 4_096) { [weak self] data, _, _, receiveError in
       guard let self else { return }
 
       if let receiveError {

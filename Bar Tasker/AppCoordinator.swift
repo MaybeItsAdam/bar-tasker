@@ -16,7 +16,7 @@ import SwiftUI
 
   let navigationState: NavigationState
 
-  var statusMessage: String? = nil {
+  var statusMessage: String? {
     didSet {
       if statusMessage != nil {
         Task { @MainActor in
@@ -97,7 +97,6 @@ import SwiftUI
   @ObservationIgnored let reachabilityMonitor = NetworkReachabilityMonitor()
   var usesKeychainStorage: Bool { false }
 
-  // swiftlint:disable function_body_length
   init(pluginRegistry: PluginRegistry, feedbackService: FeedbackService? = nil) {
     self.feedbackService = feedbackService ?? DefaultFeedbackService()
     let resolvedLocalTaskStore = LocalTaskStore()
@@ -257,9 +256,7 @@ import SwiftUI
   deinit {
     reachabilityMonitor.stop()
   }
-  // swiftlint:enable function_body_length
 }
-
 
 extension TaskMutationService: UndoActionPerforming {}
 

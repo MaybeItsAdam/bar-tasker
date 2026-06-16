@@ -4,7 +4,6 @@ import Foundation
 // `ObsidianOpenMode` moved to `ObsidianOpenMode.swift` so it can be shared
 // with `BarTaskerPlugins` / `BarTaskerAppLogic` without AppKit-bound code.
 
-// swiftlint:disable type_body_length
 final class ObsidianSyncService {
   private static let bookmarkDefaultsKey = "obsidianInboxBookmark"
   private static let linkedFolderBookmarksDefaultsKey = "obsidianLinkedFolderBookmarksByTaskId"
@@ -35,8 +34,7 @@ final class ObsidianSyncService {
     let rawLinkedBookmarks =
       (defaults.dictionary(forKey: Self.linkedFolderBookmarksDefaultsKey) as? [String: String])
       ?? [:]
-    self.linkedFolderBookmarksByTaskId = rawLinkedBookmarks.reduce(into: [:]) {
-      partialResult, entry in
+    self.linkedFolderBookmarksByTaskId = rawLinkedBookmarks.reduce(into: [:]) { partialResult, entry in
       guard let taskId = Int(entry.key) else { return }
       partialResult[taskId] = entry.value
     }
@@ -445,7 +443,6 @@ final class ObsidianSyncService {
     return resolvedURL.path
   }
 }
-// swiftlint:enable type_body_length
 
 enum ObsidianSyncError: LocalizedError {
   case inboxFolderNotConfigured

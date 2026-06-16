@@ -82,8 +82,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
   func fetchLists(credentials: CheckvistCredentials) async throws -> [CheckvistList] {
     let url = CheckvistEndpoints.lists
 
-    let (data, response) = try await performAuthenticatedRequest(credentials: credentials) {
-      validToken in
+    let (data, response) = try await performAuthenticatedRequest(credentials: credentials) { validToken in
       var request = URLRequest(url: url)
       request.httpMethod = "GET"
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
@@ -105,8 +104,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
     guard !trimmedName.isEmpty else { return nil }
     let url = CheckvistEndpoints.lists
 
-    let (data, response) = try await performAuthenticatedRequest(credentials: credentials) {
-      validToken in
+    let (data, response) = try await performAuthenticatedRequest(credentials: credentials) { validToken in
       var request = URLRequest(url: url)
       request.httpMethod = "POST"
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
@@ -141,8 +139,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       return false
     }
 
-    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) {
-      validToken in
+    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) { validToken in
       var request = URLRequest(url: url)
       request.httpMethod = "POST"
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
@@ -202,8 +199,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       bodyParts.append("task[position]=\(position)")
     }
 
-    let (data, response) = try await performAuthenticatedRequest(credentials: credentials) {
-      validToken in
+    let (data, response) = try await performAuthenticatedRequest(credentials: credentials) { validToken in
       var request = URLRequest(url: url)
       request.httpMethod = "POST"
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
@@ -241,8 +237,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       return false
     }
 
-    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) {
-      validToken in
+    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) { validToken in
       var request = URLRequest(url: url)
       request.httpMethod = "DELETE"
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
@@ -316,8 +311,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       url = baseURL
     }
 
-    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) {
-      validToken in
+    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) { validToken in
       var request = URLRequest(url: url)
       request.httpMethod = "PUT"
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")
@@ -354,8 +348,7 @@ final class NativeCheckvistSyncPlugin: CheckvistSyncPlugin {
       url = baseURL
     }
 
-    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) {
-      validToken in
+    let (_, response) = try await performAuthenticatedRequest(credentials: credentials) { validToken in
       var request = URLRequest(url: url)
       request.httpMethod = "PUT"
       request.setValue(validToken, forHTTPHeaderField: "X-Client-Token")

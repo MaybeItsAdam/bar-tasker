@@ -81,7 +81,6 @@ final class ObsidianSyncService {
   }
 }
 
-
 @MainActor
 final class CheckvistSession {
   var issuedToken = "test-token"

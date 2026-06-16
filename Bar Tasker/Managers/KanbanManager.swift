@@ -85,12 +85,10 @@ enum KanbanMoveOutcome {
     {
       // Migration: Change Backlog .catchAll to .tag("backlog")
       var migrated = decoded
-      for i in 0..<migrated.count {
-        if migrated[i].name.lowercased() == "backlog" {
-          migrated[i].conditions = migrated[i].conditions.map { cond in
-            if case .catchAll = cond { return .tag("backlog") }
-            return cond
-          }
+      for i in 0..<migrated.count where migrated[i].name.lowercased() == "backlog" {
+        migrated[i].conditions = migrated[i].conditions.map { cond in
+          if case .catchAll = cond { return .tag("backlog") }
+          return cond
         }
       }
       self.kanbanColumns = migrated
@@ -224,12 +222,7 @@ enum KanbanMoveOutcome {
   func columnForTask(_ task: CheckvistTask, in columns: [KanbanColumn]) -> KanbanColumn? {
     // Only return a column if the task matches a SPECIFIC requirement (Tag or Due Bucket).
     // The .catchAll condition is effectively disabled by taskMatchesCondition returning false.
-    for column in columns {
-      if taskMatchesKanbanColumn(task, column: column) {
-        return column
-      }
-    }
-    return nil
+    columns.first { taskMatchesKanbanColumn(task, column: $0) }
   }
 
   private func taskMatchesKanbanColumn(
@@ -269,89 +262,7 @@ enum KanbanMoveOutcome {
     return tags.contains(normalized)
   }
 
-  private func sortedForKanban(_ tasks: [CheckvistTask], sortOrder: KanbanSortOrder)
-    -> [CheckvistTask]
-  {
-    guard let ds = dataSource else { return tasks }
-    // Position is the universal tiebreaker so user-driven Cmd+Up/Down reorders
-    // are visible regardless of the column's primary sort order.
-    func byPositionThenContent(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
-      switch (lhs.position, rhs.position) {
-      case (.some(let l), .some(let r)) where l != r: return l < r
-      case (.some, .none): return true
-      case (.none, .some): return false
-      default:
-        return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
-      }
-    }
-    switch sortOrder {
-    case .position:
-      return tasks.sorted(by: byPositionThenContent)
-    case .dueAscending:
-      return tasks.sorted { lhs, rhs in
-        switch (lhs.dueDate, rhs.dueDate) {
-        case (.some(let l), .some(let r)) where l != r: return l < r
-        case (.some, .none): return true
-        case (.none, .some): return false
-        default: break
-        }
-        return byPositionThenContent(lhs, rhs)
-      }
-    case .dueDescending:
-      return tasks.sorted { lhs, rhs in
-        switch (lhs.dueDate, rhs.dueDate) {
-        case (.some(let l), .some(let r)) where l != r: return l > r
-        case (.some, .none): return true
-        case (.none, .some): return false
-        default: break
-        }
-        return byPositionThenContent(lhs, rhs)
-      }
-    case .priorityAscending:
-      return tasks.sorted { lhs, rhs in
-        let la = ds.absolutePriorityRank(for: lhs)
-        let ra = ds.absolutePriorityRank(for: rhs)
-        if let la, let ra, la != ra { return la < ra }
-        if la != nil && ra == nil { return true }
-        if la == nil && ra != nil { return false }
-        let lp = ds.priorityRank(for: lhs)
-        let rp = ds.priorityRank(for: rhs)
-        if let lp, let rp, lp != rp { return lp < rp }
-        if lp != nil && rp == nil { return true }
-        if lp == nil && rp != nil { return false }
-        return byPositionThenContent(lhs, rhs)
-      }
-    case .priorityThenDueAscending:
-      return tasks.sorted { lhs, rhs in
-        let la = ds.absolutePriorityRank(for: lhs)
-        let ra = ds.absolutePriorityRank(for: rhs)
-        if let la, let ra, la != ra { return la < ra }
-        if la != nil && ra == nil { return true }
-        if la == nil && ra != nil { return false }
-        let lp = ds.priorityRank(for: lhs)
-        let rp = ds.priorityRank(for: rhs)
-        if let lp, let rp, lp != rp { return lp < rp }
-        if lp != nil && rp == nil { return true }
-        if lp == nil && rp != nil { return false }
-        switch (lhs.dueDate, rhs.dueDate) {
-        case (.some(let l), .some(let r)) where l != r: return l < r
-        case (.some, .none): return true
-        case (.none, .some): return false
-        default: break
-        }
-        let lt = ds.cache.tagsByTaskId[lhs.id] != nil
-        let rt = ds.cache.tagsByTaskId[rhs.id] != nil
-        if lt != rt { return lt }
-        return byPositionThenContent(lhs, rhs)
-      }
-    case .alphabetical:
-      return tasks.sorted { lhs, rhs in
-        let cmp = lhs.content.localizedCaseInsensitiveCompare(rhs.content)
-        if cmp != .orderedSame { return cmp == .orderedAscending }
-        return byPositionThenContent(lhs, rhs)
-      }
-    }
-  }
+  // Note: sortedForKanban implementation moved to extension at the bottom of this file.
 
   // MARK: - Current kanban task
 
@@ -779,3 +690,105 @@ enum KanbanMoveOutcome {
     return (content, due)
   }
 }
+
+// MARK: - Kanban Sorting Extension
+
+extension KanbanManager {
+  private func comparePositionThenContent(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
+    switch (lhs.position, rhs.position) {
+    case (.some(let l), .some(let r)) where l != r: return l < r
+    case (.some, .none): return true
+    case (.none, .some): return false
+    default:
+      return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
+    }
+  }
+
+  private func sortByDue(
+    _ tasks: [CheckvistTask],
+    ascending: Bool
+  ) -> [CheckvistTask] {
+    tasks.sorted { lhs, rhs in
+      switch (lhs.dueDate, rhs.dueDate) {
+      case (.some(let l), .some(let r)) where l != r: return ascending ? l < r : l > r
+      case (.some, .none): return true
+      case (.none, .some): return false
+      default: break
+      }
+      return comparePositionThenContent(lhs, rhs)
+    }
+  }
+
+  private func sortByPriority(
+    _ tasks: [CheckvistTask],
+    ds: any KanbanTaskDataSource
+  ) -> [CheckvistTask] {
+    tasks.sorted { lhs, rhs in
+      let la = ds.absolutePriorityRank(for: lhs)
+      let ra = ds.absolutePriorityRank(for: rhs)
+      if let la, let ra, la != ra { return la < ra }
+      if la != nil && ra == nil { return true }
+      if la == nil && ra != nil { return false }
+      let lp = ds.priorityRank(for: lhs)
+      let rp = ds.priorityRank(for: rhs)
+      if let lp, let rp, lp != rp { return lp < rp }
+      if lp != nil && rp == nil { return true }
+      if lp == nil && rp != nil { return false }
+      return comparePositionThenContent(lhs, rhs)
+    }
+  }
+
+  private func sortByPriorityThenDue(
+    _ tasks: [CheckvistTask],
+    ds: any KanbanTaskDataSource
+  ) -> [CheckvistTask] {
+    tasks.sorted { lhs, rhs in
+      let la = ds.absolutePriorityRank(for: lhs)
+      let ra = ds.absolutePriorityRank(for: rhs)
+      if let la, let ra, la != ra { return la < ra }
+      if la != nil && ra == nil { return true }
+      if la == nil && ra != nil { return false }
+      let lp = ds.priorityRank(for: lhs)
+      let rp = ds.priorityRank(for: rhs)
+      if let lp, let rp, lp != rp { return lp < rp }
+      if lp != nil && rp == nil { return true }
+      if lp == nil && rp != nil { return false }
+      switch (lhs.dueDate, rhs.dueDate) {
+      case (.some(let l), .some(let r)) where l != r: return l < r
+      case (.some, .none): return true
+      case (.none, .some): return false
+      default: break
+      }
+      let lt = ds.cache.tagsByTaskId[lhs.id] != nil
+      let rt = ds.cache.tagsByTaskId[rhs.id] != nil
+      if lt != rt { return lt }
+      return comparePositionThenContent(lhs, rhs)
+    }
+  }
+
+  func sortedForKanban(
+    _ tasks: [CheckvistTask],
+    sortOrder: KanbanSortOrder
+  ) -> [CheckvistTask] {
+    guard let ds = dataSource else { return tasks }
+    switch sortOrder {
+    case .position:
+      return tasks.sorted(by: comparePositionThenContent)
+    case .dueAscending:
+      return sortByDue(tasks, ascending: true)
+    case .dueDescending:
+      return sortByDue(tasks, ascending: false)
+    case .priorityAscending:
+      return sortByPriority(tasks, ds: ds)
+    case .priorityThenDueAscending:
+      return sortByPriorityThenDue(tasks, ds: ds)
+    case .alphabetical:
+      return tasks.sorted { lhs, rhs in
+        let cmp = lhs.content.localizedCaseInsensitiveCompare(rhs.content)
+        if cmp != .orderedSame { return cmp == .orderedAscending }
+        return comparePositionThenContent(lhs, rhs)
+      }
+    }
+  }
+}
+

@@ -5,7 +5,7 @@ import SwiftUI
 struct KanbanSettingsView: View {
   @Environment(AppCoordinator.self) var manager
 
-  @State private var editingColumn: KanbanColumn? = nil
+  @State private var editingColumn: KanbanColumn?
   @State private var showingAddColumn = false
 
   var body: some View {

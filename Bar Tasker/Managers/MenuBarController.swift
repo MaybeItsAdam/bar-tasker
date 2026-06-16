@@ -337,8 +337,7 @@ class MenuBarController: NSObject {
     window = popoverWindow
 
     if let monitor = clickMonitor { NSEvent.removeMonitor(monitor) }
-    clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
-      [weak self] event in
+    clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
       guard let self, let popoverWindow = self.window, popoverWindow.isVisible else { return }
       let clickLocation = event.locationInWindow
       if !popoverWindow.frame.contains(clickLocation) && event.window == nil {

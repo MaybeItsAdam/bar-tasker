@@ -1,7 +1,5 @@
 import AppKit
 import SwiftUI
-
-// swiftlint:disable file_length
 // MARK: - Carbon modifier constants (avoid importing Carbon in SwiftUI file)
 private let carbonCmdKey = 0x0100
 private let carbonShiftKey = 0x0200
@@ -115,7 +113,6 @@ struct HotkeyRecorderField: NSViewRepresentable {
 
 // MARK: - Settings View
 
-// swiftlint:disable file_length type_body_length
 struct SettingsView: View {
   // `ShortcutReferenceItem`, `ShortcutReferenceGroup`, and
   // `ShortcutCategoryDescriptor` live with the keybindings pane —
@@ -413,7 +410,6 @@ struct SettingsView: View {
     }
   }
 
-
   @ViewBuilder
   private func pluginSettingsView(for card: PluginCardDescriptor) -> some View {
     switch card.source {
@@ -445,9 +441,7 @@ struct SettingsView: View {
     }
     selectedPluginCardID = pluginCards.first?.id
   }
-
 }
-// swiftlint:enable type_body_length
 
 struct ModeOrderList: View {
   var manager: AppCoordinator

@@ -394,8 +394,8 @@ extension PopoverView {
       .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 
+  // swiftlint:disable shorthand_operator
   /// Parses Checkvist #tags and @contexts and formats them as inline pills using concatenated Text views
-  // swiftlint:disable:next shorthand_operator
   func formatTaskContent(_ text: String) -> Text {
     let pattern = "([@#][a-zA-Z0-9_\\-]+)"
     guard let regex = try? NSRegularExpression(pattern: pattern) else {
@@ -448,4 +448,5 @@ extension PopoverView {
 
     return resultText
   }
+  // swiftlint:enable shorthand_operator
 }

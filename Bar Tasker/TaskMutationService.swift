@@ -798,8 +798,11 @@ final class TaskMutationService {
     for (pid, ids) in byParent {
       let filtered = ids.filter { $0 != task.id }
       if filtered.count != ids.count {
-        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
-        else { byParent[pid] = filtered }
+        if filtered.isEmpty {
+          byParent.removeValue(forKey: pid)
+        } else {
+          byParent[pid] = filtered
+        }
       }
     }
     var scope = byParent[scopeId] ?? []
@@ -832,8 +835,11 @@ final class TaskMutationService {
     for (pid, ids) in byParent {
       let filtered = ids.filter { $0 != task.id }
       if filtered.count != ids.count {
-        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
-        else { byParent[pid] = filtered }
+        if filtered.isEmpty {
+          byParent.removeValue(forKey: pid)
+        } else {
+          byParent[pid] = filtered
+        }
       }
     }
     var scope = byParent[scopeId] ?? []
@@ -854,8 +860,11 @@ final class TaskMutationService {
     for (pid, ids) in byParent {
       let filtered = ids.filter { $0 != task.id }
       if filtered.count != ids.count {
-        if filtered.isEmpty { byParent.removeValue(forKey: pid) }
-        else { byParent[pid] = filtered }
+        if filtered.isEmpty {
+          byParent.removeValue(forKey: pid)
+        } else {
+          byParent[pid] = filtered
+        }
       }
     }
     repository.savePriorityQueue(byParent)

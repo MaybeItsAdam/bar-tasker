@@ -358,7 +358,7 @@ struct QuickEntryField: NSViewRepresentable {
 
 // MARK: - Popover View
 
-// swiftlint:disable type_body_length function_body_length
+// swiftlint:disable type_body_length
 struct PopoverView: View {
   @Environment(AppCoordinator.self) var manager
   @Environment(NavigationState.self) var navigationState
@@ -743,7 +743,6 @@ struct PopoverView: View {
     }
   }
 
-  // swiftlint:disable:next large_tuple
   private func onboardingInlineContent(for dialog: OnboardingDialog) -> (
     title: String, message: String, actionTitle: String, action: () -> Void
   ) {
@@ -1271,8 +1270,6 @@ struct PopoverView: View {
     }
     return parts.joined(separator: " › ")
   }
-
-
 }
-// swiftlint:enable type_body_length function_body_length
+// swiftlint:enable type_body_length
 // swiftlint:enable file_length

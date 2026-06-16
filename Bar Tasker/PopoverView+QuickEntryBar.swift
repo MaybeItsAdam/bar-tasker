@@ -51,8 +51,7 @@ extension PopoverView {
         ScrollViewReader { proxy in
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-              ForEach(Array(filteredCommandSuggestions.enumerated()), id: \.element.label) {
-                idx, suggestion in
+              ForEach(Array(filteredCommandSuggestions.enumerated()), id: \.element.label) { idx, suggestion in
                 Button {
                   manager.quickEntry.quickEntryText = suggestion.command
                   if suggestion.submitImmediately {
