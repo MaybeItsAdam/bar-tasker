@@ -65,6 +65,7 @@ let pluginTargetExcludes = [
   "Bar Tasker/SyncService.swift",
   "Bar Tasker/TaskMutationService.swift",
   "Bar Tasker/TaskNavigationCoordinator.swift",
+  "Bar Tasker/TaskTreeFormatter.swift",
   "Bar Tasker/TaskNavigationService.swift",
   "Bar Tasker/TaskVisibilityEngine.swift",
   "Bar Tasker/Typography.swift",
@@ -172,6 +173,7 @@ let appLogicTargetExcludes = [
   "Bar Tasker/SyncService.swift",
   "Bar Tasker/TaskMutationService.swift",
   "Bar Tasker/TaskNavigationService.swift",
+  "Bar Tasker/TaskTreeFormatter.swift",
   "Bar Tasker/TaskVisibilityEngine.swift",
   "Bar Tasker/Typography.swift",
 

@@ -551,13 +551,25 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    // Copy task to clipboard
+    // Copy task (and subtree) to clipboard
     if !isFocused && matches(.copyTask) {
       if !isRepeat, let task = manager.taskListViewModel.currentTask {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(task.content, forType: .string)
-        manager.statusMessage = "Copied task to clipboard"
+
+        let childCount = manager.taskListViewModel.childCountByTaskId()[task.id] ?? 0
+        if childCount > 0,
+           let range = manager.taskListViewModel.subtreeBlockRange(
+             for: task.id, in: manager.repository.tasks) {
+          let subtreeTasks = Array(manager.repository.tasks[range])
+          let treeText = TaskTreeFormatter.formatAsTree(
+            root: task, allTasks: subtreeTasks)
+          pasteboard.setString(treeText, forType: .string)
+          manager.statusMessage = "Copied task + \(childCount) subtask\(childCount == 1 ? "" : "s") to clipboard"
+        } else {
+          pasteboard.setString(task.content, forType: .string)
+          manager.statusMessage = "Copied task to clipboard"
+        }
       }
       return true
     }

@@ -227,45 +227,7 @@ extension SettingsView {
   }
 
   private func exportTasksToMarkdown(_ tasks: [CheckvistTask]) -> String {
-    var childrenMap: [Int: [CheckvistTask]] = [:]
-    var taskMap: [Int: CheckvistTask] = [:]
-    for t in tasks {
-      taskMap[t.id] = t
-      let parentId = t.parentId ?? 0
-      childrenMap[parentId, default: []].append(t)
-    }
-    
-    for (parentId, childList) in childrenMap {
-      childrenMap[parentId] = childList.sorted { 
-        ($0.position ?? Int.max) < ($1.position ?? Int.max)
-      }
-    }
-    
-    let rootTasks = tasks.filter { t in
-      let pId = t.parentId ?? 0
-      return pId == 0 || taskMap[pId] == nil
-    }.sorted {
-      ($0.position ?? Int.max) < ($1.position ?? Int.max)
-    }
-    
-    var lines: [String] = []
-    
-    func appendNode(task: CheckvistTask, level: Int) {
-      let indent = String(repeating: "  ", count: level)
-      let box = task.status == 1 ? "[x]" : "[ ]"
-      lines.append("\(indent)- \(box) \(task.content)")
-      if let children = childrenMap[task.id] {
-        for child in children {
-          appendNode(task: child, level: level + 1)
-        }
-      }
-    }
-    
-    for root in rootTasks {
-      appendNode(task: root, level: 0)
-    }
-    
-    return lines.joined(separator: "\n")
+    TaskTreeFormatter.formatAsMarkdown(tasks)
   }
 
   @MainActor
