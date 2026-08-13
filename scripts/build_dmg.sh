@@ -15,6 +15,24 @@ else
   DMG_BASENAME="bar-tasker-$(date +%Y%m%d-%H%M%S)"
 fi
 
+# Distributing outside the Mac App Store needs a "Developer ID Application"
+# certificate; nothing else lets the DMG open on someone else's Mac. If one
+# isn't installed we still build, but the result is only good locally, so say
+# so loudly rather than handing over a DMG that fails on first launch.
+SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+  | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
+NOTARY_PROFILE="${NOTARY_PROFILE:-bar-tasker-notary}"
+DISTRIBUTABLE=0
+
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  DISTRIBUTABLE=1
+  echo "Signing with: $SIGN_IDENTITY"
+else
+  echo "WARNING: no 'Developer ID Application' certificate found." >&2
+  echo "         The DMG will be signed for local use only and Gatekeeper" >&2
+  echo "         will block it on any other Mac. See docs/signing.md." >&2
+fi
+
 BUILD_DIR="$PROJECT_DIR/build"
 DERIVED_DIR="/tmp/bar-tasker-derived-release"
 STAGE_DIR="$BUILD_DIR/dmg-stage"
@@ -24,12 +42,18 @@ FINAL_DMG="$BUILD_DIR/${DMG_BASENAME}.dmg"
 rm -rf "$DERIVED_DIR" "$STAGE_DIR" "$RW_DMG" "$FINAL_DMG"
 mkdir -p "$BUILD_DIR" "$STAGE_DIR"
 
-xcodebuild \
-  -project "$XCODEPROJ" \
-  -scheme "$SCHEME" \
-  -configuration Release \
-  -derivedDataPath "$DERIVED_DIR" \
-  -quiet build
+XCODEBUILD_ARGS=(
+  -project "$XCODEPROJ"
+  -scheme "$SCHEME"
+  -configuration Release
+  -derivedDataPath "$DERIVED_DIR"
+  -quiet
+)
+if [[ $DISTRIBUTABLE -eq 1 ]]; then
+  XCODEBUILD_ARGS+=("CODE_SIGN_IDENTITY=$SIGN_IDENTITY")
+fi
+
+xcodebuild "${XCODEBUILD_ARGS[@]}" build
 
 APP_PATH="$DERIVED_DIR/Build/Products/Release/$APP_NAME"
 if [[ ! -d "$APP_PATH" ]]; then
@@ -87,5 +111,26 @@ hdiutil detach "$DEVICE" -quiet
 hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$FINAL_DMG" >/dev/null
 rm -f "$RW_DMG"
 rm -rf "$STAGE_DIR"
+
+if [[ $DISTRIBUTABLE -eq 1 ]]; then
+  codesign --force --sign "$SIGN_IDENTITY" --timestamp "$FINAL_DMG"
+
+  # Notarization is what actually clears Gatekeeper; a Developer ID signature
+  # on its own still trips "cannot be opened" on a machine that has never seen
+  # the app. Stapling then lets it launch without a network round trip.
+  if xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    echo "Submitting to Apple for notarization (this usually takes a few minutes)..."
+    xcrun notarytool submit "$FINAL_DMG" \
+      --keychain-profile "$NOTARY_PROFILE" \
+      --wait
+    xcrun stapler staple "$FINAL_DMG"
+    xcrun stapler validate "$FINAL_DMG"
+    echo "Notarized and stapled."
+  else
+    echo "WARNING: notarization credentials '$NOTARY_PROFILE' not found." >&2
+    echo "         The DMG is signed but NOT notarized, so Gatekeeper will" >&2
+    echo "         still block it elsewhere. See docs/signing.md." >&2
+  fi
+fi
 
 echo "Created DMG: $FINAL_DMG"
