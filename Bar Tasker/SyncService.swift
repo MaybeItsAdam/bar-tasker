@@ -8,82 +8,70 @@ import OSLog
 ///
 /// Owns the raw network/auth state directly via a strong `TaskRepository`
 /// reference — `listId`, `errorMessage`, `activeCredentials`, and the active
-/// sync plugin all come from there, no coordinator forwarder hop. It still
-/// keeps a `weak` reference to `AppCoordinator` for the sibling managers it
-/// orchestrates (`kanban`, `timer`, `focusSessionManager`, `integrations`,
-/// `taskListViewModel`, `navigationState`) and for helpers that still live on
-/// the coordinator (`applyOptimisticMoveAndSync`, `subtreeBlockRange`,
-/// `runBooleanMutation`, `withLoadingState`, `beginLoading` / `endLoading`,
-/// `savePriorityQueue`, `reconcilePriorityQueueWithOpenTasks`,
-/// `reconcilePendingObsidianSyncQueueWithOpenTasks`,
-/// `setAuthenticationRequiredErrorIfNeeded`).
+/// sync plugin all come from there. The sibling managers it orchestrates
+/// (kanban, timer, focus session, integrations, the root-view mode, the
+/// navigation cursor) are reached through the `SyncHost` seam so this file
+/// stays free of app-only types and can be exercised by
+/// `BarTaskerAppLogicTests` against a stub host. `AppCoordinator` is the
+/// production host; the reference is `weak` because it owns this service.
 @MainActor
 final class SyncService {
-  private weak var coordinator: AppCoordinator?
+  private weak var host: (any SyncHost)?
   private let repository: TaskRepository
   private let logger = Logger(
     subsystem: "uk.co.maybeitsadam.bar-tasker", category: "sync")
 
-  init(coordinator: AppCoordinator, repository: TaskRepository) {
-    self.coordinator = coordinator
+  init(host: any SyncHost, repository: TaskRepository) {
+    self.host = host
     self.repository = repository
   }
 
   // MARK: - Authentication & Fetch
 
   func login() async -> Bool {
-    guard let coordinator else { return false }
-    return await coordinator.repository.login()
+    await repository.login()
   }
 
   func fetchTopTask() async {
-    guard let coordinator else { return }
-    if coordinator.repository.canSyncRemotely && repository.listId.isEmpty { return }
+    guard let host else { return }
+    if repository.canSyncRemotely && repository.listId.isEmpty { return }
 
     repository.errorMessage = nil
 
     do {
       try await repository.withLoadingState {
-        let previousTasks = coordinator.repository.tasks
-        let fetchedTasks = try await coordinator.repository.activeSyncPlugin.fetchOpenTasks(
+        let previousTasks = repository.tasks
+        let fetchedTasks = try await repository.activeSyncPlugin.fetchOpenTasks(
           listId: repository.listId,
           credentials: repository.activeCredentials
         )
 
-        coordinator.repository.tasks = fetchedTasks
-        coordinator.repository.activeSyncPlugin.persistTaskCache(
+        repository.tasks = fetchedTasks
+        repository.activeSyncPlugin.persistTaskCache(
           listId: repository.listId, tasks: fetchedTasks)
         repository.reconcilePriorityQueueWithOpenTasks()
-        coordinator.integrations.reconcilePendingObsidianSyncQueueWithOpenTasks(
-          openTaskIds: Set(coordinator.repository.tasks.map(\.id)),
-          listId: coordinator.repository.listId
+        host.reconcilePendingObsidianSyncQueue(
+          openTaskIds: Set(repository.tasks.map(\.id)),
+          listId: repository.listId
         )
-        if coordinator.taskListViewModel.rootTaskView == .kanban {
-          coordinator.kanban.clampKanbanSelection()
-        } else if coordinator.navigationState.currentSiblingIndex >= fetchedTasks.count {
-          coordinator.navigationState.currentSiblingIndex = 0
+        if host.taskMoveMode == .kanbanColumn {
+          host.clampKanbanSelection()
+        } else if host.currentSiblingIndex >= fetchedTasks.count {
+          host.currentSiblingIndex = 0
         }
-        coordinator.focusSessionManager.clampForTasks(fetchedTasks)
+        host.clampFocusSessionForTasks(fetchedTasks)
+        host.reconcileTimersAfterFetch(previousTasks: previousTasks, openTasks: fetchedTasks)
         let latestOpenTaskIDs = Set(fetchedTasks.map(\.id))
-        let previousTimerNodes = previousTasks.map {
-          TimerNode(id: $0.id, parentId: $0.parentId)
-        }
-        coordinator.timer.timerByTaskId = TimerElapsedReassignmentPolicy.remapElapsed(
-          previousNodes: previousTimerNodes,
-          latestOpenTaskIDs: latestOpenTaskIDs,
-          elapsedByTaskID: coordinator.timer.timerByTaskId
-        )
-        coordinator.timer.stopTimerIfTaskRemoved(openTaskIds: latestOpenTaskIDs)
-        if let filterParentId = coordinator.kanban.kanbanFilterParentId,
+        if let filterParentId = host.kanbanFilterParentId,
           !latestOpenTaskIDs.contains(filterParentId)
         {
-          coordinator.kanban.kanbanFilterParentId = nil
-          if coordinator.taskListViewModel.rootTaskView == .kanban {
-            coordinator.navigationState.currentParentId = 0
+          host.kanbanFilterParentId = nil
+          if host.taskMoveMode == .kanbanColumn {
+            host.currentParentId = 0
           }
         }
-        if !repository.listId.isEmpty && coordinator.repository.canAttemptLogin {
-          coordinator.onboardingService.onboardingCompleted = true
+        if !repository.listId.isEmpty && repository.canAttemptLogin {
+          host.markOnboardingCompleted()
         }
       }
     } catch CheckvistSessionError.authenticationUnavailable {
@@ -97,33 +85,29 @@ final class SyncService {
   // MARK: - List Management
 
   func fetchLists() async -> Bool {
-    guard let coordinator else { return false }
-    return await coordinator.repository.fetchLists()
+    await repository.fetchLists()
   }
 
   func loadCheckvistLists(assignFirstIfMissing: Bool = false) async -> Bool {
-    guard let coordinator else { return false }
-    return await coordinator.repository.loadCheckvistLists(
-      assignFirstIfMissing: assignFirstIfMissing)
+    await repository.loadCheckvistLists(assignFirstIfMissing: assignFirstIfMissing)
   }
 
   func switchCheckvistList(to rawListId: String) async {
-    guard let coordinator else { return }
+    guard let host else { return }
     let trimmedListId = rawListId.trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmedListId != repository.listId else { return }
 
     repository.listId = trimmedListId
-    coordinator.navigationState.currentParentId = 0
-    coordinator.navigationState.currentSiblingIndex = 0
-    coordinator.repository.clearPendingOfflineWork()
-    coordinator.kanban.kanbanFilterParentId = nil
-    coordinator.kanban.kanbanSelectedTaskId = nil
+    host.currentParentId = 0
+    host.currentSiblingIndex = 0
+    repository.clearPendingOfflineWork()
+    host.kanbanFilterParentId = nil
+    host.clearKanbanSelection()
     repository.errorMessage = nil
     await fetchTopTask()
   }
 
   func createCheckvistListAndSwitch(name: String) async -> Bool {
-    guard let coordinator else { return false }
     let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedName.isEmpty else {
       repository.errorMessage = "List name cannot be empty."
@@ -135,7 +119,7 @@ final class SyncService {
 
     do {
       guard
-        let createdList = try await coordinator.repository.activeSyncPlugin.createList(
+        let createdList = try await repository.activeSyncPlugin.createList(
           name: trimmedName,
           credentials: repository.activeCredentials
         )
@@ -159,7 +143,6 @@ final class SyncService {
   }
 
   func mergeOpenTasksBetweenLists(sourceListId: String, destinationListId: String) async -> Bool {
-    guard let coordinator else { return false }
     let source = sourceListId.trimmingCharacters(in: .whitespacesAndNewlines)
     let destination = destinationListId.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -176,7 +159,7 @@ final class SyncService {
     defer { repository.endLoading() }
 
     do {
-      let sourceTasks = try await coordinator.repository.activeSyncPlugin.fetchOpenTasks(
+      let sourceTasks = try await repository.activeSyncPlugin.fetchOpenTasks(
         listId: source,
         credentials: repository.activeCredentials
       )
@@ -218,11 +201,10 @@ final class SyncService {
   }
 
   func selectList(_ list: CheckvistList) {
-    coordinator?.repository.selectList(list)
+    repository.selectList(list)
   }
 
   func uploadOfflineTasksToCheckvist(destinationListId: String) async -> Bool {
-    guard let coordinator else { return false }
     let destination = destinationListId.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !destination.isEmpty else {
       repository.errorMessage = "Choose a Checkvist destination list."
@@ -230,7 +212,7 @@ final class SyncService {
     }
 
     let offlineTasks =
-      (try? await coordinator.repository.offlineSyncPlugin.fetchOpenTasks(
+      (try? await repository.offlineSyncPlugin.fetchOpenTasks(
         listId: "", credentials: repository.activeCredentials)) ?? []
     guard !offlineTasks.isEmpty else {
       repository.errorMessage = "No offline tasks are available to upload."
@@ -267,8 +249,7 @@ final class SyncService {
   private func copyTasks(_ sourceTasks: [CheckvistTask], to destinationListId: String) async throws
     -> (mergedCount: Int, skippedCount: Int)
   {
-    guard let coordinator else { return (0, 0) }
-    return try await coordinator.repository.copyTasks(sourceTasks, to: destinationListId)
+    try await repository.copyTasks(sourceTasks, to: destinationListId)
   }
 
   // MARK: - Offline Mutation Queue
@@ -280,8 +261,7 @@ final class SyncService {
   /// failure re-queues that item and suppresses the final `fetchTopTask` so
   /// optimistic UI state survives until the next reconnect attempt.
   func flushPendingTaskMutations() async {
-    guard let coordinator else { return }
-    let repo = coordinator.repository
+    let repo = repository
     guard repo.hasPendingOfflineWork else { return }
 
     let creates = repo.pendingTaskCreates
@@ -291,10 +271,33 @@ final class SyncService {
     repo.clearPendingOfflineWork()
 
     var tempIdToRealId: [Int: Int] = [:]
+    /// Temp ids whose create failed this round and was put back on the queue.
+    /// Work that targets one of these must be re-queued against the *temp* id
+    /// rather than dropped — the create will be retried on the next flush, so
+    /// discarding the dependent delete/action/update would resurrect a task the
+    /// user completed or deleted while offline.
+    var requeuedCreateTempIds: Set<Int> = []
     var anyFailure = false
 
-    func resolve(_ id: Int) -> Int? {
-      id >= 0 ? id : tempIdToRealId[id]
+    /// Returns the id to send to the server, or `nil` when the caller should
+    /// stop processing this item. `requeue` fires when the item still has a
+    /// pending create behind it and must be preserved for the next flush.
+    /// Decision logic lives in `OfflineReplayPolicy` so it can be unit-tested.
+    func resolveForReplay(_ id: Int, requeue: (Int) -> Void) -> Int? {
+      switch OfflineReplayPolicy.resolve(
+        taskId: id,
+        tempIdToRealId: tempIdToRealId,
+        requeuedCreateTempIds: requeuedCreateTempIds
+      ) {
+      case .send(let taskId):
+        return taskId
+      case .requeue(let tempId):
+        requeue(tempId)
+        anyFailure = true
+        return nil
+      case .drop:
+        return nil
+      }
     }
 
     for pending in creates {
@@ -305,6 +308,7 @@ final class SyncService {
           // Re-queue the child so a future flush can try again once the
           // parent eventually succeeds.
           repo.enqueuePendingCreate(pending)
+          requeuedCreateTempIds.insert(pending.tempId)
           anyFailure = true
           continue
         }
@@ -322,15 +326,17 @@ final class SyncService {
           credentials: repository.activeCredentials
         ) {
           tempIdToRealId[pending.tempId] = newTask.id
-          if let idx = coordinator.repository.tasks.firstIndex(where: { $0.id == pending.tempId }) {
-            coordinator.repository.tasks[idx] = newTask
+          if let idx = repository.tasks.firstIndex(where: { $0.id == pending.tempId }) {
+            repository.tasks[idx] = newTask
           }
         } else {
           repo.enqueuePendingCreate(pending)
+          requeuedCreateTempIds.insert(pending.tempId)
           anyFailure = true
         }
       } catch {
         repo.enqueuePendingCreate(pending)
+        requeuedCreateTempIds.insert(pending.tempId)
         anyFailure = true
         logger.error(
           "Offline create replay failed: \(error.localizedDescription, privacy: .public)")
@@ -338,8 +344,12 @@ final class SyncService {
     }
 
     for tempOrRealId in deletes {
-      guard let realId = resolve(tempOrRealId) else {
-        // Underlying create never succeeded; the delete is moot.
+      guard
+        let realId = resolveForReplay(
+          tempOrRealId, requeue: { repo.enqueuePendingDelete($0) })
+      else {
+        // Either the create is being retried (re-queued above) or it is gone
+        // for good, in which case the delete is moot.
         continue
       }
       do {
@@ -356,7 +366,14 @@ final class SyncService {
     }
 
     for pending in actions {
-      guard let realId = resolve(pending.taskId) else { continue }
+      guard
+        let realId = resolveForReplay(
+          pending.taskId,
+          requeue: {
+            repo.enqueuePendingAction(
+              PendingTaskAction(taskId: $0, action: pending.action))
+          })
+      else { continue }
       do {
         _ = try await repo.activeSyncPlugin.performTaskAction(
           listId: repository.listId,
@@ -373,7 +390,14 @@ final class SyncService {
     }
 
     for (tempOrRealId, mutation) in mutations {
-      guard let realId = resolve(tempOrRealId) else { continue }
+      guard
+        let realId = resolveForReplay(
+          tempOrRealId,
+          requeue: {
+            repo.enqueuePendingMutation(
+              taskId: $0, content: mutation.content, due: mutation.due)
+          })
+      else { continue }
       do {
         _ = try await repo.activeSyncPlugin.updateTask(
           listId: repository.listId,
@@ -398,17 +422,17 @@ final class SyncService {
   // MARK: - Reorder
 
   func moveTask(_ task: CheckvistTask, direction: Int) async {
-    guard let coordinator else { return }
+    guard let host else { return }
     guard direction == -1 || direction == 1 else { return }
 
-    switch coordinator.taskListViewModel.rootTaskView {
-    case .priority:
+    switch host.taskMoveMode {
+    case .priorityQueue:
       movePriorityTask(task, direction: direction)
-    case .kanban:
-      moveTaskWithinKanbanColumn(task: task, direction: direction)
-    case .due:
+    case .kanbanColumn:
+      host.moveTaskWithinKanbanColumn(taskId: task.id, direction: direction)
+    case .dueDate:
       moveDueTaskByCopyingDate(task: task, direction: direction)
-    case .all, .tags, .eisenhower:
+    case .siblingPosition:
       swapWithSiblingNeighbour(task: task, direction: direction)
     }
   }
@@ -417,9 +441,8 @@ final class SyncService {
   /// parent's sibling list. Visible immediately in views sorted by position
   /// (All, Tags, sub-level scopes).
   private func swapWithSiblingNeighbour(task: CheckvistTask, direction: Int) {
-    guard let coordinator else { return }
     let siblings =
-      coordinator.repository.tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
+      repository.tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }) else { return }
     let newIdx = idx + direction
     guard siblings.indices.contains(newIdx) else { return }
@@ -429,32 +452,14 @@ final class SyncService {
     )
   }
 
-  /// Within kanban, reorder against the visible neighbour in the column that
-  /// hosts the moving task. Purely visual: writes only to the per-column
-  /// manual-order overlay, never to a task's date, priority, or position.
-  private func moveTaskWithinKanbanColumn(task: CheckvistTask, direction: Int) {
-    guard let coordinator else { return }
-    let columns = coordinator.kanban.kanbanColumns
-    var hostingColumn: KanbanColumn?
-    for column in columns {
-      let colTasks = coordinator.kanban.tasksForKanbanColumn(column, allColumns: columns)
-      if colTasks.contains(where: { $0.id == task.id }) {
-        hostingColumn = column
-        break
-      }
-    }
-    guard let column = hostingColumn else { return }
-    coordinator.kanban.nudgeTaskInColumn(taskId: task.id, in: column, direction: direction)
-  }
-
   /// In the Due view, Cmd+Up/Down copies the visible neighbour's due date so
   /// the task slides into a new bucket. After copy, also nudges position so
   /// the task lands above (Cmd+Up) or below (Cmd+Down) the neighbour —
   /// otherwise they share a bucket+date and the position-tiebreak could
   /// place the task on the wrong side of the neighbour.
   private func moveDueTaskByCopyingDate(task: CheckvistTask, direction: Int) {
-    guard let coordinator else { return }
-    let visible = coordinator.taskListViewModel.visibleTasks
+    guard let host else { return }
+    let visible = host.visibleTasks
     guard let idx = visible.firstIndex(where: { $0.id == task.id }) else { return }
     let newIdx = idx + direction
     guard visible.indices.contains(newIdx) else { return }
@@ -466,10 +471,10 @@ final class SyncService {
     if neighbourDue != taskDue {
       let neighbourPos = neighbour.position ?? 1
       let newPosition = direction < 0 ? max(1, neighbourPos - 1) : neighbourPos + 1
-      if let idx = coordinator.repository.tasks.firstIndex(where: { $0.id == task.id }) {
-        coordinator.repository.tasks[idx] = taskWithPosition(coordinator.repository.tasks[idx], position: newPosition)
+      if let idx = repository.tasks.firstIndex(where: { $0.id == task.id }) {
+        repository.tasks[idx] = taskWithPosition(repository.tasks[idx], position: newPosition)
       }
-      coordinator.applyOptimisticMoveAndSync(task: task, content: nil, due: neighbourDue)
+      host.applyOptimisticMoveAndSync(task: task, content: nil, due: neighbourDue)
       enqueueReorderRequest(taskId: task.id, position: newPosition)
     } else if (task.parentId ?? 0) == (neighbour.parentId ?? 0) {
       swapWithSiblingNeighbour(task: task, direction: direction)
@@ -481,7 +486,7 @@ final class SyncService {
   private func performSiblingPositionSwap(
     task: CheckvistTask, neighbour: CheckvistTask, direction: Int, targetPosition: Int
   ) {
-    guard let coordinator else { return }
+    guard let host else { return }
 
     // Compute deterministic positions for both tasks. Don't rely on the
     // moving task's original position — if it was nil/sparse, copying it to
@@ -490,11 +495,10 @@ final class SyncService {
     // happened at all.
     let neighbourTargetPosition = max(1, targetPosition - direction)
 
-    if let movingRange = coordinator.taskListViewModel.subtreeBlockRange(for: task.id, in: coordinator.repository.tasks),
-      let neighbourRange =
-        coordinator.taskListViewModel.subtreeBlockRange(for: neighbour.id, in: coordinator.repository.tasks)
+    if let movingRange = host.subtreeBlockRange(for: task.id, in: repository.tasks),
+      let neighbourRange = host.subtreeBlockRange(for: neighbour.id, in: repository.tasks)
     {
-      var updated = coordinator.repository.tasks
+      var updated = repository.tasks
       let movingBlock = Array(updated[movingRange])
       updated.removeSubrange(movingRange)
 
@@ -517,11 +521,11 @@ final class SyncService {
           updated[neighbourIdx], position: neighbourTargetPosition)
       }
 
-      coordinator.repository.tasks = updated
+      repository.tasks = updated
       // Keep selection anchored to the moved task in the currently visible
       // list.
-      if let visibleIdx = coordinator.taskListViewModel.visibleTasks.firstIndex(where: { $0.id == task.id }) {
-        coordinator.navigationState.currentSiblingIndex = visibleIdx
+      if let visibleIdx = host.visibleTasks.firstIndex(where: { $0.id == task.id }) {
+        host.currentSiblingIndex = visibleIdx
       }
     }
 
@@ -535,15 +539,15 @@ final class SyncService {
   /// comparable rankings, so we leave them alone instead of stealing each
   /// other's slot.
   func movePriorityTask(_ task: CheckvistTask, direction: Int) {
-    guard let coordinator else { return }
-    let visible = coordinator.taskListViewModel.visibleTasks
+    guard let host else { return }
+    let visible = host.visibleTasks
     guard let idx = visible.firstIndex(where: { $0.id == task.id }) else { return }
     let newIdx = idx + direction
     guard visible.indices.contains(newIdx) else { return }
     let neighbour = visible[newIdx]
 
-    let absoluteQueue = coordinator.repository.absolutePriorityTaskIds
-    let byParent = coordinator.repository.priorityTaskIdsByParentId
+    let absoluteQueue = repository.absolutePriorityTaskIds
+    let byParent = repository.priorityTaskIdsByParentId
 
     let taskAbs = absoluteQueue.firstIndex(of: task.id)
     let neighbourAbs = absoluteQueue.firstIndex(of: neighbour.id)
@@ -551,8 +555,8 @@ final class SyncService {
     if let i1 = taskAbs, let i2 = neighbourAbs {
       var queue = absoluteQueue
       queue.swapAt(i1, i2)
-      coordinator.repository.saveAbsolutePriorityQueue(queue)
-      coordinator.navigationState.currentSiblingIndex = newIdx
+      repository.saveAbsolutePriorityQueue(queue)
+      host.currentSiblingIndex = newIdx
       return
     }
 
@@ -565,7 +569,7 @@ final class SyncService {
       queue.swapAt(i1, i2)
       updated[p1] = queue
       repository.savePriorityQueue(updated)
-      coordinator.navigationState.currentSiblingIndex = newIdx
+      host.currentSiblingIndex = newIdx
     }
   }
 
@@ -593,22 +597,21 @@ final class SyncService {
   // MARK: - Reorder Queue
 
   private func enqueueReorderRequest(taskId: Int, position: Int) {
-    guard let coordinator else { return }
-    coordinator.repository.reorderQueue.enqueue(taskId: taskId, position: position)
+    repository.reorderQueue.enqueue(taskId: taskId, position: position)
     startReorderSyncIfNeeded()
   }
 
   private func startReorderSyncIfNeeded() {
-    guard let coordinator else { return }
-    guard !coordinator.repository.reorderQueue.isSyncing else { return }
+    guard !repository.reorderQueue.isSyncing else { return }
 
-    let task = Task { [weak self, weak coordinator] in
+    let repository = repository
+    let task = Task { [weak self] in
       guard let self else { return }
       var hadFailure = false
 
       while true {
         let nextRequest: ReorderQueue.Request? = await MainActor.run {
-          coordinator?.repository.reorderQueue.dequeueNext()
+          repository.reorderQueue.dequeueNext()
         }
 
         guard let nextRequest else { break }
@@ -618,63 +621,53 @@ final class SyncService {
       }
 
       await MainActor.run {
-        coordinator?.repository.reorderQueue.setSyncTask(nil)
+        repository.reorderQueue.setSyncTask(nil)
         if hadFailure { self.scheduleReorderResync() }
-        if let coordinator,
-          !coordinator.repository.reorderQueue.pending.isEmpty
-        {
+        if !repository.reorderQueue.pending.isEmpty {
           self.startReorderSyncIfNeeded()
         }
       }
     }
-    coordinator.repository.reorderQueue.setSyncTask(task)
+    repository.reorderQueue.setSyncTask(task)
   }
 
   private func commitReorderRequest(taskId: Int, position: Int) async -> Bool {
-    guard let coordinator else { return false }
     do {
-      let success = try await coordinator.repository.activeSyncPlugin.moveTask(
+      let success = try await repository.activeSyncPlugin.moveTask(
         listId: repository.listId,
         taskId: taskId,
         position: position,
         credentials: repository.activeCredentials
       )
       if !success {
-        await MainActor.run { [weak coordinator] in
-          coordinator?.repository.errorMessage = "Failed to move task."
-        }
+        repository.errorMessage = "Failed to move task."
         return false
       }
       return true
     } catch CheckvistSessionError.authenticationUnavailable {
       return false
     } catch {
-      await MainActor.run { [weak coordinator] in
-        coordinator?.repository.errorMessage = "Error: \(error.localizedDescription)"
-      }
+      repository.errorMessage = "Error: \(error.localizedDescription)"
       return false
     }
   }
 
   private func scheduleReorderResync() {
-    guard let coordinator else { return }
-    let task = Task { [weak self, weak coordinator] in
+    let repository = repository
+    let task = Task { [weak self] in
       try? await Task.sleep(nanoseconds: 600_000_000)
       guard let self else { return }
       await self.fetchTopTask()
-      await MainActor.run {
-        coordinator?.repository.reorderQueue.setResyncTask(nil)
-      }
+      repository.reorderQueue.setResyncTask(nil)
     }
-    coordinator.repository.reorderQueue.setResyncTask(task)
+    repository.reorderQueue.setResyncTask(task)
   }
 
   // MARK: - Indent / Unindent
 
   func indentTask(_ task: CheckvistTask) async {
-    guard let coordinator else { return }
     let siblings =
-      coordinator.repository.tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
+      repository.tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }), idx > 0 else { return }
     let newParent = siblings[idx - 1]
 
@@ -682,7 +675,7 @@ final class SyncService {
       failureMessage: "Failed to indent task.",
       errorMessageBuilder: { "Error indenting task: \($0.localizedDescription)" },
       action: {
-        try await coordinator.repository.activeSyncPlugin.reparentTask(
+        try await repository.activeSyncPlugin.reparentTask(
           listId: repository.listId,
           taskId: task.id,
           parentId: newParent.id,
@@ -696,16 +689,15 @@ final class SyncService {
   }
 
   func unindentTask(_ task: CheckvistTask) async {
-    guard let coordinator else { return }
     guard let parentId = task.parentId, parentId != 0 else { return }
-    guard let parent = coordinator.repository.tasks.first(where: { $0.id == parentId }) else { return }
+    guard let parent = repository.tasks.first(where: { $0.id == parentId }) else { return }
     let newParentId = parent.parentId ?? 0
 
     await repository.runBooleanMutation(
       failureMessage: "Failed to unindent task.",
       errorMessageBuilder: { "Error unindenting task: \($0.localizedDescription)" },
       action: {
-        try await coordinator.repository.activeSyncPlugin.reparentTask(
+        try await repository.activeSyncPlugin.reparentTask(
           listId: repository.listId,
           taskId: task.id,
           parentId: newParentId == 0 ? nil : newParentId,
@@ -722,16 +714,15 @@ final class SyncService {
 // MARK: - Conflict Resolution & Sync Strategies
 extension SyncService {
   func overwriteLocalWithRemoteTasks() async {
-    guard let coordinator else { return }
-    let remoteTasks = coordinator.repository.tasks
+    let remoteTasks = repository.tasks
     let nextId = (remoteTasks.map(\.id).max() ?? 0) + 1
-    let payload = OfflineTaskStorePayload(openTasks: remoteTasks, archivedTasks: [], nextTaskId: nextId)
-    coordinator.repository.localTaskStore.save(payload)
-    coordinator.repository.errorMessage = "Successfully overwrote local tasks with remote list."
+    let payload = OfflineTaskStorePayload(
+      openTasks: remoteTasks, archivedTasks: [], nextTaskId: nextId)
+    repository.localTaskStore.save(payload)
+    repository.errorMessage = "Successfully overwrote local tasks with remote list."
   }
 
   func overwriteRemoteWithLocalTasks(destinationListId: String) async -> Bool {
-    guard let coordinator else { return false }
     let loginSucceeded = await login()
     guard loginSucceeded else { return false }
 
@@ -739,31 +730,47 @@ extension SyncService {
     defer { repository.endLoading() }
 
     do {
-      // 1. Fetch current remote tasks to delete
-      let remoteTasks = try await coordinator.repository.activeSyncPlugin.fetchOpenTasks(
-        listId: destinationListId,
-        credentials: repository.activeCredentials
-      )
-
-      // 2. Delete all remote tasks
-      for task in remoteTasks {
-        _ = try await coordinator.repository.activeSyncPlugin.deleteTask(
+      // 1. Snapshot the remote tasks that this overwrite will replace.
+      let supersededRemoteTasks = try await repository.activeSyncPlugin
+        .fetchOpenTasks(
           listId: destinationListId,
-          taskId: task.id,
           credentials: repository.activeCredentials
         )
-      }
 
-      // 3. Upload all local tasks
-      let localTasks = coordinator.repository.localTaskStore.load().openTasks
-      _ = try await coordinator.repository.copyTasks(localTasks, to: destinationListId)
+      // 2. Upload the local tasks *before* deleting anything. Deleting first
+      //    meant a failure partway through the upload left the remote list
+      //    destroyed with nothing to restore from.
+      let localTasks = repository.localTaskStore.load().openTasks
+      _ = try await repository.copyTasks(localTasks, to: destinationListId)
+
+      // 3. Now retire the superseded tasks. A failure here is non-fatal: the
+      //    uploaded copy is already in place, so report the leftovers rather
+      //    than aborting and leaving the list in a half-known state.
+      var undeletedCount = 0
+      for task in supersededRemoteTasks {
+        do {
+          let deleted = try await repository.activeSyncPlugin.deleteTask(
+            listId: destinationListId,
+            taskId: task.id,
+            credentials: repository.activeCredentials
+          )
+          if !deleted { undeletedCount += 1 }
+        } catch {
+          undeletedCount += 1
+          logger.error(
+            "Overwrite-remote delete failed: \(error.localizedDescription, privacy: .public)")
+        }
+      }
 
       // 4. Refresh local tasks
       if destinationListId == repository.listId {
         await fetchTopTask()
       }
 
-      repository.errorMessage = "Successfully overwrote remote list with local tasks."
+      repository.errorMessage =
+        undeletedCount > 0
+        ? "Overwrote remote list with local tasks (\(undeletedCount) old tasks could not be removed)."
+        : "Successfully overwrote remote list with local tasks."
       return true
     } catch CheckvistSessionError.authenticationUnavailable {
       repository.setAuthenticationRequiredErrorIfNeeded()

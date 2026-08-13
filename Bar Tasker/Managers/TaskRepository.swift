@@ -266,7 +266,12 @@ struct PendingTaskUpdate: Sendable, Codable {
     preferencesStore: PreferencesStore,
     checkvistSyncPlugin: any CheckvistSyncPlugin,
     localTaskStore: LocalTaskStore,
-    pendingOfflineWorkStore: PendingOfflineWorkStore = PendingOfflineWorkStore(),
+    // Defaulted to `nil` rather than `PendingOfflineWorkStore()` so it can pick
+    // up the injected `defaults` below. The eager default silently ignored
+    // `defaults:` and always wrote the offline queue to `UserDefaults.standard`,
+    // which leaked queued work between tests — and between any two repositories
+    // that thought they were isolated.
+    pendingOfflineWorkStore: PendingOfflineWorkStore? = nil,
     initialRemoteKey: String,
     cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus(),
     defaults: UserDefaults = .standard
@@ -274,7 +279,9 @@ struct PendingTaskUpdate: Sendable, Codable {
     self.preferencesStore = preferencesStore
     self.checkvistSyncPlugin = checkvistSyncPlugin
     self.localTaskStore = localTaskStore
-    self.pendingOfflineWorkStore = pendingOfflineWorkStore
+    let resolvedPendingOfflineWorkStore =
+      pendingOfflineWorkStore ?? PendingOfflineWorkStore(defaults: defaults)
+    self.pendingOfflineWorkStore = resolvedPendingOfflineWorkStore
     self.cacheInvalidationBus = cacheInvalidationBus
     self.offlineSyncPlugin = OfflineTaskSyncPlugin(localStore: localTaskStore)
     self.priorityQueueStore = ListScopedPriorityStore(
@@ -324,7 +331,7 @@ struct PendingTaskUpdate: Sendable, Codable {
     // Restore offline-queued work for the current list. A payload scoped to a
     // different list is dropped — replaying its mutations against the active
     // list would silently target the wrong tasks.
-    let pendingPayload = pendingOfflineWorkStore.load()
+    let pendingPayload = resolvedPendingOfflineWorkStore.load()
     if !pendingPayload.isEmpty && pendingPayload.listId == storedListId {
       self.pendingTaskCreates = pendingPayload.creates
       self.pendingTaskActions = pendingPayload.actions
@@ -351,7 +358,7 @@ struct PendingTaskUpdate: Sendable, Codable {
           ))
       }
     } else if !pendingPayload.isEmpty {
-      pendingOfflineWorkStore.clear()
+      resolvedPendingOfflineWorkStore.clear()
     }
   }
 }

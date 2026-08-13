@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Bar Tasker is a keyboard-first macOS menu bar app (macOS 15.6+, Xcode 17+) for working Checkvist lists. It is an Xcode app with a Swift Package layered on top — `Package.swift` exposes `BarTaskerCore` (pure logic) and `BarTaskerPlugins` (integration plugins) as SPM library targets that share source with the Xcode project.
+Bar Tasker is a keyboard-first macOS menu bar app (macOS 15.6+, Xcode 17+) for working Checkvist lists. It is an Xcode app with a Swift Package layered on top — `Package.swift` exposes `BarTaskerCore` (pure logic), `BarTaskerPlugins` (integration plugins), and `BarTaskerAppLogic` (the headless-but-app-bound state machines) as SPM library targets that share source with the Xcode project.
 
 ## Build, Run, Test
 
@@ -12,7 +12,7 @@ Bar Tasker is a keyboard-first macOS menu bar app (macOS 15.6+, Xcode 17+) for w
 # Full app build (the canonical "does it compile" check)
 xcodebuild -project 'Bar Tasker.xcodeproj' -scheme 'Bar Tasker' -configuration Debug -destination 'platform=macOS' build
 
-# Run all SPM unit tests (BarTaskerCoreTests + BarTaskerPluginTests)
+# Run all SPM unit tests (BarTaskerCoreTests + BarTaskerPluginTests + BarTaskerAppLogicTests)
 swift test
 
 # Run a single test by filter (XCTest style)
@@ -32,15 +32,18 @@ swift test --filter BarTaskerCoreTests.CommandEngineCommandParsingTests/testPars
 The same files are compiled by two different systems, which is the most important thing to know before editing:
 
 1. **Xcode project** (`Bar Tasker.xcodeproj`) — builds the actual macOS app from everything under `Bar Tasker/`.
-2. **Swift Package** (`Package.swift`) — builds two libraries from a curated subset:
+2. **Swift Package** (`Package.swift`) — builds three libraries from curated subsets:
    - `BarTaskerCore` — sources rooted at `Bar Tasker/CoreLogic/`. Pure, headless logic only (command parser, recurrence, timer policies, feedback service protocol). This is what `corelogic-tests/` exercises.
    - `BarTaskerPlugins` — explicit `sources:` list of plugin files plus `plugin-tests-support/PluginModelStubs.swift` (which provides minimal stub models so plugin code compiles without the app shell). Tested by `plugin-tests/`.
+   - `BarTaskerAppLogic` — explicit `sources:` list of the app-bound state machines (`TaskRepository`, `TaskMutationService`, `SyncService`, `UndoService`, the offline/priority stores) plus `applogic-support/AppLogicSharedTypes.swift`, which re-declares the Checkvist models rather than making `BarTaskerPlugins` publish them. Tested by `applogic-tests/`.
 
 Consequences when editing:
 
 - `Package.swift` has a large `pluginTargetExcludes` list and an explicit `sources:` list. Adding a new plugin file or moving a file into/out of `CoreLogic/` requires updating `Package.swift`, or `swift test` will start failing even though Xcode still builds.
 - `BarTaskerCore` must stay free of AppKit/SwiftUI/UI dependencies — anything in `Bar Tasker/CoreLogic/` is consumed by the test target without the app.
 - `BarTaskerPlugins` deliberately excludes each plugin's `+Settings.swift` extension and any service that pulls in app types (e.g. `CheckvistAPIClient.swift`, `ObsidianSyncService.swift`). Keep cross-plugin / app-only types out of the curated `sources:` list.
+- `BarTaskerAppLogic` sources must not import AppKit or SwiftUI either. `TaskMutationService` and `SyncService` reach the UI layer through the `TaskMutationHost` / `SyncHost` protocols in `Bar Tasker/TaskServiceHosts.swift`; `AppCoordinator` provides the production conformance in `AppCoordinator+ServiceHosts.swift`, which is the app-only side and stays out of the package. Adding a coordinator dependency to either service means adding a host member, not a `weak var coordinator`.
+- **A file can only belong to one SPM target.** `BarTaskerAppLogic` therefore cannot `import BarTaskerCore` and reuse its policies — the same sources are compiled straight into the Xcode app, where `BarTaskerCore` isn't a module. That's why `OfflineReplayPolicy.swift` sits at the app root rather than in `CoreLogic/` despite being pure logic.
 
 ## App Composition
 
@@ -48,7 +51,7 @@ Consequences when editing:
 - `AppDelegate` is the composition root: it owns the singleton `AppCoordinator` (constructed with `PluginRegistry.nativeFirst()`), the `MenuBarController` (status item + popover), and the `GlobalShortcutManager` (Carbon hotkeys for toggle-popover and quick-add).
 - **MCP launch mode**: when launched with `--mcp-server`, `AppDelegate.applicationDidFinishLaunching` short-circuits into `launchMCPServerMode()` (stdio MCP server) before any UI is set up. Same binary, two modes — preserve this branch when refactoring startup. See `docs/mcp-server.md`.
 - `AppCoordinator` is a known "god object" — it forwards many properties to `TaskRepository`, `NavigationState`, and `TaskListViewModel`, and its responsibilities are split across `AppCoordinator+*.swift` extensions (Navigation, QuickAdd, ReorderingAndTiming, StateAndLifecycle, TaskMutations, TaskScoping, TaskSync, Undo). `ARCHITECTURE_IMPROVEMENT_PLAN.md` describes the intended decomposition; align new work with it rather than entrenching the forwarding pattern.
-- `TaskRepository` is the source of truth for tasks/auth/lists. Cache invalidation is currently manual via `onCacheRelevantChange` callbacks and `didSet` observers on `AppCoordinator` — be aware that mutations need the right invalidation hook to avoid stale UI.
+- `TaskRepository` is the source of truth for tasks/auth/lists. Cache invalidation fans out through `CacheInvalidationBus`: a cache-relevant `var`'s `didSet` calls `bus.invalidate()`, and the single subscriber marks `TaskListViewModel`'s cache dirty. The rebuild is lazy — it happens on the next read of `TaskListViewModel.cache`. Adding cache-relevant state means adding a `bus.invalidate()` to its `didSet`, or the UI goes stale. See `docs/state-ownership.md`.
 
 ## Plugin Architecture
 
@@ -78,4 +81,4 @@ xcodebuild -project 'Bar Tasker.xcodeproj' -scheme 'Bar Tasker' -configuration D
 swift test
 ```
 
-Xcode catches app-only breakage; `swift test` catches breakage in `BarTaskerCore`/`BarTaskerPlugins` (including `Package.swift` source-list drift).
+Xcode catches app-only breakage; `swift test` catches breakage in `BarTaskerCore`/`BarTaskerPlugins`/`BarTaskerAppLogic` (including `Package.swift` source-list drift).

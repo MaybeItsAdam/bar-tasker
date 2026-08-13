@@ -90,6 +90,11 @@ import UniformTypeIdentifiers
   }
 
   private static let enabledPluginIdentifiersDefaultsKey = "userPluginEnabledIdentifiers"
+  /// Every plugin id we have already surfaced to the user. Needed to tell a
+  /// brand-new plugin (auto-enable it) apart from one the user deliberately
+  /// switched off (leave it off) — both look identical from
+  /// `enabledPluginIdentifiers` alone.
+  private static let knownPluginIdentifiersDefaultsKey = "userPluginKnownIdentifiers"
   private static let pluginSettingValuesDefaultsKey = "userPluginSettingValuesByPluginIdentifier"
   private static let supportedPluginAPIVersion = UserPluginManifest.defaultPluginAPIVersion
 
@@ -111,6 +116,7 @@ import UniformTypeIdentifiers
   private(set) var installedPlugins: [InstalledUserPlugin] = []
   private(set) var validationIssues: [PluginValidationIssue] = []
   private(set) var enabledPluginIdentifiers: Set<String>
+  private var knownPluginIdentifiers: Set<String>
   var lastErrorMessage: String?
 
   init(
@@ -128,9 +134,17 @@ import UniformTypeIdentifiers
     self.pluginsDirectoryURL =
       pluginsDirectoryURL?.standardizedFileURL
       ?? Self.defaultPluginsDirectoryURL(fileManager: fileManager)
-    self.enabledPluginIdentifiers = Set(
+    let storedEnabled = Set(
       defaults.stringArray(forKey: Self.enabledPluginIdentifiersDefaultsKey) ?? []
     )
+    self.enabledPluginIdentifiers = storedEnabled
+    // Installs predating this key never persisted a "known" set. Seeding it
+    // from the enabled set keeps their first launch a no-op instead of
+    // re-announcing every installed plugin as new.
+    self.knownPluginIdentifiers =
+      defaults.object(forKey: Self.knownPluginIdentifiersDefaultsKey) == nil
+      ? storedEnabled
+      : Set(defaults.stringArray(forKey: Self.knownPluginIdentifiersDefaultsKey) ?? [])
     do {
       try ensurePluginsDirectoryExists()
       reloadInstalledPlugins()
@@ -209,9 +223,16 @@ import UniformTypeIdentifiers
 
       let installedIdentifiers = Set(resolvedPlugins.map(\.manifest.id))
       var normalizedEnabled = enabledPluginIdentifiers.intersection(installedIdentifiers)
-      for plugin in resolvedPlugins where !enabledPluginIdentifiers.contains(plugin.manifest.id) {
+      // Auto-enable only plugins we have never seen before. Testing against
+      // `enabledPluginIdentifiers` here (as this used to) re-enabled anything
+      // the user had switched off, because "disabled" and "newly discovered"
+      // are the same state in that set.
+      for plugin in resolvedPlugins where !knownPluginIdentifiers.contains(plugin.manifest.id) {
         normalizedEnabled.insert(plugin.manifest.id)
       }
+      // Forget uninstalled plugins so a later reinstall counts as new again.
+      knownPluginIdentifiers = installedIdentifiers
+      persistKnownPluginIdentifiers()
 
       installedPlugins = resolvedPlugins
       validationIssues = resolvedIssues.sorted {
@@ -357,6 +378,11 @@ import UniformTypeIdentifiers
   private func persistEnabledPluginIdentifiers() {
     defaults.set(
       Array(enabledPluginIdentifiers).sorted(), forKey: Self.enabledPluginIdentifiersDefaultsKey)
+  }
+
+  private func persistKnownPluginIdentifiers() {
+    defaults.set(
+      Array(knownPluginIdentifiers).sorted(), forKey: Self.knownPluginIdentifiersDefaultsKey)
   }
 
   private func ensurePluginsDirectoryExists() throws {
@@ -564,14 +590,21 @@ import UniformTypeIdentifiers
     guard process.terminationStatus == 0 else { return false }
 
     // Validate that no extracted paths escape the destination via path traversal.
-    let canonicalDestination = destinationURL.standardizedFileURL.path
+    // Both sides are symlink-resolved so the comparison comes from the same
+    // namespace, and the prefix carries a trailing separator so a sibling
+    // directory whose name merely starts with the destination's (".../abc" vs
+    // ".../abcdef") can't slip through a bare `hasPrefix`.
+    let canonicalDestination = destinationURL.resolvingSymlinksInPath().standardizedFileURL.path
+    let containmentPrefix =
+      canonicalDestination.hasSuffix("/") ? canonicalDestination : canonicalDestination + "/"
     if let enumerator = fileManager.enumerator(
       at: destinationURL, includingPropertiesForKeys: [.isSymbolicLinkKey])
     {
       for case let fileURL as URL in enumerator {
         // Resolve symlinks so we catch links pointing outside the destination.
         let resolvedPath = fileURL.resolvingSymlinksInPath().standardizedFileURL.path
-        guard resolvedPath.hasPrefix(canonicalDestination) else {
+        guard resolvedPath == canonicalDestination || resolvedPath.hasPrefix(containmentPrefix)
+        else {
           // Path traversal detected — clean up and fail.
           try? fileManager.removeItem(at: destinationURL)
           return false

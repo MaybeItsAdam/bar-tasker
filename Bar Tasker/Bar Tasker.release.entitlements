@@ -9,5 +9,10 @@
 	<true />
 	<key>com.apple.security.network.client</key>
 	<true />
+	<!-- Required by `GoogleOAuthLoopbackReceiver`, which binds a short-lived
+	     local NWListener to receive the Google OAuth redirect. Without this the
+	     listener fails to start under the sandbox and sign-in is impossible. -->
+	<key>com.apple.security.network.server</key>
+	<true />
 </dict>
 </plist>

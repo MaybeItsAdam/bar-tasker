@@ -60,7 +60,22 @@ import Observation
     didSet { invalidateCaches() }
   }
 
-  @ObservationIgnored var cache = CacheState()
+  @ObservationIgnored private var cacheStorage = CacheState()
+
+  /// Up-to-date view of the derived caches.
+  ///
+  /// Reading this rebuilds lazily if anything has invalidated since the last
+  /// read, so external callers (`PopoverView`, `KanbanManager`,
+  /// `KanbanTaskDataSourceAdapter`) can't observe a stale snapshot. Previously
+  /// `invalidateCaches()` rebuilt eagerly, which kept those readers correct
+  /// only by accident and made every single mutation of `tasks` — plus each
+  /// priority/eisenhower/timer write that follows it — pay for a full
+  /// recompute. Internal code should use `cacheStorage` directly to avoid
+  /// re-entering the validity check on hot paths.
+  var cache: CacheState {
+    ensureVisibleTasksCacheValid()
+    return cacheStorage
+  }
 
   init(
     repository: TaskRepository,
@@ -87,20 +102,24 @@ import Observation
     self.selectedRootTag = preferencesStore.string(.selectedRootTag)
   }
 
+  /// Marks the derived caches stale. The rebuild is deferred to the next read
+  /// of `cache` (or of any accessor that calls
+  /// `ensureVisibleTasksCacheValid`), so a burst of writes — e.g. a delete,
+  /// which touches `tasks`, both priority queues and the eisenhower levels —
+  /// costs one recompute instead of one per write.
   func invalidateCaches() {
-    cache.invalidate()
-    ensureVisibleTasksCacheValid()
+    cacheStorage.invalidate()
   }
 
   func ensureVisibleTasksCacheValid() {
-    guard cache.dirty, !cache.isRebuilding else { return }
-    cache.isRebuilding = true
-    defer { cache.isRebuilding = false }
+    guard cacheStorage.dirty, !cacheStorage.isRebuilding else { return }
+    cacheStorage.isRebuilding = true
+    defer { cacheStorage.isRebuilding = false }
 
     let tasks = repository.tasks
-    cache.taskById = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
-    cache.tagsByTaskId = TaskFilterEngine.extractTagsByTaskId(tasks: tasks)
-    cache.rootDueBucket = TaskFilterEngine.computeRootDueBuckets(tasks: tasks)
+    cacheStorage.taskById = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
+    cacheStorage.tagsByTaskId = TaskFilterEngine.extractTagsByTaskId(tasks: tasks)
+    cacheStorage.rootDueBucket = TaskFilterEngine.computeRootDueBuckets(tasks: tasks)
     var rankByTaskId: [Int: Int] = [:]
     for (_, ids) in repository.priorityTaskIdsByParentId {
       for (idx, id) in ids.enumerated() {
@@ -111,21 +130,21 @@ import Observation
     for (idx, id) in repository.absolutePriorityTaskIds.enumerated() {
       absoluteRankByTaskId[id] = idx + 1
     }
-    cache.priorityRank = rankByTaskId
-    cache.absolutePriorityRank = absoluteRankByTaskId
-    cache.priorityPath = Self.computePriorityPaths(
+    cacheStorage.priorityRank = rankByTaskId
+    cacheStorage.absolutePriorityRank = absoluteRankByTaskId
+    cacheStorage.priorityPath = Self.computePriorityPaths(
       rankByTaskId: rankByTaskId,
-      taskById: cache.taskById
+      taskById: cacheStorage.taskById
     )
-    cache.dirty = false
+    cacheStorage.dirty = false
     let visibility = computeVisibility()
-    cache.visibleTasks = visibility.tasks
-    cache.remainderStartIndex = visibility.remainderStartIndex
+    cacheStorage.visibleTasks = visibility.tasks
+    cacheStorage.remainderStartIndex = visibility.remainderStartIndex
     let nodes = tasks.map { TimerNode(id: $0.id, parentId: $0.parentId) }
-    cache.childCount = TimerStore.childCountByTaskId(nodes: nodes)
-    cache.rolledUpElapsed = TimerStore.rolledUpElapsedByTaskId(
+    cacheStorage.childCount = TimerStore.childCountByTaskId(nodes: nodes)
+    cacheStorage.rolledUpElapsed = TimerStore.rolledUpElapsedByTaskId(
       nodes: nodes, ownElapsed: timer.timerByTaskId)
-    cache.rootLevelTagNames = computeRootLevelTagNames(limit: 30)
+    cacheStorage.rootLevelTagNames = computeRootLevelTagNames(limit: 30)
   }
 
   private func computeVisibility() -> TaskVisibilityEngine.Result {
@@ -150,27 +169,27 @@ import Observation
         showChildrenInMenus: showChildrenInMenus,
         selectedRootDueBucket: RootDueBucket(rawValue: selectedRootDueBucketRawValue),
         selectedRootTag: selectedRootTag,
-        taskById: cache.taskById,
+        taskById: cacheStorage.taskById,
         isDescendant: { task, rootId in
-          TaskFilterEngine.isDescendant(task, of: rootId, taskById: self.cache.taskById)
+          TaskFilterEngine.isDescendant(task, of: rootId, taskById: self.cacheStorage.taskById)
         },
         taskMatchesActiveRootScope: { [weak self] task in
           self?.taskMatchesActiveRootScope(task) ?? false
         },
         isAbsolutePrioritized: { [weak self] task in
-          self?.cache.absolutePriorityRank[task.id] != nil
+          self?.cacheStorage.absolutePriorityRank[task.id] != nil
         },
         compareByPriorityThenPosition: { lhs, rhs in
           TaskFilterEngine.compareByPriorityThenPosition(
             lhs,
             rhs,
-            priorityRankById: self.cache.priorityRank,
-            absolutePriorityRankById: self.cache.absolutePriorityRank
+            priorityRankById: self.cacheStorage.priorityRank,
+            absolutePriorityRankById: self.cacheStorage.absolutePriorityRank
           )
         },
         compareByRootDueBucket: { lhs, rhs in
           TaskFilterEngine.compareByRootDueBucket(
-            lhs, rhs, rootDueBucketById: self.cache.rootDueBucket)
+            lhs, rhs, rootDueBucketById: self.cacheStorage.rootDueBucket)
         },
         hasAnyTag: { [weak self] task in
           self?.hasAnyTag(task) ?? false
@@ -185,7 +204,7 @@ import Observation
   }
   private func computeRootLevelTagNames(limit: Int) -> [String] {
     var counts: [String: Int] = [:]
-    for tags in cache.tagsByTaskId.values {
+    for tags in cacheStorage.tagsByTaskId.values {
       for tag in tags {
         counts[tag, default: 0] += 1
       }
@@ -201,16 +220,16 @@ import Observation
   }
 
   func rootDueBucket(for task: CheckvistTask) -> RootDueBucket {
-    if let cached = cache.rootDueBucket[task.id] { return cached }
+    if let cached = cacheStorage.rootDueBucket[task.id] { return cached }
     return TaskFilterEngine.classifyDueBucket(task: task)
   }
 
   private func hasAnyTag(_ task: CheckvistTask) -> Bool {
-    cache.tagsByTaskId[task.id] != nil
+    cacheStorage.tagsByTaskId[task.id] != nil
   }
 
   private func hasTag(_ task: CheckvistTask, tag: String) -> Bool {
-    guard let tags = cache.tagsByTaskId[task.id] else { return false }
+    guard let tags = cacheStorage.tagsByTaskId[task.id] else { return false }
     let normalized: String
     if tag.hasPrefix("#") || tag.hasPrefix("@") {
       normalized = tag.lowercased()
@@ -233,7 +252,7 @@ import Observation
       if selectedRootTag.isEmpty { return hasAnyTag(task) }
       return hasTag(task, tag: selectedRootTag)
     case .priority:
-      return cache.absolutePriorityRank[task.id] != nil || cache.priorityRank[task.id] != nil
+      return cacheStorage.absolutePriorityRank[task.id] != nil || cacheStorage.priorityRank[task.id] != nil
     case .kanban:
       return true
     case .eisenhower:
@@ -249,17 +268,17 @@ import Observation
 
   func priorityRank(for task: CheckvistTask) -> Int? {
     ensureVisibleTasksCacheValid()
-    return cache.priorityRank[task.id]
+    return cacheStorage.priorityRank[task.id]
   }
 
   func absolutePriorityRank(for task: CheckvistTask) -> Int? {
     ensureVisibleTasksCacheValid()
-    return cache.absolutePriorityRank[task.id]
+    return cacheStorage.absolutePriorityRank[task.id]
   }
 
   func priorityPath(for task: CheckvistTask) -> String? {
     ensureVisibleTasksCacheValid()
-    return cache.priorityPath[task.id]
+    return cacheStorage.priorityPath[task.id]
   }
 
   func priorityBadgeLabel(for task: CheckvistTask) -> String? {
@@ -291,7 +310,7 @@ import Observation
   /// root views.
   var remainderStartIndex: Int? {
     ensureVisibleTasksCacheValid()
-    return cache.remainderStartIndex
+    return cacheStorage.remainderStartIndex
   }
 
   var isRootLevel: Bool { navigationState.currentParentId == 0 }
@@ -357,12 +376,17 @@ import Observation
 
   func rootLevelTagNames(limit: Int = 8) -> [String] {
     ensureVisibleTasksCacheValid()
-    return Array(cache.rootLevelTagNames.prefix(limit))
+    return Array(cacheStorage.rootLevelTagNames.prefix(limit))
   }
 
   /// Returns true if task is a descendant of the given parentId (or IS at that level).
+  ///
+  /// Ensures the cache first: `taskById` has to reflect the *current* task list
+  /// or callers such as `subtreeBlockRange` compute a wrong range. This used to
+  /// be correct only because `invalidateCaches()` rebuilt eagerly.
   func isDescendant(_ task: CheckvistTask, of rootId: Int) -> Bool {
-    TaskFilterEngine.isDescendant(task, of: rootId, taskById: cache.taskById)
+    ensureVisibleTasksCacheValid()
+    return TaskFilterEngine.isDescendant(task, of: rootId, taskById: cacheStorage.taskById)
   }
 
   /// Computes a hierarchical priority path per ranked task. For each ranked task, walks
@@ -420,7 +444,7 @@ import Observation
     var result: [CheckvistTask] = []
     var parentId = navigationState.currentParentId
     while parentId != 0 {
-      if let parent = cache.taskById[parentId] {
+      if let parent = cacheStorage.taskById[parentId] {
         result.append(parent)
         parentId = parent.parentId ?? 0
       } else {
@@ -448,7 +472,7 @@ import Observation
     _ = hideFuture
     _ = showChildrenInMenus
     ensureVisibleTasksCacheValid()
-    return cache.visibleTasks
+    return cacheStorage.visibleTasks
   }
 
   func shouldShowBreadcrumbPath(for task: CheckvistTask) -> Bool {
@@ -468,6 +492,7 @@ import Observation
   var isSearchFilterActive: Bool { quickEntry.isSearchFilterActive }
 
   func subtreeBlockRange(for taskId: Int, in flatTasks: [CheckvistTask]) -> Range<Int>? {
+    ensureVisibleTasksCacheValid()
     guard let start = flatTasks.firstIndex(where: { $0.id == taskId }) else { return nil }
 
     var end = start + 1
@@ -492,7 +517,7 @@ import Observation
 
   func childCountByTaskId() -> [Int: Int] {
     ensureVisibleTasksCacheValid()
-    return cache.childCount
+    return cacheStorage.childCount
   }
 
   func rolledUpElapsedByTaskId() -> [Int: TimeInterval] {
@@ -501,6 +526,6 @@ import Observation
     // and never establish a dependency on `timer.timerByTaskId`.
     _ = timer.timerByTaskId
     ensureVisibleTasksCacheValid()
-    return cache.rolledUpElapsed
+    return cacheStorage.rolledUpElapsed
   }
 }

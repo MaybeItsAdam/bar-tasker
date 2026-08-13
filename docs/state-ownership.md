@@ -22,14 +22,23 @@
 1. A cache-relevant `var` changes on a producer → its `didSet` calls `cacheInvalidationBus.invalidate()`.
 2. The bus (`CacheInvalidationBus.swift`) fans out to its one subscriber: `AppCoordinator`
    (registered in `LifecycleController`), which calls `TaskListViewModel.invalidateCaches()`.
-3. `TaskListViewModel.ensureVisibleTasksCacheValid()` rebuilds the *entire* derived cache
-   (visible tasks, tag index, due buckets, priority ranks, rolled-up timer elapsed) from the
-   raw state, delegating math to the pure engines (`TaskVisibilityEngine`, `TaskFilterEngine`,
-   `TimerStore`).
-4. Views observe and re-render.
+3. `invalidateCaches()` only sets the dirty flag. The rebuild happens **lazily**, on the next
+   read of `TaskListViewModel.cache` (or of any accessor that calls
+   `ensureVisibleTasksCacheValid()`).
+4. That rebuild reconstructs the *entire* derived cache (visible tasks, tag index, due buckets,
+   priority ranks, rolled-up timer elapsed) from the raw state, delegating math to the pure
+   engines (`TaskVisibilityEngine`, `TaskFilterEngine`, `TimerStore`).
+5. Views observe and re-render.
 
-Invalidation is coarse: any producer change marks the whole cache dirty and triggers a full
-rebuild. Fine for menu-bar-sized lists; not granular.
+Invalidation is coarse: any producer change marks the whole cache dirty and the next read
+triggers a full rebuild. Fine for menu-bar-sized lists; not granular.
+
+Rebuilding lazily rather than eagerly matters because writes arrive in bursts — deleting a task
+touches `tasks`, both priority queues and the eisenhower levels, which is four invalidations for
+one user action. Reading `cache` always validates first, so external readers
+(`PopoverView`, `KanbanManager`, `KanbanTaskDataSourceAdapter`) cannot observe a stale snapshot.
+Inside `TaskListViewModel`, use the private `cacheStorage` to avoid re-entering the validity
+check on hot paths.
 
 ## Owners
 
@@ -68,8 +77,9 @@ themselves), `prioritizedTaskIds`, `absolutePrioritizedTaskIds`, `hasPendingOffl
 Owns the toggles that shape what's visible, *and* the rebuilt `cache`. These `didSet`s call
 `invalidateCaches()` **directly** (not via the bus — the VM is the bus's consumer):
 `hideFuture`, `rootTaskView`, `selectedRootDueBucketRawValue`, `selectedRootTag`,
-`showChildrenInMenus`. `cache: CacheState` is `@ObservationIgnored` and rebuilt by
-`ensureVisibleTasksCacheValid()`.
+`showChildrenInMenus`. The cache lives in the private, `@ObservationIgnored` `cacheStorage` and
+is exposed as `var cache: CacheState`, whose getter rebuilds via
+`ensureVisibleTasksCacheValid()` when dirty.
 
 Also owns the cache-derived view helpers consolidated here in step 3.7d (they read the
 `cache` directly rather than forwarding through `AppCoordinator`): `priorityBadgeLabel` /
@@ -108,6 +118,15 @@ The Phase-3 forwarder cull is finished: `AppCoordinator` no longer re-exposes
 (`SyncService`, `TaskMutationService`, `TaskNavigationService`) all take a strong
 `TaskRepository` reference in their initializers and read auth/list state from there
 directly — no coordinator forwarder hop.
+
+`SyncService` and `TaskMutationService` no longer hold `AppCoordinator` at all: they take a
+`weak` `SyncHost` / `TaskMutationHost` (`Bar Tasker/TaskServiceHosts.swift`), which
+`AppCoordinator` conforms to in `AppCoordinator+ServiceHosts.swift`. Anything those services
+need from a sibling manager — selection, undo, quick-entry focus, kanban ordering, recurrence
+rules, the completion haptics — is a host member rather than a `coordinator.someManager.X`
+reach-through, which is what lets both services live in `BarTaskerAppLogic` and be tested
+against `StubTaskServiceHost`. When you give one of them a new dependency, add it to the host
+protocol.
 
 ## Cache-invalidation producer list (who fires the bus)
 

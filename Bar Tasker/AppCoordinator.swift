@@ -95,7 +95,24 @@ import SwiftUI
   /// Owned here (rather than on `LifecycleController`) so `deinit`, which is
   /// nonisolated, can call `stop()` without hopping back onto the main actor.
   @ObservationIgnored let reachabilityMonitor = NetworkReachabilityMonitor()
-  var usesKeychainStorage: Bool { false }
+  /// Where the Checkvist remote key is persisted.
+  ///
+  /// The key is password-equivalent, so release builds keep it in the keychain
+  /// (matching `GoogleCalendarOAuthTokenStore`) rather than in the preferences
+  /// plist, which is world-readable by anything running as the user. This was
+  /// previously hardcoded to `false`, which not only stored the key in the clear
+  /// but also actively migrated it *out* of the keychain on first launch.
+  ///
+  /// DEBUG builds keep the opt-out (defaulting to on, see `PreferencesManager`)
+  /// because locally-signed dev builds get a new signing identity on each
+  /// rebuild, which makes macOS prompt for keychain access every run.
+  var usesKeychainStorage: Bool {
+    #if DEBUG
+      return !preferences.ignoreKeychainInDebug
+    #else
+      return true
+    #endif
+  }
 
   init(pluginRegistry: PluginRegistry, feedbackService: FeedbackService? = nil) {
     self.feedbackService = feedbackService ?? DefaultFeedbackService()
@@ -122,8 +139,17 @@ import SwiftUI
     )
     self.preferences = PreferencesManager(preferencesStore: preferencesStore)
 
+    // Mirrors `usesKeychainStorage`, which can't be read yet because `self`
+    // isn't fully initialized here.
+    #if DEBUG
+      let useKeychainStorageAtInit = !preferencesStore.bool(.ignoreKeychainInDebug, default: true)
+    #else
+      let useKeychainStorageAtInit = true
+    #endif
+    // Returns "" in keychain mode: the actual read is deferred out of the
+    // launch path to `LifecycleController.start()`.
     let initialRemoteKey = resolvedCheckvistSyncPlugin.startupRemoteKey(
-      useKeychainStorageAtInit: false)
+      useKeychainStorageAtInit: useKeychainStorageAtInit)
 
     let cacheInvalidationBus = CacheInvalidationBus()
     self.cacheInvalidationBus = cacheInvalidationBus
@@ -214,9 +240,9 @@ import SwiftUI
       repository: repository,
       navigationState: navigationState
     )
-    self.taskMutationService = TaskMutationService(coordinator: self, repository: repository)
+    self.taskMutationService = TaskMutationService(host: self, repository: repository)
     self.undoService = UndoService(performer: self.taskMutationService)
-    self.syncService = SyncService(coordinator: self, repository: repository)
+    self.syncService = SyncService(host: self, repository: repository)
     self.lifecycle = LifecycleController(
       coordinator: self,
       reachabilityMonitor: reachabilityMonitor
@@ -314,8 +340,10 @@ extension AppCoordinator {
 
     let (content, due) = kanban.contentAndDueForNewTask(rawContent: trimmed, in: column)
 
-    // Optimistic local insert
-    let optimisticId = -Int.random(in: 1...1_000_000)
+    // Optimistic local insert. Shares the id sequence with
+    // `TaskMutationService` so the two optimistic-insert paths can't hand out
+    // the same placeholder id.
+    let optimisticId = OptimisticTaskID.make()
     let optimisticTask = CheckvistTask(
       id: optimisticId, content: content, status: 0, due: due,
       position: nil, parentId: nil, level: nil

@@ -24,7 +24,8 @@ final class UserPluginManagerCompatibilityTests: XCTestCase {
     let manager = UserPluginManager(
       builtInPluginIdentifiers: [],
       currentAppVersion: "1.2.0",
-      pluginsDirectoryURL: pluginsRoot
+      pluginsDirectoryURL: pluginsRoot,
+      defaults: makeIsolatedDefaults()
     )
     manager.reloadInstalledPlugins()
 
@@ -57,7 +58,8 @@ final class UserPluginManagerCompatibilityTests: XCTestCase {
     let manager = UserPluginManager(
       builtInPluginIdentifiers: [],
       currentAppVersion: "1.2.0",
-      pluginsDirectoryURL: pluginsRoot
+      pluginsDirectoryURL: pluginsRoot,
+      defaults: makeIsolatedDefaults()
     )
     manager.reloadInstalledPlugins()
 
@@ -90,7 +92,8 @@ final class UserPluginManagerCompatibilityTests: XCTestCase {
     let manager = UserPluginManager(
       builtInPluginIdentifiers: [],
       currentAppVersion: "1.5.0",
-      pluginsDirectoryURL: pluginsRoot
+      pluginsDirectoryURL: pluginsRoot,
+      defaults: makeIsolatedDefaults()
     )
     manager.reloadInstalledPlugins()
 
@@ -123,7 +126,8 @@ final class UserPluginManagerCompatibilityTests: XCTestCase {
     let manager = UserPluginManager(
       builtInPluginIdentifiers: [],
       currentAppVersion: "",
-      pluginsDirectoryURL: pluginsRoot
+      pluginsDirectoryURL: pluginsRoot,
+      defaults: makeIsolatedDefaults()
     )
     manager.reloadInstalledPlugins()
 
@@ -157,7 +161,8 @@ final class UserPluginManagerCompatibilityTests: XCTestCase {
     let manager = UserPluginManager(
       builtInPluginIdentifiers: [],
       currentAppVersion: "1.2.0",
-      pluginsDirectoryURL: pluginsRoot
+      pluginsDirectoryURL: pluginsRoot,
+      defaults: makeIsolatedDefaults()
     )
 
     XCTAssertThrowsError(try manager.installPlugin(from: sourcePluginFolder)) { error in
@@ -171,6 +176,19 @@ final class UserPluginManagerCompatibilityTests: XCTestCase {
         XCTFail("Expected unsupportedPluginAPIVersion, got \(installError)")
       }
     }
+  }
+
+  /// A throwaway suite per test. Without this the manager reads and writes the
+  /// developer's real preferences (it persists plugin enablement state), so runs
+  /// leak into each other and into the local app install.
+  private func makeIsolatedDefaults() -> UserDefaults {
+    let suiteName = "bar-tasker-plugin-tests-\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+      XCTFail("Could not create an isolated UserDefaults suite.")
+      return .standard
+    }
+    addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+    return defaults
   }
 
   private func makeTemporaryPluginsRoot() throws -> URL {

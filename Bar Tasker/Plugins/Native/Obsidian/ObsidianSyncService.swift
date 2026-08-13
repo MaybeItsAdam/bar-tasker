@@ -145,11 +145,20 @@ final class ObsidianSyncService {
   }
 
   func hasSyncedNote(task: CheckvistTask, linkedFolderTaskId: Int?) -> Bool {
-    guard let markdownURL = try? noteFileURL(task: task, linkedFolderTaskId: linkedFolderTaskId)
-    else {
-      return false
+    guard
+      let destinationFolderURL = try? resolvedDestinationFolderURL(
+        linkedFolderTaskId: linkedFolderTaskId)
+    else { return false }
+    return withSecurityScope(destinationFolderURL) {
+      guard
+        let markdownURL = try? noteFileURL(
+          task: task,
+          destinationFolderURL: destinationFolderURL,
+          createDirectoryIfNeeded: false
+        )
+      else { return false }
+      return FileManager.default.fileExists(atPath: markdownURL.path)
     }
-    return FileManager.default.fileExists(atPath: markdownURL.path)
   }
 
   func syncTask(
@@ -160,14 +169,33 @@ final class ObsidianSyncService {
     syncDate: Date = Date()
   ) throws -> URL {
     let inboxURL = try resolvedDestinationFolderURL(linkedFolderTaskId: linkedFolderTaskId)
-    let markdownURL = try writeTaskMarkdown(
-      task: task,
-      listId: listId,
-      inboxURL: inboxURL,
-      syncDate: syncDate
-    )
+    // The security scope must stay held across the directory creation, the
+    // creation-date probe *and* the write — not just while the destination URL
+    // is being assembled. Release builds are sandboxed
+    // (`Bar Tasker.release.entitlements`), so file access outside this window is
+    // denied even though it succeeds in unsandboxed Debug builds.
+    let markdownURL = try withSecurityScope(inboxURL) {
+      try writeTaskMarkdown(
+        task: task,
+        listId: listId,
+        inboxURL: inboxURL,
+        syncDate: syncDate
+      )
+    }
     openInObsidian(markdownURL, mode: openMode)
     return markdownURL
+  }
+
+  /// Runs `body` while holding security-scoped access to `url`. Every read or
+  /// write under a bookmark-resolved folder must happen inside one of these.
+  private func withSecurityScope<T>(_ url: URL, _ body: () throws -> T) rethrows -> T {
+    let accessed = url.startAccessingSecurityScopedResource()
+    defer {
+      if accessed {
+        url.stopAccessingSecurityScopedResource()
+      }
+    }
+    return try body()
   }
 
   private func persistLinkedFolderBookmarks() {
@@ -254,26 +282,15 @@ final class ObsidianSyncService {
     return markdownURL
   }
 
-  private func noteFileURL(task: CheckvistTask, linkedFolderTaskId: Int?) throws -> URL {
-    try noteFileURL(
-      task: task,
-      destinationFolderURL: resolvedDestinationFolderURL(linkedFolderTaskId: linkedFolderTaskId),
-      createDirectoryIfNeeded: false
-    )
-  }
-
+  /// Callers must already hold security-scoped access to `destinationFolderURL`
+  /// (see `withSecurityScope`) — this both touches the filesystem when
+  /// `createDirectoryIfNeeded` is set and returns a URL the caller will read or
+  /// write immediately afterwards.
   private func noteFileURL(
     task: CheckvistTask,
     destinationFolderURL: URL,
     createDirectoryIfNeeded: Bool
   ) throws -> URL {
-    let accessed = destinationFolderURL.startAccessingSecurityScopedResource()
-    defer {
-      if accessed {
-        destinationFolderURL.stopAccessingSecurityScopedResource()
-      }
-    }
-
     if createDirectoryIfNeeded {
       try FileManager.default.createDirectory(
         at: destinationFolderURL,
@@ -368,13 +385,35 @@ final class ObsidianSyncService {
     return lines.joined(separator: "\n")
   }
 
+  /// Longest note base name we will produce. HFS+/APFS cap a single path
+  /// component at 255 *bytes*; leaving headroom for the ".md" suffix and the
+  /// "-2"-style collision suffixes added by `uniqueFolderURL` keeps us clear of
+  /// an opaque "file name too long" write failure on long task titles.
+  private static let maximumFileNameByteCount = 200
+
   private func sanitizeTaskFileName(_ raw: String) -> String {
     let illegal = CharacterSet(charactersIn: "/\\?%*|\"<>:\n\r\t")
     let cleanedScalars = raw.unicodeScalars.map { illegal.contains($0) ? "-" : Character($0) }
     let cleaned = String(cleanedScalars)
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-    return cleaned.isEmpty ? "Task" : cleaned
+    guard !cleaned.isEmpty else { return "Task" }
+    return Self.truncatedToByteCount(cleaned, limit: Self.maximumFileNameByteCount)
+  }
+
+  /// Trims to at most `limit` UTF-8 bytes without splitting a character.
+  private static func truncatedToByteCount(_ value: String, limit: Int) -> String {
+    guard value.utf8.count > limit else { return value }
+    var truncated = ""
+    var byteCount = 0
+    for character in value {
+      let width = String(character).utf8.count
+      if byteCount + width > limit { break }
+      truncated.append(character)
+      byteCount += width
+    }
+    let trimmed = truncated.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? "Task" : trimmed
   }
 
   private func uniqueFolderURL(in parentURL: URL, preferredName: String) throws -> URL {

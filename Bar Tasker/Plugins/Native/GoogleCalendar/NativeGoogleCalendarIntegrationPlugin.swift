@@ -426,10 +426,15 @@ import Security
     guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
       throw GoogleCalendarPluginError.invalidOAuthCallback
     }
-    let items = Dictionary(
-      uniqueKeysWithValues: (components.queryItems ?? []).map {
-        ($0.name, $0.value ?? "")
-      })
+    // Keep the first occurrence of each parameter rather than using
+    // `Dictionary(uniqueKeysWithValues:)`, which traps on a duplicate key. The
+    // callback is attacker-reachable (anything that can reach the loopback
+    // port), so a repeated `code`/`state` must not be able to crash sign-in.
+    let items = (components.queryItems ?? []).reduce(into: [String: String]()) { result, item in
+      if result[item.name] == nil {
+        result[item.name] = item.value ?? ""
+      }
+    }
     if let error = items["error"], !error.isEmpty {
       throw GoogleCalendarPluginError.authorizationDenied(error)
     }

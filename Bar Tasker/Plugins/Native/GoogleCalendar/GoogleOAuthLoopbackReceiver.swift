@@ -38,7 +38,13 @@ final class GoogleOAuthLoopbackReceiver: @unchecked Sendable {
   }
 
   func start() async throws -> URL {
-    let listener = try NWListener(using: .tcp, on: .any)
+    // Bind to loopback explicitly. `NWListener(using: .tcp, on: .any)` only
+    // pins the *port* to "pick one for me" and leaves the listener reachable on
+    // every interface, which needlessly exposes the callback endpoint to the
+    // local network for the duration of sign-in.
+    let parameters = NWParameters.tcp
+    parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+    let listener = try NWListener(using: parameters)
     self.listener = listener
     didResolveReady = false
     didResolveCallback = false

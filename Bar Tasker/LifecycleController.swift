@@ -23,9 +23,25 @@ final class LifecycleController {
   }
 
   func start() {
+    // Before `setupChildCallbacks`: loading the stored key assigns
+    // `repository.remoteKey`, and we don't want that to look like a user edit
+    // and trip `onRemoteKeyChanged` into clearing auth and writing the value
+    // straight back where it came from.
+    loadStoredRemoteKey()
     setupChildCallbacks()
     setupNetworkMonitor()
     syncLaunchAtLogin()
+  }
+
+  /// Pulls the Checkvist remote key out of the keychain once the app is up.
+  ///
+  /// `AppCoordinator.init` deliberately skips this so a keychain read never
+  /// sits on the launch path. Nothing else called it, which meant that with
+  /// keychain storage enabled the key was written but never read back — the app
+  /// would look permanently signed out. No-op when the key is already loaded or
+  /// when keychain storage is off (see `RemoteKeyBootstrapPolicy`).
+  private func loadStoredRemoteKey() {
+    coordinator?.loadRemoteKeyFromKeychainIfNeeded()
   }
 
   // MARK: - Child callbacks

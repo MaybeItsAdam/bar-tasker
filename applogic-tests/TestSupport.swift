@@ -16,6 +16,25 @@ func makeIsolatedDefaults(file: StaticString = #file, line: UInt = #line) -> Use
   return defaults
 }
 
+extension XCTestCase {
+  /// `makeIsolatedDefaults` plus a teardown that wipes the suite, so repeated
+  /// runs don't accumulate suite plists on disk. Prefer this in new tests.
+  func makeIsolatedDefaultsSuite(file: StaticString = #file, line: UInt = #line) -> UserDefaults {
+    let suiteName = "applogic-tests-\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+      XCTFail("Could not create isolated UserDefaults suite", file: file, line: line)
+      return .standard
+    }
+    // Only the suite name crosses into the teardown block; the `UserDefaults`
+    // instance itself isn't `Sendable`, and a fresh handle wipes the domain
+    // just as well.
+    addTeardownBlock {
+      UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+    }
+    return defaults
+  }
+}
+
 /// Convenience constructor matching the offline plugin's expectations.
 func makeTask(
   id: Int,
@@ -54,12 +73,30 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
   var openTasksByListId: [String: [CheckvistTask]] = [:]
   var nextCreatedTaskId: Int = 1_000
 
+  // Failure injection. Defaults keep every call succeeding, so tests that
+  // don't care about failure paths are unaffected.
+  var createTaskError: Error?
+  /// Makes `createTask` report "no task created" without throwing — the
+  /// server-said-no branch, which is distinct from the transport-failed one.
+  var createTaskReturnsNil = false
+  var updateTaskError: Error?
+  var updateTaskResult = true
+  var performTaskActionError: Error?
+  var performTaskActionResult = true
+  var deleteTaskError: Error?
+  var deleteTaskResult = true
+  /// Runs on the main actor immediately before `updateTask` returns or throws,
+  /// so a test can shuffle the task list underneath an in-flight mutation.
+  var beforeUpdateTaskReturns: (@MainActor () -> Void)?
+
   // Recorded calls
   private(set) var loginCallCount = 0
   private(set) var fetchOpenTasksCalls: [String] = []
   private(set) var fetchListsCallCount = 0
   private(set) var createTaskCalls:
     [(listId: String, content: String, parentId: Int?, position: Int?)] = []
+  private(set) var updateTaskCalls: [(taskId: Int, content: String?, due: String?)] = []
+  private(set) var deleteTaskCalls: [Int] = []
   private(set) var moveTaskCalls: [(listId: String, taskId: Int, position: Int)] = []
   private(set) var performTaskActionCalls:
     [(listId: String, taskId: Int, action: CheckvistTaskAction)] = []
@@ -94,7 +131,8 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
     credentials: CheckvistCredentials
   ) async throws -> Bool {
     performTaskActionCalls.append((listId, taskId, action))
-    return true
+    if let performTaskActionError { throw performTaskActionError }
+    return performTaskActionResult
   }
 
   func updateTask(
@@ -104,7 +142,10 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
     due: String?,
     credentials: CheckvistCredentials
   ) async throws -> Bool {
-    true
+    updateTaskCalls.append((taskId, content, due))
+    beforeUpdateTaskReturns?()
+    if let updateTaskError { throw updateTaskError }
+    return updateTaskResult
   }
 
   func createTask(
@@ -115,6 +156,8 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
     credentials: CheckvistCredentials
   ) async throws -> CheckvistTask? {
     createTaskCalls.append((listId, content, parentId, position))
+    if let createTaskError { throw createTaskError }
+    if createTaskReturnsNil { return nil }
     let id = nextCreatedTaskId
     nextCreatedTaskId += 1
     return makeTask(id: id, content: content, parentId: parentId, position: position)
@@ -123,7 +166,9 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
   func deleteTask(listId: String, taskId: Int, credentials: CheckvistCredentials) async throws
     -> Bool
   {
-    true
+    deleteTaskCalls.append(taskId)
+    if let deleteTaskError { throw deleteTaskError }
+    return deleteTaskResult
   }
 
   func moveTask(

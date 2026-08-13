@@ -54,6 +54,8 @@ let pluginTargetExcludes = [
   "Bar Tasker/PopoverView+QuickEntryBar.swift",
   "Bar Tasker/PopoverView+TaskRow.swift",
   "Bar Tasker/PreferencesStore.swift",
+  "Bar Tasker/OfflineReplayPolicy.swift",
+  "Bar Tasker/OptimisticTaskID.swift",
   "Bar Tasker/RecurrenceRule.swift",
   "Bar Tasker/ReorderQueue.swift",
   "Bar Tasker/SettingsNavState.swift",
@@ -62,8 +64,10 @@ let pluginTargetExcludes = [
   "Bar Tasker/SettingsView+KeybindingsPane.swift",
   "Bar Tasker/SettingsView+PreferencesPane.swift",
   "Bar Tasker/SettingsView+ThemePane.swift",
+  "Bar Tasker/AppCoordinator+ServiceHosts.swift",
   "Bar Tasker/SyncService.swift",
   "Bar Tasker/TaskMutationService.swift",
+  "Bar Tasker/TaskServiceHosts.swift",
   "Bar Tasker/TaskNavigationCoordinator.swift",
   "Bar Tasker/TaskTreeFormatter.swift",
   "Bar Tasker/TaskNavigationService.swift",
@@ -82,6 +86,9 @@ let pluginTargetExcludes = [
   "Bar Tasker/Plugins/Native/Checkvist/NativeCheckvistSyncPlugin+Settings.swift",
   "Bar Tasker/Plugins/Native/GoogleCalendar/GoogleOAuthLoopbackReceiver.swift",
   "Bar Tasker/Plugins/Native/GoogleCalendar/NativeGoogleCalendarIntegrationPlugin+Settings.swift",
+  // App-only: drives NSOpenPanel and depends on `BarTaskerCore`'s catalog,
+  // which `BarTaskerPlugins` can't import (one file, one target).
+  "Bar Tasker/Plugins/Native/MCP/MCPClientInstaller.swift",
   "Bar Tasker/Plugins/Native/MCP/NativeMCPIntegrationPlugin+Settings.swift",
   "Bar Tasker/Plugins/Native/Obsidian/NativeObsidianIntegrationPlugin+Settings.swift",
   "Bar Tasker/Plugins/Native/Obsidian/ObsidianSyncService.swift",
@@ -144,6 +151,7 @@ let appLogicTargetExcludes = [
 
   // App-level source files at Bar Tasker/ root that AppLogic does not need.
   "Bar Tasker/AppCoordinator.swift",
+  "Bar Tasker/AppCoordinator+ServiceHosts.swift",
   "Bar Tasker/AppDelegate.swift",
   "Bar Tasker/AppThemeColorSupport.swift",
   "Bar Tasker/CacheState.swift",
@@ -170,8 +178,6 @@ let appLogicTargetExcludes = [
   "Bar Tasker/SettingsView+KeybindingsPane.swift",
   "Bar Tasker/SettingsView+PreferencesPane.swift",
   "Bar Tasker/SettingsView+ThemePane.swift",
-  "Bar Tasker/SyncService.swift",
-  "Bar Tasker/TaskMutationService.swift",
   "Bar Tasker/TaskNavigationService.swift",
   "Bar Tasker/TaskTreeFormatter.swift",
   "Bar Tasker/TaskVisibilityEngine.swift",
@@ -243,7 +249,15 @@ let package = Package(
         "Bar Tasker/CacheInvalidationBus.swift",
         "Bar Tasker/UndoService.swift",
         "Bar Tasker/LocalTaskStore.swift",
+        "Bar Tasker/OptimisticTaskID.swift",
         "Bar Tasker/ReorderQueue.swift",
+        "Bar Tasker/SyncService.swift",
+        "Bar Tasker/TaskMutationService.swift",
+        "Bar Tasker/TaskServiceHosts.swift",
+        // Lives here rather than in `CoreLogic` because SPM forbids one file
+        // belonging to two targets, and its only consumer — `SyncService` — is
+        // an AppLogic source. Still pure, still headless, still unit-tested.
+        "Bar Tasker/OfflineReplayPolicy.swift",
         "Bar Tasker/TaskNavigationCoordinator.swift",
         "Bar Tasker/ListScopedPriorityStore.swift",
         "Bar Tasker/ListScopedTaskIDStore.swift",

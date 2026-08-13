@@ -9,5 +9,9 @@
 	<true />
 	<key>com.apple.security.network.client</key>
 	<true />
+	<!-- Mirrors the release entitlements so the sandboxed and unsandboxed
+	     builds declare the same capabilities. See the release file for why. -->
+	<key>com.apple.security.network.server</key>
+	<true />
 </dict>
 </plist>
