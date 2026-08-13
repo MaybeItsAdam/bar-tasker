@@ -53,6 +53,14 @@ protocol IntegrationDataSource: AnyObject {
   var pendingObsidianSyncTaskIds: [Int]
   var googleCalendarEventLinksByTaskKey: [String: String]
 
+  /// MCP clients found on this machine, and the result of the last setup action.
+  /// Populated by `refreshDetectedMCPClients()` when the MCP settings page opens.
+  var detectedMCPClients: [MCPClientDescriptor] = []
+  var mcpSetupStatusMessage: String = ""
+  var mcpSetupStatusIsError: Bool = false
+
+  @ObservationIgnored private let mcpClientInstaller = MCPClientInstaller()
+
   // MARK: - Plugin references
 
   let obsidianPlugin: any ObsidianIntegrationPlugin
@@ -372,6 +380,101 @@ protocol IntegrationDataSource: AnyObject {
       listId: listId,
       redactSecrets: true
     )
+  }
+
+  // MARK: - MCP client setup
+
+  /// True once Checkvist credentials exist. Without them the generated config
+  /// carries `you@example.com` placeholders and every tool call fails on the
+  /// client's side, which is a confusing way to discover a missing login.
+  var hasMCPCredentials: Bool {
+    guard let ds = dataSource else { return false }
+    return !ds.activeCredentials.normalizedUsername.isEmpty
+      && !ds.activeCredentials.normalizedRemoteKey.isEmpty
+  }
+
+  /// Refreshed explicitly rather than computed, so SwiftUI doesn't stat the
+  /// filesystem on every body evaluation.
+  func refreshDetectedMCPClients() {
+    detectedMCPClients = mcpClientInstaller.detectedClients()
+  }
+
+  func mcpConfigPath(for client: MCPClientDescriptor) -> String {
+    mcpClientInstaller.configURL(for: client).path
+  }
+
+  /// One button per client. Whichever route a client needs, this is the whole
+  /// interaction: no locating config files, no merging JSON by hand.
+  func setUpMCPClient(_ client: MCPClientDescriptor) {
+    guard mcpIntegrationEnabled else {
+      setMCPSetupStatus("Enable MCP integration first.", isError: true)
+      return
+    }
+    guard let entry = makeMCPServerEntry(requiresTransportType: client.requiresTransportType) else {
+      setMCPSetupStatus("Internal error: no data source.", isError: true)
+      return
+    }
+
+    switch client.installStyle {
+    case .mergeConfigFile:
+      installMCPConfigFile(entry: entry, client: client)
+    case .terminalCommand:
+      copyToPasteboard(MCPClientConfigWriter.terminalCommand(entry: entry))
+      setMCPSetupStatus(
+        "Command copied. Paste it into Terminal. \(client.postInstallNote)", isError: false)
+    case .pasteSnippet:
+      copyToPasteboard(
+        MCPClientConfigWriter.pasteSnippet(entry: entry, serversKey: client.serversKey))
+      setMCPSetupStatus(
+        "Snippet copied. Paste it inside the outer braces of \(client.configPath). "
+          + client.postInstallNote,
+        isError: false
+      )
+    }
+  }
+
+  private func installMCPConfigFile(entry: MCPServerEntry, client: MCPClientDescriptor) {
+    do {
+      switch try mcpClientInstaller.install(entry: entry, into: client) {
+      case .cancelled:
+        setMCPSetupStatus("Setup cancelled — \(client.displayName) wasn't changed.", isError: false)
+      case .wrote(.added):
+        setMCPSetupStatus("Added to \(client.displayName). \(client.postInstallNote)", isError: false)
+      case .wrote(.updated):
+        setMCPSetupStatus(
+          "Updated the entry in \(client.displayName). \(client.postInstallNote)", isError: false)
+      case .wrote(.unchanged):
+        setMCPSetupStatus("\(client.displayName) is already set up.", isError: false)
+      }
+    } catch {
+      logger.error("MCP setup for \(client.id, privacy: .public) failed: \(error)")
+      setMCPSetupStatus(error.localizedDescription, isError: true)
+    }
+  }
+
+  private func makeMCPServerEntry(requiresTransportType: Bool) -> MCPServerEntry? {
+    guard let ds = dataSource else { return nil }
+    refreshMCPServerCommandPath()
+    let invocation = mcpIntegrationPlugin.serverInvocation()
+    return MCPServerEntry(
+      command: invocation.command,
+      args: invocation.args,
+      env: mcpIntegrationPlugin.serverEnvironment(
+        credentials: ds.activeCredentials,
+        listId: ds.listId
+      ),
+      transportType: requiresTransportType ? "stdio" : nil
+    )
+  }
+
+  private func setMCPSetupStatus(_ message: String, isError: Bool) {
+    mcpSetupStatusMessage = message
+    mcpSetupStatusIsError = isError
+  }
+
+  private func copyToPasteboard(_ value: String) {
+    NSPasteboard.general.clearContents()
+    _ = NSPasteboard.general.setString(value, forType: .string)
   }
 
   // MARK: - Obsidian

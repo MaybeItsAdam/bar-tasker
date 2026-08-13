@@ -156,10 +156,21 @@ extension GoogleCalendarIntegrationPlugin {
   func disconnectAuthentication() {}
 }
 
+/// The executable and arguments an MCP client should launch.
+struct MCPServerInvocation: Equatable {
+  let command: String
+  let args: [String]
+}
+
 @MainActor
 protocol MCPIntegrationPlugin: Plugin {
   func serverCommandURL() -> URL?
   func guideURL() -> URL?
+  /// The resolved command, so callers can assemble a client entry themselves
+  /// rather than parsing one back out of `makeClientConfigurationJSON`.
+  func serverInvocation() -> MCPServerInvocation
+  /// Credentials the server process needs, in MCP `env` form.
+  func serverEnvironment(credentials: CheckvistCredentials, listId: String) -> [String: String]
   func makeClientConfigurationJSON(
     credentials: CheckvistCredentials,
     listId: String,

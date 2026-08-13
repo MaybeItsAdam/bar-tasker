@@ -3,7 +3,9 @@
 Bar Tasker includes an embedded MCP stdio server so an AI assistant can work directly with your Checkvist data.
 
 - Server command: `Bar Tasker --mcp-server`
-- Transport: stdio
+- Transport: stdio, newline-delimited JSON — one JSON-RPC object per line, as the
+  MCP stdio transport specifies. LSP-style `Content-Length` framing is also
+  accepted, and replies mirror whichever framing the client used.
 - Dependencies:
   - Installed app: none beyond Bar Tasker itself
   - Local debug/dev flow: `python3` can be used as an automatic fallback runner
@@ -27,6 +29,40 @@ Notes:
 - It does not automate the local macOS app UI.
 - `quick_add` supports both root insertion and specific parent insertion.
 
+## Setup (the short version)
+
+**Preferences → Plugins → Native MCP Integration.** Enable the toggle and the page
+walks three steps:
+
+1. **Checkvist connected** — the server signs in with your Checkvist credentials,
+   so setup is blocked until they exist. Without them the generated config carries
+   `you@example.com` placeholders and every tool call fails inside your AI client,
+   a long way from the app.
+2. **Server command found** — the path to the executable an MCP client launches.
+   Press Refresh after moving the app.
+3. **Add to an AI client** — one button per client detected on this machine.
+
+Bar Tasker detects Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, and
+Zed. What the button does depends on the client, because the wrong route is worse
+than no route:
+
+| Client | Action | Why |
+|---|---|---|
+| Claude Desktop, Cursor, Windsurf, VS Code | Writes the config file | Plain JSON files that hold nothing but MCP config |
+| Claude Code | Copies a `claude mcp add-json` command to run | Claude Code rewrites `~/.claude.json` constantly; editing it underneath would race |
+| Zed | Copies a snippet to paste | `settings.json` carries comments that a JSON rewrite would delete |
+
+Direct writes **merge**: your other MCP servers and every unrelated key survive.
+If the existing file isn't valid JSON, Bar Tasker refuses rather than replacing
+it. Keys come back sorted, so expect the file to be reformatted once.
+
+Release builds are sandboxed, so the first write to a client's config asks for
+access to that folder through an open panel (already pointed at the right place).
+The grant is remembered per client, so credential changes re-install silently.
+
+If nothing is detected, use **Copy Client Config** and paste it in by hand — the
+rest of this guide covers that.
+
 ## Configuration
 
 Set these environment variables for the MCP process (in your MCP client config):
@@ -37,12 +73,6 @@ Set these environment variables for the MCP process (in your MCP client config):
 - `CHECKVIST_BASE_URL` (optional, defaults to `https://checkvist.com`)
 
 If `CHECKVIST_LIST_ID` is not set, pass `list_id` in tool calls that need a list.
-
-In the Bar Tasker app, you can also open **Preferences** and use the MCP section to:
-
-- refresh app command path detection,
-- copy a ready-to-paste client config JSON,
-- open this guide directly.
 
 Command resolution priority used by the built-in MCP plugin:
 

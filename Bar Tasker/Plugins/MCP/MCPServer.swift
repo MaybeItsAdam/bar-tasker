@@ -385,87 +385,39 @@ private final class BarTaskerMCPCheckvistClient {
 
 private final class BarTaskerMCPMessageReader {
   private let input = FileHandle.standardInput
-  private var buffer = Data()
+  private var decoder = MCPFrameDecoder()
+
+  /// Framing the peer last used, so replies go back in the same shape.
+  var framing: MCPMessageFraming { decoder.detectedFraming }
 
   func readMessage() throws -> Any? {
     while true {
-      if let decoded = try decodeMessageFromBuffer() {
+      if let body = try decoder.nextMessageBody() {
+        guard let decoded = try? JSONSerialization.jsonObject(with: body, options: []) else {
+          throw BarTaskerMCPJsonRpcError(
+            code: BarTaskerMCPConstants.parseError,
+            message: "Invalid JSON payload.")
+        }
         return decoded
       }
 
+      // EOF ends the session. Reporting a leftover partial message here instead
+      // would loop forever: the buffer never drains, so the caller writes the
+      // same error and reads again with the same result.
       guard let chunk = try input.read(upToCount: 4096), !chunk.isEmpty else {
-        if buffer.isEmpty {
-          return nil
-        }
-        throw BarTaskerMCPJsonRpcError(
-          code: BarTaskerMCPConstants.parseError,
-          message: "Unexpected EOF while reading message.")
+        return nil
       }
-      buffer.append(chunk)
-    }
-  }
-
-  private func decodeMessageFromBuffer() throws -> Any? {
-    let separator = Data([13, 10, 13, 10])
-    let fallbackSeparator = Data([10, 10])
-    guard
-      let headerRange = buffer.range(of: separator)
-        ?? buffer.range(of: fallbackSeparator)
-    else {
-      return nil
-    }
-
-    let headerData = buffer.subdata(in: 0..<headerRange.lowerBound)
-    guard let headerString = String(data: headerData, encoding: .utf8) else {
-      throw BarTaskerMCPJsonRpcError(
-        code: BarTaskerMCPConstants.parseError,
-        message: "Malformed MCP headers.")
-    }
-
-    var contentLength: Int?
-    for rawLine in headerString.split(separator: "\n", omittingEmptySubsequences: false) {
-      let line = rawLine.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
-      guard !line.isEmpty else { continue }
-      let components = line.split(separator: ":", maxSplits: 1).map(String.init)
-      guard components.count == 2 else {
-        throw BarTaskerMCPJsonRpcError(
-          code: BarTaskerMCPConstants.parseError,
-          message: "Malformed MCP header line.")
-      }
-      if components[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        == "content-length"
-      {
-        contentLength = Int(components[1].trimmingCharacters(in: .whitespacesAndNewlines))
-      }
-    }
-
-    guard let contentLength, contentLength >= 0 else {
-      throw BarTaskerMCPJsonRpcError(
-        code: BarTaskerMCPConstants.parseError,
-        message: "Missing or invalid Content-Length header.")
-    }
-
-    let bodyStart = headerRange.upperBound
-    let bodyEnd = bodyStart + contentLength
-    guard buffer.count >= bodyEnd else {
-      return nil
-    }
-
-    let bodyData = buffer.subdata(in: bodyStart..<bodyEnd)
-    buffer.removeSubrange(0..<bodyEnd)
-
-    do {
-      return try JSONSerialization.jsonObject(with: bodyData, options: [])
-    } catch {
-      throw BarTaskerMCPJsonRpcError(
-        code: BarTaskerMCPConstants.parseError,
-        message: "Invalid JSON payload.")
+      decoder.append(chunk)
     }
   }
 }
 
 private final class BarTaskerMCPMessageWriter {
   private let output = FileHandle.standardOutput
+
+  /// Newline-delimited is the MCP stdio transport, and also the right default
+  /// before any request has arrived.
+  var framing: MCPMessageFraming = .newlineDelimited
 
   func writeResult(id: Any, result: Any) {
     writePayload([
@@ -491,13 +443,12 @@ private final class BarTaskerMCPMessageWriter {
   }
 
   private func writePayload(_ payload: [String: Any]) {
+    // No `.prettyPrinted`: newline framing requires the body to be a single
+    // line, and the MCP spec forbids embedded newlines outright.
     guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
-    let header = "Content-Length: \(body.count)\r\n\r\n"
-    guard let headerData = header.data(using: .utf8) else { return }
 
     do {
-      try output.write(contentsOf: headerData)
-      try output.write(contentsOf: body)
+      try output.write(contentsOf: MCPFrameEncoder.encode(body: body, framing: framing))
     } catch {
       FileHandle.standardError.write(
         Data("MCP write error: \(error.localizedDescription)\n".utf8))
@@ -522,7 +473,9 @@ final class MCPServer {
       do {
         guard let decoded = try reader.readMessage() else { return }
         message = decoded
+        writer.framing = reader.framing
       } catch let rpcError as BarTaskerMCPJsonRpcError {
+        writer.framing = reader.framing
         writer.writeError(
           id: NSNull(),
           code: rpcError.code,

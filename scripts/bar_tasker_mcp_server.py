@@ -324,6 +324,9 @@ class BarTaskerMCPServer:
         self.client = CheckvistClient(self.config)
         self.protocol_version = DEFAULT_PROTOCOL_VERSION
         self.initialized = False
+        # "newline" is the MCP stdio transport and the right default before any
+        # request has been read; switched to "content-length" if a peer uses it.
+        self.framing = "newline"
 
     @property
     def tools(self) -> list[dict[str, Any]]:
@@ -613,21 +616,36 @@ class BarTaskerMCPServer:
             return {"content": [{"type": "text", "text": text}], "isError": True}
 
     def _read_message(self) -> Optional[dict[str, Any]]:
-        headers: dict[str, str] = {}
-
+        # The MCP stdio transport is newline-delimited JSON: one object per
+        # line, no headers. LSP-style Content-Length framing is still accepted
+        # for anything already wired up that way, and replies mirror whichever
+        # arrived. Mirrors `MCPFrameDecoder` on the Swift side.
         while True:
             line = sys.stdin.buffer.readline()
             if not line:
                 return None
-            if line in (b"\r\n", b"\n"):
-                break
-            decoded = line.decode("utf-8", errors="replace").strip()
-            if not decoded:
+            stripped = line.strip()
+            if not stripped:
                 continue
-            if ":" not in decoded:
-                raise JsonRpcError(JSONRPC_PARSE_ERROR, "Malformed header line.")
-            name, value = decoded.split(":", 1)
-            headers[name.strip().lower()] = value.strip()
+            if stripped.lower().startswith(b"content-length:"):
+                return self._read_header_framed_message(stripped)
+            self.framing = "newline"
+            return self._parse_body(stripped)
+
+    def _read_header_framed_message(self, first_line: bytes) -> dict[str, Any]:
+        self.framing = "content-length"
+        headers: dict[str, str] = {}
+        line = first_line
+        while True:
+            decoded = line.decode("utf-8", errors="replace").strip()
+            if decoded:
+                if ":" not in decoded:
+                    raise JsonRpcError(JSONRPC_PARSE_ERROR, "Malformed header line.")
+                name, value = decoded.split(":", 1)
+                headers[name.strip().lower()] = value.strip()
+            line = sys.stdin.buffer.readline()
+            if not line or line in (b"\r\n", b"\n"):
+                break
 
         content_length_raw = headers.get("content-length")
         if not content_length_raw:
@@ -640,14 +658,14 @@ class BarTaskerMCPServer:
         body = sys.stdin.buffer.read(content_length)
         if len(body) != content_length:
             raise JsonRpcError(JSONRPC_PARSE_ERROR, "Unexpected EOF while reading message body.")
+        return self._parse_body(body)
 
+    @staticmethod
+    def _parse_body(body: bytes) -> dict[str, Any]:
         try:
-            decoded_body = body.decode("utf-8")
-            parsed = json.loads(decoded_body)
+            return json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as err:
             raise JsonRpcError(JSONRPC_PARSE_ERROR, "Invalid JSON payload.") from err
-
-        return parsed
 
     def _send_result(self, msg_id: Any, result: Any) -> None:
         payload = {"jsonrpc": JSONRPC_VERSION, "id": msg_id, "result": result}
@@ -660,12 +678,13 @@ class BarTaskerMCPServer:
         payload = {"jsonrpc": JSONRPC_VERSION, "id": msg_id, "error": error_obj}
         self._write_message(payload)
 
-    @staticmethod
-    def _write_message(payload: dict[str, Any]) -> None:
+    def _write_message(self, payload: dict[str, Any]) -> None:
         raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        header = f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii")
-        sys.stdout.buffer.write(header)
-        sys.stdout.buffer.write(raw)
+        if self.framing == "content-length":
+            sys.stdout.buffer.write(f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii"))
+            sys.stdout.buffer.write(raw)
+        else:
+            sys.stdout.buffer.write(raw + b"\n")
         sys.stdout.buffer.flush()
 
 

@@ -157,7 +157,7 @@ Current scope: built-in plugins are fully functional; user-installed plugins are
 
 Bar Tasker includes an MCP stdio server and can run with `--mcp-server`.
 
-- Configure MCP from Preferences (refresh command path, copy client JSON, open guide).
+- Preferences → Plugins → Native MCP Integration detects the MCP clients installed on your Mac (Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, Zed) and adds Bar Tasker to the one you pick in a single click. Existing servers in that client's config are preserved.
 - Command resolution is app-first with optional script fallback for local dev/debug.
 - Full setup and client examples: [docs/mcp-server.md](docs/mcp-server.md)
 

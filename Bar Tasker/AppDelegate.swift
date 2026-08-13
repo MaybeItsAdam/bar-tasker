@@ -104,6 +104,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     Task.detached(priority: .userInitiated) {
       await MCPServer().run()
       await MainActor.run {
+        // `applicationShouldTerminate` vetoes any termination that didn't come
+        // from an explicit Quit — right for a menu bar app, fatal here: stdin
+        // closing would leave this process running forever, one orphan per
+        // client restart.
+        self.explicitQuitRequested = true
         NSApp.terminate(nil)
       }
     }
@@ -226,7 +231,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    shortcutManager.unregisterGlobalHotkeys()
+    // MCP server mode returns from `applicationDidFinishLaunching` before any UI
+    // is built, so there is no shortcut manager to tear down — reaching through
+    // the implicitly-unwrapped optional here crashed the server on shutdown.
+    shortcutManager?.unregisterGlobalHotkeys()
   }
 
   private func observeForAppThemeChanges() {

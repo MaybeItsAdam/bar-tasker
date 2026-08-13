@@ -38,12 +38,23 @@ final class NativeMCPIntegrationPlugin: MCPIntegrationPlugin {
     return nil
   }
 
-  func makeClientConfigurationJSON(
+  func serverInvocation() -> MCPServerInvocation {
+    let resolved = resolvedMCPCommand()
+    return MCPServerInvocation(command: resolved.command, args: resolved.args)
+  }
+
+  func serverEnvironment(
+    credentials: CheckvistCredentials,
+    listId: String
+  ) -> [String: String] {
+    serverEnvironment(credentials: credentials, listId: listId, redactSecrets: false)
+  }
+
+  private func serverEnvironment(
     credentials: CheckvistCredentials,
     listId: String,
     redactSecrets: Bool
-  ) -> String {
-    let command = resolvedMCPCommand()
+  ) -> [String: String] {
     let usernameValue: String
     let remoteKeyValue: String
     if redactSecrets {
@@ -66,6 +77,20 @@ final class NativeMCPIntegrationPlugin: MCPIntegrationPlugin {
     if !trimmedListId.isEmpty {
       env["CHECKVIST_LIST_ID"] = trimmedListId
     }
+    return env
+  }
+
+  func makeClientConfigurationJSON(
+    credentials: CheckvistCredentials,
+    listId: String,
+    redactSecrets: Bool
+  ) -> String {
+    let command = resolvedMCPCommand()
+    let env = serverEnvironment(
+      credentials: credentials,
+      listId: listId,
+      redactSecrets: redactSecrets
+    )
 
     let config = MCPClientConfigRoot(
       mcpServers: [
