@@ -24,6 +24,29 @@ enum PopoverLayout {
   static let rowTextFadeWidth: CGFloat = 18
   static let inlineEntryVerticalPadding: CGFloat = 7
 
+  // Onboarding bar heights. `PopoverView` pins the panel to `preferredHeight`
+  // and clips to a rounded rect, and the onboarding bar is the last element in
+  // the stack — so under-reserving here doesn't scroll or compress anything, it
+  // silently amputates the bottom of the bar. Both values are derived from the
+  // bars' actual layout and rounded *up*; over-reserving only adds slack.
+
+  /// `pluginSelectionOnboardingBar`: title, wrapped subtitle, four toggle rows,
+  /// and the Done/Preferences row, in a `VStack(spacing: 10)` with 10pt of
+  /// vertical padding either side.
+  static let pluginSelectionOnboardingBarHeight: CGFloat = {
+    let title: CGFloat = 15  // .system(size: 12, weight: .semibold)
+    let subtitle: CGFloat = 28  // .caption2, wraps to two lines at this width
+    let toggleRows: CGFloat = 4 * 16 + 3 * 6  // four .mini switches, 6pt apart
+    let buttons: CGFloat = 24  // .controlSize(.small)
+    let spacing: CGFloat = 3 * 10
+    let padding: CGFloat = 2 * 10
+    return title + subtitle + toggleRows + buttons + spacing + padding
+  }()
+
+  /// The single-action bars (Checkvist, Obsidian, …): title over a two-line
+  /// message, with the action buttons alongside rather than below.
+  static let compactOnboardingBarHeight: CGFloat = 72
+
   @MainActor
   static func preferredHeight(for manager: AppCoordinator) -> CGFloat {
     if manager.needsInitialSetup {
@@ -75,9 +98,9 @@ enum PopoverLayout {
     {
       switch activeOnboardingDialog {
       case .pluginSelection:
-        fixedHeight += 156
+        fixedHeight += pluginSelectionOnboardingBarHeight
       default:
-        fixedHeight += 72
+        fixedHeight += compactOnboardingBarHeight
       }
     }
     if manager.repository.errorMessage != nil || manager.statusMessage != nil {
@@ -667,16 +690,18 @@ struct PopoverView: View {
       VStack(alignment: .leading, spacing: 6) {
         pluginToggleRow(
           label: "Checkvist",
+          // Toggling on deliberately does *not* open Preferences. This bar is
+          // where you pick several integrations at once, and jumping to a
+          // window mid-list interrupts that. The "Connect to sync tasks" link
+          // below appears in the same moment, so the way forward is still one
+          // click away — and pressing Done surfaces the Connect Checkvist
+          // prompt anyway. Matches the Obsidian row, which likewise waits.
           isOn: Binding(
             get: { manager.repository.checkvistIntegrationEnabled },
-            set: { on in
-              manager.repository.checkvistIntegrationEnabled = on
-              if on && repository.username.isEmpty {
-                AppDelegate.shared.menuSettings(pane: .plugins)
-              }
-            }
+            set: { manager.repository.checkvistIntegrationEnabled = $0 }
           ),
-          prompt: manager.repository.checkvistIntegrationEnabled && repository.username.isEmpty
+          prompt: manager.repository.checkvistIntegrationEnabled
+            && !manager.repository.hasCredentials
             ? "Connect to sync tasks" : nil,
           onPromptTap: { AppDelegate.shared.menuSettings(pane: .plugins) }
         )
@@ -696,8 +721,11 @@ struct PopoverView: View {
         pluginToggleRow(
           label: "MCP",
           isOn: Bindable(manager).integrations.mcpIntegrationEnabled,
-          prompt: nil,
-          onPromptTap: {}
+          // Enabling MCP alone does nothing visible — the server still has to be
+          // registered with an AI client. Point at the page that does it in one
+          // click, the same way the Checkvist and Obsidian rows do.
+          prompt: manager.integrations.mcpIntegrationEnabled ? "Add to your AI client" : nil,
+          onPromptTap: { AppDelegate.shared.menuSettings(pane: .plugins) }
         )
       }
       .font(.caption)

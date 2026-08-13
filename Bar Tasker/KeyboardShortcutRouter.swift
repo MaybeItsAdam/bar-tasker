@@ -43,8 +43,14 @@ struct KeyboardShortcutRouter {
       }
       return false
     }
-    if manager.onboardingService.activeOnboardingDialog != nil {
-      // Do not trigger task shortcuts while onboarding UI is active.
+    // Only the plugin-selection bar swallows shortcuts. Its rows are focusable
+    // switches and Space is the default `markDone` binding, so letting keys
+    // through would mark a task done instead of flipping the switch the user is
+    // sitting on. The other bars are single-action notices with nothing to
+    // focus, and `.checkvist` in particular stays up until it is dismissed —
+    // blocking there left the list keyboard-dead for as long as someone put off
+    // connecting.
+    if manager.onboardingService.activeOnboardingDialog == .pluginSelection {
       manager.quickEntry.keyBuffer = ""
       if event.keyCode == 53 {
         closeWindow()
