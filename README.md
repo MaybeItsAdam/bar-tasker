@@ -232,10 +232,26 @@ Only the text between the markers is ever touched, and rewriting a day replaces 
 
 `priority` is a Rust CLI covering the same ground: your lists, your dailies, your day log. It talks to the Checkvist API directly and reads Priority's local files off disk, so it works whether or not the app is running — and its writes take the same `flock(2)` the app does, so both can be open at once.
 
+Run it with no arguments and it opens a **terminal UI with the same tabs as the app**, and the same keys to reach them:
+
+```
+ All q │ Due w │ Tags e │ Priority r │ Daily d
+┌ All ───────────────────────────────────────────────────────┐
+│▎[ ] Ship v0.4                                              │
+│   [ ] Draft the release notes  #work                       │
+│   [x] Tag the commit                                       │
+│ [ ] Buy milk  #home                                        │
+└────────────────────────────────────────────────────────────┘
+ j/k move · l/h in-out · space done · a add · ? help · esc quit
+```
+
+Or drive it by subcommand:
+
 ```bash
 ./scripts/install_cli.sh     # release build + a symlink onto your PATH
 priority auth login
 
+priority                     # the terminal UI
 priority tasks
 priority add Draft the release notes --due friday
 priority search -q report --due-before 2026-09-01

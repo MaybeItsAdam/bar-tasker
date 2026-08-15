@@ -8,6 +8,7 @@ mod mcp;
 #[cfg(test)]
 mod tests;
 mod tools;
+mod tui;
 
 use checkvist::{CheckvistClient, CheckvistConfig};
 use clap::Parser;
@@ -40,15 +41,18 @@ fn main() -> std::process::ExitCode {
     let parsed = cli::Cli::parse();
 
     let outcome = match &parsed.command {
-        cli::Command::Mcp => {
+        // Bare `priority` opens the terminal UI. Every subcommand still
+        // works exactly as before; `--help` still prints help.
+        None => tui::run(tools),
+        Some(cli::Command::Mcp) => {
             mcp::Server::new(tools).run();
             Ok(())
         }
-        cli::Command::Tools => {
+        Some(cli::Command::Tools) => {
             cli::print_tools();
             Ok(())
         }
-        cli::Command::Auth { command } => cli::run_auth(config, command),
+        Some(cli::Command::Auth { command }) => cli::run_auth(config, command),
         _ => cli::run(tools, &parsed),
     };
 

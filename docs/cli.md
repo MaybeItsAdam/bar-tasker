@@ -20,6 +20,55 @@ cargo build --release --manifest-path cli/Cargo.toml
 cli/target/release/priority dailies
 ```
 
+## The terminal UI
+
+Run `priority` with no arguments and it opens a terminal UI with the same tabs
+as the menu bar app, and the same keys to reach them.
+
+```
+ All q │ Due w │ Tags e │ Priority r │ Daily d
+┌ All ───────────────────────────────────────────────────────┐
+│▎[ ] Ship v0.4                                              │
+│   [ ] Draft the release notes  #work                       │
+│   [x] Tag the commit                                       │
+│ [ ] Buy milk  #home                                        │
+└────────────────────────────────────────────────────────────┘
+ j/k move · l/h in-out · space done · a add · ? help · esc quit
+```
+
+| Key | Action |
+| --- | --- |
+| `q` `w` `e` `r` `d` | Jump to All, Due, Tags, Priority, Daily |
+| `tab` / `shift-tab` | Cycle tabs |
+| `j` `k` or `↓` `↑` | Move |
+| `l` `h` or `→` `←` | Enter / leave subtasks (All tab) |
+| `space` | Complete a task, reopen a closed one, or tick a daily |
+| `u` | Reopen |
+| `x` | Mark "won't do" |
+| `a` | Add a task — or a daily, on the Daily tab |
+| `F5` / `ctrl-r` | Refresh from Checkvist |
+| `?` | Help |
+| `esc` | Quit |
+
+The letters are the app's, not a new set: `q` is the All view in the popover, so
+it is the All tab here too. That means **`q` does not quit** — `esc` does.
+
+Each tab shapes the same data differently. Due groups into overdue / today /
+later; Tags groups by tag, with the untagged kept together; Priority reads the
+ranks you set in the app with `1`–`9`, absolute queue first and then per-parent;
+Daily shows your dailies, the day's counts, and what you finished. Adding a task
+while you are inside a subtask puts it there, as quick-add does in the app.
+
+**Without Checkvist credentials the Daily tab still works in full** — it reads
+local files — and the other four explain what is missing rather than failing.
+
+Every key that changes something dispatches the same tool call an assistant
+would make over MCP, so the terminal cannot do anything the other front ends
+can't, or do it differently.
+
+It needs an interactive terminal: `priority | cat`, or a cron job, gets a clear
+error pointing at `--help` rather than a UI nobody can quit.
+
 ## Signing in
 
 ```bash

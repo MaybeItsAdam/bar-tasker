@@ -41,8 +41,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Omitted entirely, `priority` opens the terminal UI.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -331,7 +332,11 @@ pub fn resolve(cli: &Cli) -> Result<(String, Map<String, Value>)> {
         arguments.insert("list_id".into(), json!(list_id));
     }
 
-    let name = match &cli.command {
+    let Some(command) = &cli.command else {
+        return Err(ToolError::new("No command given."));
+    };
+
+    let name = match command {
         // Not tool calls: they configure or introspect this binary rather than
         // touching any data, so they are handled before dispatch.
         Command::Mcp | Command::Tools | Command::Auth { .. } => {

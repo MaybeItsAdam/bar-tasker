@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Priority is a keyboard-first macOS menu bar app (macOS 15.6+, Xcode 17+) for working Checkvist lists. It is an Xcode app with a Swift Package layered on top — `Package.swift` exposes `PriorityCore` (pure logic), `PriorityPlugins` (integration plugins), and `PriorityAppLogic` (the headless-but-app-bound state machines) as SPM library targets that share source with the Xcode project.
 
-`cli/` is a separate Rust crate producing `priority`, a command-line peer of the app that talks to the Checkvist API directly and reads the same local files. It shares no source with the Swift side and nothing in `Priority/` may reference it. Its credentials are deliberately its own (`~/.config/priority/config.json`, see `cli/src/config.rs`) rather than the app's keychain item, which is reachable only by something carrying the app's code signature. See `docs/cli.md`.
+`cli/` is a separate Rust crate producing `priority`. Bare `priority` opens a ratatui terminal UI whose tabs mirror the app's root views; `cli.rs`, `tui/` and `mcp.rs` are three front ends onto the single tool table in `tools.rs`, so none of them can implement behaviour the others lack. It is a command-line peer of the app that talks to the Checkvist API directly and reads the same local files. It shares no source with the Swift side and nothing in `Priority/` may reference it. Its credentials are deliberately its own (`~/.config/priority/config.json`, see `cli/src/config.rs`) rather than the app's keychain item, which is reachable only by something carrying the app's code signature. See `docs/cli.md`.
 
 ## Build, Run, Test
 
