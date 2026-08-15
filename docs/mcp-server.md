@@ -41,7 +41,7 @@ Checkvist has no representation for:
 |---|---|---|
 | `daily_log_fetch` | What happened on recent days: completions, focus time, unfinished/deferred tasks, daily ticks | read |
 | `dailies_list` | Configured dailies with today's schedule and tick state | read |
-| `task_metadata` | Priority ranks (scoped and absolute), recurrence rules, start dates | read |
+| `task_metadata` | Priority ranks (scoped and absolute), recurrence rules, start dates, Eisenhower urgency/importance, kanban columns | read |
 | `daily_add` | Create a daily | write |
 | `daily_update` | Rename, reschedule, archive/unarchive a daily | write |
 | `daily_tick` | Tick or un-tick a daily for today | write |

@@ -6,7 +6,7 @@
 //! would otherwise look exactly like a working one from here.
 
 use crate::tui::render;
-use crate::tui::state::{App, Data, Row, Tab, rows_for};
+use crate::tui::state::{self, App, Data, Row, Tab, rows_for};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
@@ -40,7 +40,21 @@ fn sample() -> Data {
         })),
         metadata: json!({
             "absolute_priority_rank": {"4": 1, "1": 2},
-            "scoped_priority_rank_by_parent_id": {"1": {"2": 1}}
+            "scoped_priority_rank_by_parent_id": {"1": {"2": 1}},
+            "eisenhower_by_task_id": {
+                "1": {"urgency": 8.0, "importance": 4.0},
+                "2": {"urgency": -3.0, "importance": 9.0},
+                "3": {"urgency": 0.0, "importance": 0.0}
+            },
+            "kanban_columns": [
+                {"name": "Today", "sort_order": "priorityThenDueAscending",
+                 "conditions": [{"kind": "due_bucket", "bucket_id": 0, "bucket": "Overdue"},
+                                {"kind": "due_bucket", "bucket_id": 2, "bucket": "Today"}]},
+                {"name": "Tagged", "sort_order": "position",
+                 "conditions": [{"kind": "tag", "tag": "home"}]},
+                {"name": "Everything else", "sort_order": "position",
+                 "conditions": [{"kind": "catch_all"}]}
+            ]
         }),
         task_error: None,
     }
@@ -81,6 +95,8 @@ fn the_tabs_mirror_the_apps_root_views_and_their_keys() {
             ("Due", 'w'),
             ("Tags", 'e'),
             ("Priority", 'r'),
+            ("Kanban", 't'),
+            ("Matrix", 'y'),
             ("Daily", 'd')
         ]
     );
@@ -461,4 +477,157 @@ fn it_renders_in_a_small_terminal_without_panicking() {
         let lines = screen(&app, width, height);
         assert_eq!(lines.len() as u16, height);
     }
+}
+
+// -- Kanban -------------------------------------------------------------------
+
+#[test]
+fn a_task_lands_in_the_first_column_it_matches() {
+    // "Draft the release notes" is overdue *and* has no matching tag, so it
+    // belongs to Today; "Buy milk" is far-future but tagged #home.
+    let rows = rows_for(Tab::Kanban, &sample(), None);
+    let laid_out: Vec<String> = rows
+        .iter()
+        .map(|row| match row {
+            Row::Header(text) => format!("H {text}"),
+            Row::Task { index, .. } => format!("T {index}"),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        laid_out,
+        vec![
+            "H Today  (1)".to_string(),
+            "T 1".into(),
+            "H Tagged  (1)".into(),
+            "T 3".into(),
+            "H Everything else  (2)".into(),
+            "T 0".into(),
+            "T 2".into(),
+        ]
+    );
+}
+
+#[test]
+fn a_catch_all_column_only_takes_what_the_others_left() {
+    let mut data = sample();
+    // Drop the catch-all and the unmatched tasks should simply not appear.
+    data.metadata["kanban_columns"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let rows = rows_for(Tab::Kanban, &data, None);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| matches!(row, Row::Task { .. }))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn no_configured_columns_says_where_to_set_them() {
+    let data = Data {
+        metadata: json!({}),
+        ..sample()
+    };
+    assert!(
+        matches!(&rows_for(Tab::Kanban, &data, None)[0], Row::Note(text) if text.contains("app"))
+    );
+}
+
+#[test]
+fn due_buckets_match_the_apps_classification() {
+    use chrono::NaiveDate;
+    let today = NaiveDate::from_ymd_opt(2026, 8, 15).unwrap();
+    let with_due = |due: &str| json!({ "id": 1, "content": "x", "due": due });
+
+    // The keyword forms Checkvist stores verbatim.
+    assert_eq!(state::due_bucket(&with_due("asap"), today), 1);
+    assert_eq!(state::due_bucket(&with_due("TOMORROW"), today), 3);
+    assert_eq!(state::due_bucket(&with_due("tmr"), today), 3);
+    assert_eq!(state::due_bucket(&with_due("next 7 days"), today), 4);
+
+    assert_eq!(
+        state::due_bucket(&json!({"id": 1}), today),
+        6,
+        "no due date"
+    );
+    assert_eq!(
+        state::due_bucket(&with_due("2026-08-14"), today),
+        0,
+        "overdue"
+    );
+    assert_eq!(
+        state::due_bucket(&with_due("2026-08-15"), today),
+        2,
+        "today"
+    );
+    assert_eq!(
+        state::due_bucket(&with_due("2026-08-16"), today),
+        3,
+        "tomorrow"
+    );
+    // The window is `todayStart + 8 days`, exclusive.
+    assert_eq!(
+        state::due_bucket(&with_due("2026-08-22"), today),
+        4,
+        "last day inside"
+    );
+    assert_eq!(
+        state::due_bucket(&with_due("2026-08-23"), today),
+        5,
+        "first day outside"
+    );
+    // A time suffix must not push it into "future".
+    assert_eq!(state::due_bucket(&with_due("2026-08-15 14:30"), today), 2);
+}
+
+// -- Matrix -------------------------------------------------------------------
+
+#[test]
+fn the_matrix_splits_into_quadrants_on_zero() {
+    let rows = rows_for(Tab::Matrix, &sample(), None);
+    let laid_out: Vec<String> = rows
+        .iter()
+        .map(|row| match row {
+            Row::Header(text) => format!("H {text}"),
+            Row::Task { index, badge, .. } => {
+                format!("T {index} {}", badge.clone().unwrap_or_default())
+            }
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        laid_out,
+        vec![
+            "H DO — urgent & important  (1)".to_string(),
+            "T 0 U8 I4".into(),
+            "H SCHEDULE — important, not urgent  (1)".into(),
+            "T 1 U-3 I9".into(),
+        ]
+    );
+}
+
+#[test]
+fn a_task_at_the_origin_is_not_placed_at_all() {
+    // Task 3 sits at (0, 0) in the fixture: it has not been judged, and
+    // calling that "eliminate" would be putting words in the user's mouth.
+    let rows = rows_for(Tab::Matrix, &sample(), None);
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, Row::Task { index: 2, .. }))
+    );
+}
+
+#[test]
+fn an_empty_matrix_points_at_how_to_fill_it() {
+    let data = Data {
+        metadata: json!({"eisenhower_by_task_id": {}}),
+        ..sample()
+    };
+    assert!(
+        matches!(&rows_for(Tab::Matrix, &data, None)[0], Row::Note(text) if text.contains("`m`"))
+    );
 }

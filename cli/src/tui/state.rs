@@ -19,12 +19,22 @@ pub enum Tab {
     Due,
     Tags,
     Priority,
+    Kanban,
+    Matrix,
     Daily,
 }
 
 impl Tab {
     /// Left-to-right order, matching the app's root views.
-    pub const ORDER: [Tab; 5] = [Tab::All, Tab::Due, Tab::Tags, Tab::Priority, Tab::Daily];
+    pub const ORDER: [Tab; 7] = [
+        Tab::All,
+        Tab::Due,
+        Tab::Tags,
+        Tab::Priority,
+        Tab::Kanban,
+        Tab::Matrix,
+        Tab::Daily,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -32,6 +42,8 @@ impl Tab {
             Tab::Due => "Due",
             Tab::Tags => "Tags",
             Tab::Priority => "Priority",
+            Tab::Kanban => "Kanban",
+            Tab::Matrix => "Matrix",
             Tab::Daily => "Daily",
         }
     }
@@ -43,6 +55,10 @@ impl Tab {
             Tab::Due => 'w',
             Tab::Tags => 'e',
             Tab::Priority => 'r',
+            Tab::Kanban => 't',
+            Tab::Matrix => 'y',
+            // The app uses `Shift+T`, which a terminal reports inconsistently
+            // across emulators; `d` is unclaimed and unambiguous.
             Tab::Daily => 'd',
         }
     }
@@ -295,8 +311,223 @@ pub fn rows_for(tab: Tab, data: &Data, scope: Option<i64>) -> Vec<Row> {
         Tab::Due => due_rows(data),
         Tab::Tags => tag_rows(data),
         Tab::Priority => priority_rows(data),
+        Tab::Kanban => kanban_rows(data),
+        Tab::Matrix => matrix_rows(data),
         Tab::Daily => daily_rows(data),
     }
+}
+
+// -- kanban -------------------------------------------------------------------
+
+/// `RootDueBucket`, by raw value — the numbering `kanban_columns` uses.
+mod bucket {
+    pub const OVERDUE: i64 = 0;
+    pub const ASAP: i64 = 1;
+    pub const TODAY: i64 = 2;
+    pub const TOMORROW: i64 = 3;
+    pub const NEXT_SEVEN_DAYS: i64 = 4;
+    pub const FUTURE: i64 = 5;
+    pub const NO_DUE_DATE: i64 = 6;
+}
+
+/// A faithful port of `TaskFilterEngine.classifyDueBucket`.
+///
+/// The board is only as right as this is: put a task in the wrong bucket and it
+/// lands in the wrong column, which reads as the terminal disagreeing with the
+/// app about your day.
+pub fn due_bucket(task: &Value, today: chrono::NaiveDate) -> i64 {
+    let due = task
+        .get("due")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    if due.is_empty() {
+        return bucket::NO_DUE_DATE;
+    }
+    match due.as_str() {
+        "asap" => return bucket::ASAP,
+        "today" => return bucket::TODAY,
+        "tomorrow" | "tmr" => return bucket::TOMORROW,
+        "next week" | "next 7 days" => return bucket::NEXT_SEVEN_DAYS,
+        _ => {}
+    }
+
+    // Checkvist may append a time; the date is the leading `YYYY-MM-DD`. An
+    // unparseable due is "future", matching a nil `dueDate` on the Swift side.
+    let Some(date) = due
+        .get(..10)
+        .and_then(|head| chrono::NaiveDate::parse_from_str(head, "%Y-%m-%d").ok())
+    else {
+        return bucket::FUTURE;
+    };
+
+    if date < today {
+        return bucket::OVERDUE;
+    }
+    if date == today {
+        return bucket::TODAY;
+    }
+    if Some(date) == today.succ_opt() {
+        return bucket::TOMORROW;
+    }
+    // `todayStart + 8 days`, exclusive — so today+7 is still "next 7 days".
+    match today.checked_add_days(chrono::Days::new(8)) {
+        Some(limit) if date < limit => bucket::NEXT_SEVEN_DAYS,
+        _ => bucket::FUTURE,
+    }
+}
+
+fn condition_matches(condition: &Value, task: &Value, today: chrono::NaiveDate) -> bool {
+    match condition.get("kind").and_then(Value::as_str) {
+        Some("tag") => {
+            let wanted = condition
+                .get("tag")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim_start_matches(['#', '@'])
+                .to_lowercase();
+            !wanted.is_empty() && tags_of(task).iter().any(|tag| tag.to_lowercase() == wanted)
+        }
+        Some("due_bucket") => {
+            condition.get("bucket_id").and_then(Value::as_i64) == Some(due_bucket(task, today))
+        }
+        // Handled separately: catch-all takes what the earlier columns left,
+        // so it cannot be evaluated in the same pass as the real conditions.
+        _ => false,
+    }
+}
+
+fn kanban_rows(data: &Data) -> Vec<Row> {
+    let columns = data
+        .metadata
+        .get("kanban_columns")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if columns.is_empty() {
+        return vec![Row::Note(
+            "No columns configured. Set them up in the app.".into(),
+        )];
+    }
+
+    let today = Local::now().date_naive();
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); columns.len()];
+    let catch_all = columns.iter().position(|column| {
+        column
+            .get("conditions")
+            .and_then(Value::as_array)
+            .is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .any(|c| c.get("kind").and_then(Value::as_str) == Some("catch_all"))
+            })
+    });
+
+    for (index, task) in data.tasks.iter().enumerate() {
+        // Columns are evaluated in order and a task belongs to the first it
+        // matches, exactly as `KanbanManager.columnForTask` decides.
+        let placed = columns.iter().position(|column| {
+            column
+                .get("conditions")
+                .and_then(Value::as_array)
+                .is_some_and(|conditions| {
+                    conditions
+                        .iter()
+                        .any(|condition| condition_matches(condition, task, today))
+                })
+        });
+        match placed.or(catch_all) {
+            Some(column) => members[column].push(index),
+            None => continue,
+        }
+    }
+
+    let mut rows = Vec::new();
+    for (column, tasks) in columns.iter().zip(&members) {
+        let name = column.get("name").and_then(Value::as_str).unwrap_or("");
+        rows.push(Row::Header(format!("{name}  ({})", tasks.len())));
+        for index in tasks {
+            rows.push(Row::Task {
+                index: *index,
+                depth: 0,
+                badge: data
+                    .task(*index)
+                    .and_then(|task| task.get("due").and_then(Value::as_str))
+                    .filter(|due| !due.is_empty())
+                    .map(str::to_string),
+            });
+        }
+    }
+    rows
+}
+
+// -- matrix -------------------------------------------------------------------
+
+/// The four Eisenhower quadrants, as `EisenhowerMatrixView` labels them:
+/// urgency is the X axis and importance the Y, both centred on zero.
+fn matrix_rows(data: &Data) -> Vec<Row> {
+    let Some(levels) = data
+        .metadata
+        .get("eisenhower_by_task_id")
+        .and_then(Value::as_object)
+    else {
+        return vec![Row::Note("Nothing placed on the matrix yet.".into())];
+    };
+
+    let mut placed: Vec<(usize, f64, f64)> = Vec::new();
+    for (task_id, level) in levels {
+        let Ok(id) = task_id.parse::<i64>() else {
+            continue;
+        };
+        let Some(index) = data
+            .tasks
+            .iter()
+            .position(|task| task.get("id").and_then(Value::as_i64) == Some(id))
+        else {
+            continue;
+        };
+        let axis = |key: &str| level.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+        let (urgency, importance) = (axis("urgency"), axis("importance"));
+        // The app plots only what has been placed; a task at the origin has
+        // not been judged, and showing it as "eliminate" would be a lie.
+        if urgency != 0.0 || importance != 0.0 {
+            placed.push((index, urgency, importance));
+        }
+    }
+
+    let mut rows = Vec::new();
+    for (label, urgent, important) in [
+        ("DO — urgent & important", true, true),
+        ("SCHEDULE — important, not urgent", false, true),
+        ("DELEGATE — urgent, not important", true, false),
+        ("ELIMINATE — neither", false, false),
+    ] {
+        let group: Vec<&(usize, f64, f64)> = placed
+            .iter()
+            .filter(|(_, urgency, importance)| {
+                (*urgency > 0.0) == urgent && (*importance > 0.0) == important
+            })
+            .collect();
+        if group.is_empty() {
+            continue;
+        }
+        rows.push(Row::Header(format!("{label}  ({})", group.len())));
+        for (index, urgency, importance) in group {
+            rows.push(Row::Task {
+                index: *index,
+                depth: 0,
+                badge: Some(format!("U{urgency:.0} I{importance:.0}")),
+            });
+        }
+    }
+
+    if rows.is_empty() {
+        rows.push(Row::Note(
+            "Nothing placed on the matrix yet. Use `m` in the app.".into(),
+        ));
+    }
+    rows
 }
 
 /// The tree as Checkvist returned it — already parents-before-children — with

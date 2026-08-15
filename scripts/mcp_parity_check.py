@@ -335,6 +335,22 @@ def write_fixture(directory: str) -> str:
             "priorityTaskIdsByParentIdByListId":
                 json.dumps({"999": {"0": [11, 12], "11": [13]}}).encode("utf-8"),
             "absolutePriorityTaskIdsByListId": {"999": [12, 11]},
+            # A `Data` blob again, and per-list like the priority queues.
+            "eisenhowerLevelsByTaskIdByListId": json.dumps(
+                {"999": {"11": {"urgency": 8.0, "importance": 3.5},
+                         "12": {"urgency": 0.0, "importance": 9.0}}}).encode("utf-8"),
+            # A plain string, in Swift's synthesised enum Codable shape. The
+            # Backlog column deliberately still says catchAll, to exercise the
+            # migration all three have to apply.
+            "kanbanColumns": json.dumps([
+                {"id": "00000000-0000-0000-0000-000000000001", "name": "Today",
+                 "conditions": [{"dueBucket": {"_0": 1}}, {"dueBucket": {"_0": 2}}],
+                 "sortOrder": "priorityThenDueAscending"},
+                {"id": "00000000-0000-0000-0000-000000000002", "name": "Waiting On",
+                 "conditions": [{"tag": {"_0": "waiting"}}], "sortOrder": "position"},
+                {"id": "00000000-0000-0000-0000-000000000003", "name": "Backlog",
+                 "conditions": [{"catchAll": {}}], "sortOrder": "alphabetical"},
+            ]),
         }, handle)
     return prefs_path
 

@@ -26,19 +26,19 @@ Run `priority` with no arguments and it opens a terminal UI with the same tabs
 as the menu bar app, and the same keys to reach them.
 
 ```
- All q │ Due w │ Tags e │ Priority r │ Daily d
-┌ All ───────────────────────────────────────────────────────┐
-│▎[ ] Ship v0.4                                              │
-│   [ ] Draft the release notes  #work                       │
-│   [x] Tag the commit                                       │
-│ [ ] Buy milk  #home                                        │
-└────────────────────────────────────────────────────────────┘
+ All q │ Due w │ Tags e │ Priority r │ Kanban t │ Matrix y │ Daily d
+┌ All ───────────────────────────────────────────────────────────────┐
+│▎[ ] Ship v0.4                                                      │
+│   [ ] Draft the release notes  #work                               │
+│   [x] Tag the commit                                               │
+│ [ ] Buy milk  #home                                                │
+└────────────────────────────────────────────────────────────────────┘
  j/k move · l/h in-out · space done · a add · ? help · esc quit
 ```
 
 | Key | Action |
 | --- | --- |
-| `q` `w` `e` `r` `d` | Jump to All, Due, Tags, Priority, Daily |
+| `q` `w` `e` `r` `t` `y` `d` | Jump to All, Due, Tags, Priority, Kanban, Matrix, Daily |
 | `tab` / `shift-tab` | Cycle tabs |
 | `j` `k` or `↓` `↑` | Move |
 | `l` `h` or `→` `←` | Enter / leave subtasks (All tab) |
@@ -53,14 +53,28 @@ as the menu bar app, and the same keys to reach them.
 The letters are the app's, not a new set: `q` is the All view in the popover, so
 it is the All tab here too. That means **`q` does not quit** — `esc` does.
 
-Each tab shapes the same data differently. Due groups into overdue / today /
-later; Tags groups by tag, with the untagged kept together; Priority reads the
-ranks you set in the app with `1`–`9`, absolute queue first and then per-parent;
-Daily shows your dailies, the day's counts, and what you finished. Adding a task
-while you are inside a subtask puts it there, as quick-add does in the app.
+Each tab shapes the same data differently:
+
+- **Due** groups into overdue / today / later.
+- **Tags** groups by tag, with the untagged kept together.
+- **Priority** reads the ranks you set in the app with `1`–`9`, absolute queue
+  first and then per-parent.
+- **Kanban** uses the columns you configured in the app, evaluated in order — a
+  task belongs to the first column it matches, and a catch-all column takes only
+  what the others left. The due-date bucketing is a port of the app's
+  `classifyDueBucket`, so the board agrees with the popover rather than
+  approximating it.
+- **Matrix** splits the Eisenhower placements into DO / SCHEDULE / DELEGATE /
+  ELIMINATE, at zero on each axis. A task sitting at the origin has not been
+  judged, so it is left out rather than filed under "eliminate".
+- **Daily** shows your dailies, the day's counts, and what you finished.
+
+Adding a task while you are inside a subtask puts it there, as quick-add does in
+the app. Kanban and Matrix are read-only views of state the app owns: you can
+complete a task from them, but the column and quadrant are set in the app.
 
 **Without Checkvist credentials the Daily tab still works in full** — it reads
-local files — and the other four explain what is missing rather than failing.
+local files — and the other six explain what is missing rather than failing.
 
 Every key that changes something dispatches the same tool call an assistant
 would make over MCP, so the terminal cannot do anything the other front ends
@@ -163,7 +177,7 @@ elsewhere for a CLI-only setup.
   log         What actually happened on recent days
   dailies     Show your dailies with today's schedule and tick state
   daily       Create, change or tick a daily
-  metadata    Priority's own per-task state: priority ranks, recurrence, start dates
+  metadata    Priority's own state: ranks, recurrence, start dates, matrix, board
   auth        Store, check or clear this CLI's Checkvist credentials
   mcp         Run as an MCP stdio server
   tools       List the tools this binary exposes

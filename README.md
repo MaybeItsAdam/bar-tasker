@@ -235,13 +235,13 @@ Only the text between the markers is ever touched, and rewriting a day replaces 
 Run it with no arguments and it opens a **terminal UI with the same tabs as the app**, and the same keys to reach them:
 
 ```
- All q │ Due w │ Tags e │ Priority r │ Daily d
-┌ All ───────────────────────────────────────────────────────┐
-│▎[ ] Ship v0.4                                              │
-│   [ ] Draft the release notes  #work                       │
-│   [x] Tag the commit                                       │
-│ [ ] Buy milk  #home                                        │
-└────────────────────────────────────────────────────────────┘
+ All q │ Due w │ Tags e │ Priority r │ Kanban t │ Matrix y │ Daily d
+┌ All ───────────────────────────────────────────────────────────────┐
+│▎[ ] Ship v0.4                                                      │
+│   [ ] Draft the release notes  #work                               │
+│   [x] Tag the commit                                               │
+│ [ ] Buy milk  #home                                                │
+└────────────────────────────────────────────────────────────────────┘
  j/k move · l/h in-out · space done · a add · ? help · esc quit
 ```
 

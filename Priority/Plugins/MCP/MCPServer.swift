@@ -583,6 +583,19 @@ private struct PriorityMCPLocalState {
       absoluteRanks[String(taskId)] = index + 1
     }
 
+    // What the Matrix view is drawn from. Stored as a JSON blob under a `Data`
+    // default, unlike the plain dictionaries above — reading it the wrong way
+    // yields silently empty results rather than an error.
+    var eisenhowerByTask: [String: [String: Double]] = [:]
+    let levels = ListScopedEisenhowerStore(
+      defaultsKey: "eisenhowerLevelsByTaskIdByListId", defaults: defaults
+    ).load(for: listId)
+    for (taskId, level) in levels {
+      eisenhowerByTask[String(taskId)] = [
+        "urgency": level.urgency, "importance": level.importance,
+      ]
+    }
+
     return [
       "list_id": listId,
       "scoped_priority_rank_by_parent_id": scopedRanks,
@@ -591,7 +604,56 @@ private struct PriorityMCPLocalState {
         as? [String: String] ?? [:],
       "start_date_by_task_id": defaults.dictionary(forKey: "taskStartDatesByTaskId")
         as? [String: String] ?? [:],
+      "eisenhower_by_task_id": eisenhowerByTask,
+      "kanban_columns": Self.kanbanColumns(defaults: defaults),
     ]
+  }
+
+  /// The board's columns, in evaluation order, flattened into a shape another
+  /// language can reproduce.
+  ///
+  /// `KanbanColumnCondition` is a Swift enum with associated values, so its
+  /// synthesised `Codable` form is `{"tag":{"_0":"waiting"}}` — an encoding no
+  /// other implementation should have to know about. Normalising here keeps
+  /// that detail on this side of the wire.
+  static func kanbanColumns(defaults: UserDefaults) -> [[String: Any]] {
+    let stored = defaults.string(forKey: "kanbanColumns") ?? ""
+    var columns = KanbanColumn.defaults
+    if let data = stored.data(using: .utf8),
+      let decoded = try? JSONDecoder().decode([KanbanColumn].self, from: data),
+      !decoded.isEmpty
+    {
+      columns = decoded
+    }
+
+    // The same migration `KanbanManager` applies on load: a Backlog column that
+    // still says "everything else" would otherwise swallow every task.
+    for index in columns.indices where columns[index].name.lowercased() == "backlog" {
+      columns[index].conditions = columns[index].conditions.map { condition in
+        if case .catchAll = condition { return .tag("backlog") }
+        return condition
+      }
+    }
+
+    return columns.map { column in
+      [
+        "name": column.name,
+        "sort_order": column.sortOrder.rawValue,
+        "conditions": column.conditions.map { condition -> [String: Any] in
+          switch condition {
+          case .tag(let name):
+            return ["kind": "tag", "tag": name]
+          case .dueBucket(let raw):
+            return [
+              "kind": "due_bucket", "bucket_id": raw,
+              "bucket": RootDueBucket(rawValue: raw)?.title ?? "",
+            ]
+          case .catchAll:
+            return ["kind": "catch_all"]
+          }
+        },
+      ]
+    }
   }
 
   // MARK: - Writes

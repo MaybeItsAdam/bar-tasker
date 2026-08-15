@@ -715,6 +715,26 @@ impl LocalState {
             _ => Vec::new(),
         };
 
+        // What the Matrix tab is drawn from. A JSON blob under a `Data`
+        // default, like the scoped priority store above and unlike the plain
+        // dictionaries — read it the other way and you get silent emptiness.
+        let levels = match prefs.get("eisenhowerLevelsByTaskIdByListId") {
+            Some(plist::Value::Data(bytes)) => {
+                serde_json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
+            }
+            _ => Value::Null,
+        };
+        let mut eisenhower = Map::new();
+        if let Some(by_task) = levels.get(scope).and_then(Value::as_object) {
+            for (task_id, level) in by_task {
+                let number = |key: &str| level.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+                eisenhower.insert(
+                    task_id.clone(),
+                    json!({ "urgency": number("urgency"), "importance": number("importance") }),
+                );
+            }
+        }
+
         json!({
             "list_id": list_id,
             "scoped_priority_rank_by_parent_id": Value::Object(scoped_ranks),
@@ -725,8 +745,106 @@ impl LocalState {
             "start_date_by_task_id": prefs
                 .get("taskStartDatesByTaskId")
                 .map_or_else(|| json!({}), plist_to_json),
+            "eisenhower_by_task_id": Value::Object(eisenhower),
+            "kanban_columns": kanban_columns(&prefs),
         })
     }
+}
+
+/// `RootDueBucket` in the app, by raw value.
+const DUE_BUCKETS: [&str; 7] = [
+    "Overdue",
+    "ASAP",
+    "Today",
+    "Tomorrow",
+    "Next 7 days",
+    "Further in the future",
+    "No due date",
+];
+
+/// The board's columns, in evaluation order.
+///
+/// `KanbanColumnCondition` is a Swift enum with associated values, so it is
+/// stored in the synthesised `Codable` shape — `{"tag": {"_0": "waiting"}}`.
+/// That encoding is Swift's business; this flattens it into something the
+/// other implementations can state plainly.
+fn kanban_columns(prefs: &plist::Dictionary) -> Value {
+    let stored = match prefs.get("kanbanColumns") {
+        Some(plist::Value::String(text)) if !text.trim().is_empty() => {
+            serde_json::from_str::<Value>(text).ok()
+        }
+        _ => None,
+    };
+    let decoded = stored
+        .as_ref()
+        .and_then(Value::as_array)
+        .filter(|columns| !columns.is_empty());
+
+    let Some(columns) = decoded else {
+        return default_kanban_columns();
+    };
+
+    let rendered: Vec<Value> = columns
+        .iter()
+        .map(|column| {
+            let name = column.get("name").and_then(Value::as_str).unwrap_or("");
+            // The same migration `KanbanManager` applies on load: a Backlog
+            // column still saying "everything else" would swallow every task.
+            let backlog = name.to_lowercase() == "backlog";
+            let conditions: Vec<Value> = column
+                .get("conditions")
+                .and_then(Value::as_array)
+                .map(|raw| {
+                    raw.iter()
+                        .filter_map(|item| condition(item, backlog))
+                        .collect()
+                })
+                .unwrap_or_default();
+            json!({
+                "name": name,
+                "sort_order": column.get("sortOrder").and_then(Value::as_str).unwrap_or("position"),
+                "conditions": conditions,
+            })
+        })
+        .collect();
+    Value::Array(rendered)
+}
+
+fn condition(raw: &Value, backlog: bool) -> Option<Value> {
+    let object = raw.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    let (case, payload) = object.iter().next()?;
+    let inner = payload.get("_0");
+    match case.as_str() {
+        "tag" => Some(json!({ "kind": "tag", "tag": inner?.as_str()? })),
+        "dueBucket" => {
+            let raw_bucket = inner?.as_i64()?;
+            let title = usize::try_from(raw_bucket)
+                .ok()
+                .and_then(|index| DUE_BUCKETS.get(index))
+                .copied()
+                .unwrap_or("");
+            Some(json!({ "kind": "due_bucket", "bucket_id": raw_bucket, "bucket": title }))
+        }
+        "catchAll" if backlog => Some(json!({ "kind": "tag", "tag": "backlog" })),
+        "catchAll" => Some(json!({ "kind": "catch_all" })),
+        _ => None,
+    }
+}
+
+/// `KanbanColumn.defaults`, used when nothing has been configured.
+fn default_kanban_columns() -> Value {
+    let due = |bucket: usize| json!({ "kind": "due_bucket", "bucket_id": bucket, "bucket": DUE_BUCKETS[bucket] });
+    let tag = |name: &str| json!({ "kind": "tag", "tag": name });
+    let column = |name: &str, conditions: Vec<Value>| json!({ "name": name, "sort_order": "priorityThenDueAscending", "conditions": conditions });
+    json!([
+        column("Today", vec![due(1), due(0), due(2)]),
+        column("Next 7 Days", vec![due(3), due(4)]),
+        column("Waiting On", vec![tag("waiting")]),
+        column("Backlog", vec![tag("backlog")]),
+    ])
 }
 
 // -- helpers -----------------------------------------------------------------

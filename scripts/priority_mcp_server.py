@@ -878,13 +878,115 @@ class LocalState:
         )
         absolute_ranks = {str(task_id): index + 1 for index, task_id in enumerate(absolute_queue)}
 
+        # What the Matrix view is drawn from. A JSON blob under a `Data`
+        # default, like the scoped priority store above and unlike the plain
+        # dictionaries — read it the other way and you get silent emptiness.
+        raw_levels = prefs.get("eisenhowerLevelsByTaskIdByListId")
+        levels_all: dict[str, Any] = {}
+        if isinstance(raw_levels, bytes):
+            try:
+                levels_all = json.loads(raw_levels.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                levels_all = {}
+        eisenhower = {
+            task_id: {
+                "urgency": float(level.get("urgency", 0.0)),
+                "importance": float(level.get("importance", 0.0)),
+            }
+            for task_id, level in (levels_all.get(scope) or {}).items()
+            if isinstance(level, dict)
+        }
+
         return {
             "list_id": list_id,
             "scoped_priority_rank_by_parent_id": scoped_ranks,
             "absolute_priority_rank": absolute_ranks,
             "recurrence_rule_by_task_id": prefs.get("recurrenceRulesByTaskId") or {},
             "start_date_by_task_id": prefs.get("taskStartDatesByTaskId") or {},
+            "eisenhower_by_task_id": eisenhower,
+            "kanban_columns": self._kanban_columns(prefs),
         }
+
+    # `RootDueBucket` in the app, by raw value.
+    DUE_BUCKETS = ["Overdue", "ASAP", "Today", "Tomorrow", "Next 7 days",
+                   "Further in the future", "No due date"]
+
+    # `KanbanColumn.defaults`, used when nothing has been configured.
+    DEFAULT_KANBAN_COLUMNS = [
+        ("Today", [("due_bucket", 1), ("due_bucket", 0), ("due_bucket", 2)]),
+        ("Next 7 Days", [("due_bucket", 3), ("due_bucket", 4)]),
+        ("Waiting On", [("tag", "waiting")]),
+        ("Backlog", [("tag", "backlog")]),
+    ]
+
+    def _kanban_columns(self, prefs: dict[str, Any]) -> list[dict[str, Any]]:
+        """The board's columns, in evaluation order.
+
+        `KanbanColumnCondition` is a Swift enum with associated values, so it is
+        stored in the synthesised `Codable` shape -- `{"tag": {"_0": "waiting"}}`.
+        That encoding is Swift's business, so it is flattened here into
+        something this side can state plainly.
+        """
+        def condition(raw: Any) -> Optional[dict[str, Any]]:
+            if not isinstance(raw, dict) or len(raw) != 1:
+                return None
+            (case, payload), = raw.items()
+            value = payload.get("_0") if isinstance(payload, dict) else None
+            if case == "tag" and isinstance(value, str):
+                return {"kind": "tag", "tag": value}
+            if case == "dueBucket" and isinstance(value, int):
+                title = self.DUE_BUCKETS[value] if 0 <= value < len(self.DUE_BUCKETS) else ""
+                return {"kind": "due_bucket", "bucket_id": value, "bucket": title}
+            if case == "catchAll":
+                return {"kind": "catch_all"}
+            return None
+
+        stored = prefs.get("kanbanColumns")
+        decoded = None
+        if isinstance(stored, str) and stored.strip():
+            try:
+                candidate = json.loads(stored)
+            except ValueError:
+                candidate = None
+            if isinstance(candidate, list) and candidate:
+                decoded = candidate
+
+        if decoded is None:
+            return [
+                {
+                    "name": name,
+                    "sort_order": "priorityThenDueAscending",
+                    "conditions": [
+                        {"kind": "tag", "tag": value} if kind == "tag" else
+                        {"kind": "due_bucket", "bucket_id": value,
+                         "bucket": self.DUE_BUCKETS[value]}
+                        for kind, value in conditions
+                    ],
+                }
+                for name, conditions in self.DEFAULT_KANBAN_COLUMNS
+            ]
+
+        columns = []
+        for column in decoded:
+            if not isinstance(column, dict):
+                continue
+            name = column.get("name", "")
+            conditions = [
+                c for c in (condition(raw) for raw in column.get("conditions") or []) if c
+            ]
+            # The same migration `KanbanManager` applies on load: a Backlog
+            # column still saying "everything else" would swallow every task.
+            if str(name).lower() == "backlog":
+                conditions = [
+                    {"kind": "tag", "tag": "backlog"} if c["kind"] == "catch_all" else c
+                    for c in conditions
+                ]
+            columns.append({
+                "name": name,
+                "sort_order": column.get("sortOrder", "position"),
+                "conditions": conditions,
+            })
+        return columns
 
 
 def _filter_tasks(

@@ -221,7 +221,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_row("q w e r d", "Jump to a tab, as in the app"),
+        help_row("q w e r t y d", "Jump to a tab, as in the app"),
         help_row("tab / shift-tab", "Cycle tabs"),
         help_row("j k  ↓ ↑", "Move"),
         help_row("l h  → ←", "Enter / leave subtasks (All)"),
