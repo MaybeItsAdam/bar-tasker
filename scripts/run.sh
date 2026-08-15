@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-SCHEME="Bar Tasker"
+SCHEME="Priority"
 CONFIG="Debug"
 BUILD_DIR="$(pwd)/build"
 
@@ -21,7 +21,7 @@ if [ $? -eq 0 ]; then
 
     # Dynamically find the binary to avoid path mismatches
     # This looks for the executable inside the .app bundle
-    BINARY_PATH=$(find "$BUILD_DIR" -name "Bar Tasker" -type f -perm +111 | head -n 1)
+    BINARY_PATH=$(find "$BUILD_DIR" -name "Priority" -type f -perm +111 | head -n 1)
 
     if [ -z "$BINARY_PATH" ]; then
         echo "❌ Error: Could not find binary in $BUILD_DIR"

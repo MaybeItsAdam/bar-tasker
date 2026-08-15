@@ -1,0 +1,22 @@
+[package]
+name = "priority-cli"
+version = "0.3.0"
+edition = "2024"
+description = "Command-line access to Priority's Checkvist lists, dailies and day log, plus a third MCP server implementation."
+publish = false
+
+[[bin]]
+name = "priority"
+path = "src/main.rs"
+
+[dependencies]
+chrono = "0.4.45"
+clap = { version = "4.6.6", features = ["derive"] }
+plist = "1.10.0"
+rpassword = "7.5.4"
+serde_json = "1.0.151"
+ureq = { version = "2", features = ["json"] }
+uuid = { version = "1.24.1", features = ["v4"] }
+
+[profile.release]
+strip = true

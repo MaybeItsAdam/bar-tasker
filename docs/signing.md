@@ -14,7 +14,7 @@ ad-hoc `-` ("Sign to Run Locally") identity the project used previously:
 | `DEVELOPMENT_TEAM` | `6NQNU5YSC2` | `6NQNU5YSC2` |
 | `ENABLE_APP_SANDBOX` | `NO` | `YES` |
 | `ENABLE_HARDENED_RUNTIME` | — | `YES` |
-| Entitlements | `Bar Tasker.entitlements` | `Bar Tasker.release.entitlements` |
+| Entitlements | `Priority.entitlements` | `Priority.release.entitlements` |
 
 No provisioning profile is needed. The app's entitlements — sandbox,
 user-selected files, network client/server — are all profile-free on macOS, so
@@ -30,7 +30,7 @@ that meant macOS re-prompting for keychain access after every reinstall, which
 is the reason `ignoreKeychainInDebug` exists.
 
 Signing with the team certificate makes the designated requirement
-`identifier "uk.co.maybeitsadam.bar-tasker" and ... certificate leaf[subject.OU] = "6NQNU5YSC2"`,
+`identifier "uk.co.maybeitsadam.priority" and ... certificate leaf[subject.OU] = "6NQNU5YSC2"`,
 which is stable across rebuilds. The keychain entry survives.
 
 > The switch from ad-hoc to the team certificate changes the identity **once**.
@@ -67,7 +67,7 @@ before creating another.
 ### 2. Store notarization credentials
 
 ```bash
-xcrun notarytool store-credentials "bar-tasker-notary" \
+xcrun notarytool store-credentials "priority-notary" \
   --apple-id "<your-apple-id>" \
   --team-id "6NQNU5YSC2" \
   --password "<app-specific-password>"
@@ -94,14 +94,14 @@ network round trip.
 
 ```bash
 # Which identity signed it, and is the signature intact?
-codesign -dv --verbose=4 "/Applications/Bar Tasker.app" 2>&1 | grep -E 'Authority|Identifier|flags'
-codesign --verify --deep --strict "/Applications/Bar Tasker.app"
+codesign -dv --verbose=4 "/Applications/Priority.app" 2>&1 | grep -E 'Authority|Identifier|flags'
+codesign --verify --deep --strict "/Applications/Priority.app"
 
 # Entitlements actually baked into the bundle
-codesign -d --entitlements - --xml "/Applications/Bar Tasker.app" | plutil -p -
+codesign -d --entitlements - --xml "/Applications/Priority.app" | plutil -p -
 
 # Would Gatekeeper let this run on someone else's Mac?
-spctl --assess --type execute --verbose "/Applications/Bar Tasker.app"
+spctl --assess --type execute --verbose "/Applications/Priority.app"
 ```
 
 `spctl` reporting `rejected` or `source=Unnotarized Developer ID` means the

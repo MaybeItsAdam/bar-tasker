@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import BarTaskerAppLogic
+@testable import PriorityAppLogic
 
 @MainActor
 final class OfflineTaskSyncPluginTests: XCTestCase {

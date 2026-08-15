@@ -1,10 +1,10 @@
 import XCTest
 
-@testable import BarTaskerCore
+@testable import PriorityCore
 
 final class MCPClientConfigTests: XCTestCase {
   private let entry = MCPServerEntry(
-    command: "/Applications/Bar Tasker.app/Contents/MacOS/Bar Tasker",
+    command: "/Applications/Priority.app/Contents/MacOS/Priority",
     args: ["--mcp-server"],
     env: ["CHECKVIST_USERNAME": "you@example.com", "CHECKVIST_REMOTE_KEY": "key"]
   )
@@ -35,7 +35,7 @@ final class MCPClientConfigTests: XCTestCase {
     XCTAssertEqual(result.outcome, .added)
 
     let servers = try XCTUnwrap(parse(result.contents)["mcpServers"] as? [String: Any])
-    let server = try XCTUnwrap(servers["bar-tasker"] as? [String: Any])
+    let server = try XCTUnwrap(servers["priority"] as? [String: Any])
     XCTAssertEqual(server["command"] as? String, entry.command)
     XCTAssertEqual(server["args"] as? [String], ["--mcp-server"])
   }
@@ -62,7 +62,7 @@ final class MCPClientConfigTests: XCTestCase {
     XCTAssertEqual(root["globalShortcut"] as? String, "Cmd+Shift+X")
 
     let servers = try XCTUnwrap(root["mcpServers"] as? [String: Any])
-    XCTAssertEqual(Set(servers.keys), ["github", "bar-tasker"])
+    XCTAssertEqual(Set(servers.keys), ["github", "priority"])
     let github = try XCTUnwrap(servers["github"] as? [String: Any])
     XCTAssertEqual(github["command"] as? String, "npx")
   }
@@ -73,7 +73,7 @@ final class MCPClientConfigTests: XCTestCase {
     XCTAssertEqual(second.outcome, .unchanged)
   }
 
-  func testMergeOverExistingBarTaskerEntryReportsUpdated() throws {
+  func testMergeOverExistingPriorityEntryReportsUpdated() throws {
     let first = try merge(into: nil)
     let rotated = MCPServerEntry(
       command: entry.command,
@@ -84,7 +84,7 @@ final class MCPClientConfigTests: XCTestCase {
     XCTAssertEqual(second.outcome, .updated)
 
     let servers = try XCTUnwrap(parse(second.contents)["mcpServers"] as? [String: Any])
-    let server = try XCTUnwrap(servers["bar-tasker"] as? [String: Any])
+    let server = try XCTUnwrap(servers["priority"] as? [String: Any])
     let env = try XCTUnwrap(server["env"] as? [String: String])
     XCTAssertEqual(env["CHECKVIST_REMOTE_KEY"], "rotated")
   }
@@ -121,7 +121,7 @@ final class MCPClientConfigTests: XCTestCase {
     let root = try parse(result.contents)
     XCTAssertNil(root["mcpServers"])
     let servers = try XCTUnwrap(root["servers"] as? [String: Any])
-    let server = try XCTUnwrap(servers["bar-tasker"] as? [String: Any])
+    let server = try XCTUnwrap(servers["priority"] as? [String: Any])
     XCTAssertEqual(server["type"] as? String, "stdio")
   }
 
@@ -129,11 +129,11 @@ final class MCPClientConfigTests: XCTestCase {
 
   func testTerminalCommandIsASingleShellSafeLine() throws {
     let command = MCPClientConfigWriter.terminalCommand(entry: entry)
-    XCTAssertTrue(command.hasPrefix("claude mcp add-json bar-tasker --scope user '"))
+    XCTAssertTrue(command.hasPrefix("claude mcp add-json priority --scope user '"))
     XCTAssertTrue(command.hasSuffix("'"))
     XCTAssertFalse(command.contains("\n"))
 
-    let json = String(command.dropFirst("claude mcp add-json bar-tasker --scope user '".count))
+    let json = String(command.dropFirst("claude mcp add-json priority --scope user '".count))
       .dropLast()
     let server = try parse(String(json))
     XCTAssertEqual(server["command"] as? String, entry.command)
@@ -159,7 +159,7 @@ final class MCPClientConfigTests: XCTestCase {
     // Wrapping it back in braces must yield the object Zed expects.
     let root = try parse("{\(snippet)}")
     let servers = try XCTUnwrap(root["context_servers"] as? [String: Any])
-    let server = try XCTUnwrap(servers["bar-tasker"] as? [String: Any])
+    let server = try XCTUnwrap(servers["priority"] as? [String: Any])
     XCTAssertEqual(server["command"] as? String, entry.command)
   }
 

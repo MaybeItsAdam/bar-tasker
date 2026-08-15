@@ -1,15 +1,15 @@
 import Foundation
 
-// Plugin protocols and stub models needed by `BarTaskerAppLogic`
+// Plugin protocols and stub models needed by `PriorityAppLogic`
 // (`TaskRepository`, `OfflineTaskSyncPlugin`, `LocalTaskStore`).
 //
 // These mirror the canonical types in:
-//   • Bar Tasker/Plugins/Protocols/PluginProtocols.swift
-//   • Bar Tasker/Plugins/Native/Checkvist/CheckvistModels.swift
-//   • Bar Tasker/Plugins/Native/Checkvist/CheckvistTaskCachePayload.swift
-//   • Bar Tasker/Plugins/Native/Checkvist/CheckvistSessionError.swift
+//   • Priority/Plugins/Protocols/PluginProtocols.swift
+//   • Priority/Plugins/Native/Checkvist/CheckvistModels.swift
+//   • Priority/Plugins/Native/Checkvist/CheckvistTaskCachePayload.swift
+//   • Priority/Plugins/Native/Checkvist/CheckvistSessionError.swift
 //
-// Deduplicating against `BarTaskerPlugins` would require making every
+// Deduplicating against `PriorityPlugins` would require making every
 // imported type `public`, which is a meaningful broadening of the plugin
 // library's API surface — left as follow-on work. See Phase 5.2 in
 // ARCHITECTURE_IMPROVEMENT_PLAN.md.
@@ -122,7 +122,8 @@ enum CheckvistSessionError: Error {
 @MainActor
 protocol CheckvistSyncPlugin: Plugin {
   func startupRemoteKey(useKeychainStorageAtInit: Bool) -> String
-  func persistRemoteKey(_ value: String, useKeychainStorage: Bool)
+  @discardableResult
+  func persistRemoteKey(_ value: String, useKeychainStorage: Bool) -> String?
   func persistRemoteKeyForDebugStorageMode(_ value: String)
   func loadRemoteKeyFromKeychain() -> String?
   func clearAuthentication()
@@ -173,7 +174,7 @@ protocol CheckvistSyncPlugin: Plugin {
 @MainActor
 extension CheckvistSyncPlugin {
   func startupRemoteKey(useKeychainStorageAtInit: Bool) -> String { "" }
-  func persistRemoteKey(_ value: String, useKeychainStorage: Bool) {}
+  func persistRemoteKey(_ value: String, useKeychainStorage: Bool) -> String? { nil }
   func persistRemoteKeyForDebugStorageMode(_ value: String) {}
   func loadRemoteKeyFromKeychain() -> String? { nil }
   func createList(name: String, credentials: CheckvistCredentials) async throws -> CheckvistList? {

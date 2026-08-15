@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import BarTaskerCore
+@testable import PriorityCore
 
 final class TimerElapsedReassignmentPolicyTests: XCTestCase {
   func testRemovedChildElapsedRollsIntoOpenParent() {

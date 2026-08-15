@@ -1,0 +1,455 @@
+//! The nineteen Priority tools, implemented once.
+//!
+//! Both front ends — the CLI subcommands in `cli.rs` and the MCP server in
+//! `mcp.rs` — dispatch through [`Tools::call`], so the two cannot drift from
+//! each other. Anything a client can ask for over MCP is reachable from the
+//! command line with the same arguments and the same answer, by construction
+//! rather than by discipline.
+//!
+//! Parity with the *other two* implementations is a different problem, and is
+//! asserted from outside by `scripts/mcp_parity_check.py`.
+
+use crate::checkvist::CheckvistClient;
+use crate::error::{Result, ToolError};
+use crate::local::LocalState;
+use chrono::Local;
+use serde_json::{Map, Value, json};
+
+pub struct ToolOutcome {
+    pub title: String,
+    pub payload: Value,
+}
+
+pub struct Tools {
+    pub client: CheckvistClient,
+    pub local: LocalState,
+}
+
+impl Tools {
+    pub fn call(&self, name: &str, arguments: &Map<String, Value>) -> Result<ToolOutcome> {
+        let list_id = || {
+            self.client
+                .resolve_list_id(as_string(arguments.get("list_id")).as_deref())
+        };
+
+        match name {
+            "task_lists" => Ok(outcome("Checklists", json!(self.client.list_lists()?))),
+
+            "task_fetch" => {
+                let list_id = list_id()?;
+                let include_closed = as_bool(arguments.get("include_closed"), false)?;
+                let with_notes = as_bool(arguments.get("with_notes"), true)?;
+                let payload = self
+                    .client
+                    .fetch_tasks(&list_id, include_closed, with_notes)?;
+                Ok(outcome(
+                    format!("Tasks (list {list_id}, include_closed={include_closed})"),
+                    json!(payload),
+                ))
+            }
+
+            "task_add" => {
+                let content = required_string(arguments, "content")?;
+                let location =
+                    as_string(arguments.get("location")).unwrap_or_else(|| "default".into());
+                if !matches!(location.as_str(), "default" | "specific") {
+                    return Err(ToolError::new("location must be 'default' or 'specific'."));
+                }
+                let list_id = list_id()?;
+                let parent_task_id = if location == "specific" {
+                    Some(required_int(arguments, "parent_task_id")?)
+                } else {
+                    None
+                };
+                let position = as_optional_int(arguments.get("position"))?.or(Some(1));
+                let due = as_string(arguments.get("due"));
+                let payload = self.client.create_task(
+                    &list_id,
+                    content.trim(),
+                    parent_task_id,
+                    position,
+                    due.as_deref(),
+                )?;
+                Ok(outcome("Task created", payload))
+            }
+
+            "task_update" => {
+                let list_id = list_id()?;
+                let task_id = required_int(arguments, "task_id")?;
+                let content = as_string(arguments.get("content"));
+                let due = as_string(arguments.get("due"));
+                let payload = self.client.update_task(
+                    &list_id,
+                    task_id,
+                    content.as_deref(),
+                    due.as_deref(),
+                )?;
+                Ok(outcome("Task updated", payload))
+            }
+
+            "task_complete" | "task_reopen" | "task_invalidate" => {
+                let (action, title) = match name {
+                    "task_complete" => ("close", "Task completed"),
+                    "task_reopen" => ("reopen", "Task reopened"),
+                    _ => ("invalidate", "Task invalidated"),
+                };
+                let list_id = list_id()?;
+                let task_id = required_int(arguments, "task_id")?;
+                Ok(outcome(
+                    title,
+                    self.client.task_action(&list_id, task_id, action)?,
+                ))
+            }
+
+            "task_delete" => {
+                let list_id = list_id()?;
+                let task_id = required_int(arguments, "task_id")?;
+                Ok(outcome(
+                    "Task deleted",
+                    self.client.delete_task(&list_id, task_id)?,
+                ))
+            }
+
+            "task_move" => {
+                let list_id = list_id()?;
+                let task_id = required_int(arguments, "task_id")?;
+                let position = required_int(arguments, "position")?;
+                if position < 1 {
+                    return Err(ToolError::new("position must be 1 or greater."));
+                }
+                Ok(outcome(
+                    "Task moved",
+                    self.client.move_task(&list_id, task_id, position)?,
+                ))
+            }
+
+            "task_reparent" => {
+                let list_id = list_id()?;
+                let task_id = required_int(arguments, "task_id")?;
+                // Absent means "move to root". 0 means the same, so a client
+                // that cannot express null still has a way to say it.
+                let parent_id = match as_optional_int(arguments.get("parent_task_id"))? {
+                    None | Some(0) => None,
+                    Some(parent_id) => Some(parent_id),
+                };
+                if parent_id == Some(task_id) {
+                    return Err(ToolError::new("A task cannot be its own parent."));
+                }
+                Ok(outcome(
+                    "Task reparented",
+                    self.client.reparent_task(&list_id, task_id, parent_id)?,
+                ))
+            }
+
+            "task_note_add" => {
+                let list_id = list_id()?;
+                let task_id = required_int(arguments, "task_id")?;
+                let note = required_string(arguments, "note")?;
+                Ok(outcome(
+                    "Note added",
+                    self.client.add_note(&list_id, task_id, &note)?,
+                ))
+            }
+
+            "list_create" => {
+                let name = required_string(arguments, "name")?;
+                Ok(outcome("List created", self.client.create_list(&name)?))
+            }
+
+            "task_search" => {
+                let list_id = list_id()?;
+                let include_closed = as_bool(arguments.get("include_closed"), false)?;
+                let tasks = self.client.fetch_tasks(&list_id, include_closed, false)?;
+                let matches = filter_tasks(
+                    tasks,
+                    as_string(arguments.get("query")).as_deref(),
+                    as_string(arguments.get("tag")).as_deref(),
+                    as_string(arguments.get("due_before")).as_deref(),
+                );
+                let limit = as_optional_int(arguments.get("limit"))?
+                    .filter(|n| *n != 0)
+                    .unwrap_or(50);
+                let shown = limit.max(0) as usize;
+                let suffix = if matches.len() > shown {
+                    format!(", showing {limit}")
+                } else {
+                    String::new()
+                };
+                let title = format!(
+                    "Search (list {list_id}, {} match(es){suffix})",
+                    matches.len()
+                );
+                Ok(outcome(
+                    title,
+                    json!(matches.into_iter().take(shown).collect::<Vec<_>>()),
+                ))
+            }
+
+            "daily_log_fetch" => {
+                let days = as_optional_int(arguments.get("days"))?
+                    .filter(|n| *n != 0)
+                    .unwrap_or(1);
+                if !(1..=90).contains(&days) {
+                    return Err(ToolError::new("days must be between 1 and 90."));
+                }
+                let payload = self.local.day_summaries(Local::now(), days);
+                Ok(outcome(
+                    format!("Daily log ({days} day(s))"),
+                    json!(payload),
+                ))
+            }
+
+            "dailies_list" => Ok(outcome(
+                "Dailies",
+                self.local.dailies_snapshot(Local::now()),
+            )),
+
+            "task_metadata" => {
+                let list_id = list_id()?;
+                let payload = self.local.task_metadata(&list_id);
+                Ok(outcome(
+                    format!("Priority metadata (list {list_id})"),
+                    payload,
+                ))
+            }
+
+            "daily_add" => {
+                let title = required_string(arguments, "title")?;
+                let weekdays = as_optional_weekdays(arguments.get("active_weekdays"))?;
+                Ok(outcome(
+                    "Daily added",
+                    self.local.add_daily(&title, weekdays)?,
+                ))
+            }
+
+            "daily_update" => {
+                let daily_id = required_string(arguments, "daily_id")?;
+                let title = as_string(arguments.get("title"));
+                let weekdays = as_optional_weekdays(arguments.get("active_weekdays"))?;
+                let archived = match arguments.get("archived") {
+                    None | Some(Value::Null) => None,
+                    value => Some(as_bool(value, false)?),
+                };
+                if title.is_none() && weekdays.is_none() && archived.is_none() {
+                    return Err(ToolError::new(
+                        "No updates provided. Pass title, active_weekdays and/or archived.",
+                    ));
+                }
+                let payload =
+                    self.local
+                        .update_daily(&daily_id, title.as_deref(), weekdays, archived)?;
+                Ok(outcome("Daily updated", payload))
+            }
+
+            "daily_tick" => {
+                let daily_id = required_string(arguments, "daily_id")?;
+                let done = as_bool(arguments.get("done"), true)?;
+                let payload = self.local.set_daily(&daily_id, done)?;
+                let title = if payload.get("changed") == Some(&Value::Bool(true)) {
+                    if done {
+                        "Daily ticked"
+                    } else {
+                        "Daily un-ticked"
+                    }
+                } else {
+                    "Daily already in that state"
+                };
+                Ok(outcome(title, payload))
+            }
+
+            _ => Err(ToolError::new(format!("Unknown tool: {name}"))),
+        }
+    }
+}
+
+fn outcome(title: impl Into<String>, payload: Value) -> ToolOutcome {
+    ToolOutcome {
+        title: title.into(),
+        payload,
+    }
+}
+
+/// Filtering runs here rather than in the caller so a search over a large list
+/// costs one result instead of the whole list. All three filters are ANDed;
+/// omitting one drops it.
+pub fn filter_tasks(
+    tasks: Vec<Value>,
+    query: Option<&str>,
+    tag: Option<&str>,
+    due_before: Option<&str>,
+) -> Vec<Value> {
+    let mut matches = tasks;
+
+    if let Some(query) = query.map(str::trim).filter(|q| !q.is_empty()) {
+        let needle = query.to_lowercase();
+        matches.retain(|task| content_of(task).to_lowercase().contains(&needle));
+    }
+
+    if let Some(tag) = tag.map(str::trim).filter(|t| !t.is_empty()) {
+        let normalized = tag.trim_start_matches('#').to_lowercase();
+        matches.retain(|task| has_tag(task, &normalized));
+    }
+
+    if let Some(cutoff) = due_before.map(str::trim).filter(|d| !d.is_empty()) {
+        // Checkvist serialises `due` as YYYY-MM-DD, which compares correctly as
+        // a string. A task with no due date is never "due before" anything.
+        matches.retain(|task| {
+            let due = task.get("due").and_then(Value::as_str).unwrap_or("");
+            !due.is_empty() && due < cutoff
+        });
+    }
+
+    matches
+}
+
+fn content_of(task: &Value) -> String {
+    task.get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Checkvist returns tags as an array or a dict depending on the endpoint, and
+/// also inline in the content as `#tag` — match any, rather than silently
+/// missing half the tagged tasks.
+fn has_tag(task: &Value, normalized: &str) -> bool {
+    let in_tags = match task.get("tags") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .any(|item| value_text(item).to_lowercase() == normalized),
+        Some(Value::Object(entries)) => entries.keys().any(|key| key.to_lowercase() == normalized),
+        _ => false,
+    };
+    in_tags
+        || content_of(task)
+            .to_lowercase()
+            .contains(&format!("#{normalized}"))
+}
+
+fn value_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+// -- argument coercion -------------------------------------------------------
+//
+// Tolerant in the same places as the other two servers: a client that sends
+// `"5"` where the schema says integer, or `"true"` where it says boolean, is
+// answered rather than rejected. Booleans are the one place tolerance is
+// wrong — an earlier Swift bug accepted JSON `1` as `true` and so rejected
+// `position: 1` outright.
+
+pub fn as_string(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::Null => None,
+        Value::String(text) => Some(text.clone()),
+        Value::Bool(flag) => Some(if *flag { "True".into() } else { "False".into() }),
+        other => Some(other.to_string()),
+    }
+}
+
+pub fn as_bool(value: Option<&Value>, default: bool) -> Result<bool> {
+    match value {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::Bool(flag)) => Ok(*flag),
+        Some(Value::String(text)) => match text.trim().to_lowercase().as_str() {
+            "true" | "1" | "yes" | "y" => Ok(true),
+            "false" | "0" | "no" | "n" => Ok(false),
+            _ => Err(ToolError::new(format!(
+                "Expected boolean value, got {text:?}."
+            ))),
+        },
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .map(|raw| raw != 0)
+            .ok_or_else(|| ToolError::new("Expected boolean value, got a fractional number.")),
+        Some(other) => Err(ToolError::new(format!(
+            "Expected boolean value, got {}.",
+            type_name(other)
+        ))),
+    }
+}
+
+pub fn as_optional_int(value: Option<&Value>) -> Result<Option<i64>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        // Not merged with the number arm: in JSON a boolean is its own type,
+        // and coercing it to 0/1 is what made `position: 1` unusable before.
+        Some(Value::Bool(_)) => Err(ToolError::new("Boolean value is not a valid integer.")),
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| ToolError::new(format!("Expected integer value, got {number}."))),
+        Some(Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed
+                .parse::<i64>()
+                .map(Some)
+                .map_err(|_| ToolError::new(format!("Invalid integer value: {text}")))
+        }
+        Some(other) => Err(ToolError::new(format!(
+            "Expected integer value, got {}.",
+            type_name(other)
+        ))),
+    }
+}
+
+/// `Calendar` weekday numbering, 1 = Sunday, matching `Daily.activeWeekdays`.
+pub fn as_optional_weekdays(value: Option<&Value>) -> Result<Option<Vec<i64>>> {
+    let value = match value {
+        None | Some(Value::Null) => return Ok(None),
+        Some(value) => value,
+    };
+    let Value::Array(items) = value else {
+        return Err(ToolError::new(
+            "active_weekdays must be an array of integers 1-7.",
+        ));
+    };
+
+    let mut weekdays: Vec<i64> = Vec::new();
+    for item in items {
+        let day = match item {
+            Value::Number(number) => number.as_i64(),
+            _ => None,
+        }
+        .filter(|day| (1..=7).contains(day))
+        .ok_or_else(|| {
+            ToolError::new("active_weekdays entries must be integers 1-7 (1 = Sunday).")
+        })?;
+        if !weekdays.contains(&day) {
+            weekdays.push(day);
+        }
+    }
+    if weekdays.is_empty() {
+        return Err(ToolError::new("active_weekdays must not be empty."));
+    }
+    weekdays.sort_unstable();
+    Ok(Some(weekdays))
+}
+
+pub fn required_string(arguments: &Map<String, Value>, key: &str) -> Result<String> {
+    as_string(arguments.get(key))
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| ToolError::new(format!("Missing required argument: {key}")))
+}
+
+pub fn required_int(arguments: &Map<String, Value>, key: &str) -> Result<i64> {
+    as_optional_int(arguments.get(key))?
+        .ok_or_else(|| ToolError::new(format!("Missing required argument: {key}")))
+}
+
+fn type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}

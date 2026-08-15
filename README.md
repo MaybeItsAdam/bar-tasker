@@ -1,55 +1,62 @@
-# <img src="Bar%20Tasker/Assets.xcassets/AppIcon.appiconset/ios-1024.png" alt="Bar Tasker logo" width="28" /> Bar Tasker
+<img src="Priority/Assets.xcassets/AppIcon.appiconset/ios-1024.png" alt="" width="72" align="left" />
 
-Bar Tasker is a keyboard-first macOS menu bar app for working Checkvist lists fast, with quick navigation, due/priority workflows, timers, kanban board, and plugin-based integrations.
+# Priority
 
-## What You Get
+**A keyboard-first macOS menu bar app for working Checkvist lists fast.**
+Quick navigation, priority and due workflows, focus timers, a kanban board, an honest daily log, and a command line that reaches the same data.
 
-- Fast menu bar workflow with minimal mouse usage.
-- Root views for `All`, `Due`, `Tags`, `Priority`, and `Kanban`.
-- Customisable kanban board with drag-to-reorder columns and tag/due-date conditions.
-- Priority badges and due-date awareness surfaced directly on kanban cards.
-- Task start dates with natural language parsing.
-- Named time preferences for reusable time expressions.
-- Recurring task rules.
-- Due-time aware commands (for example `due today 14:30`, `due tomorrow 9am`).
-- Quick-add from keybind to either:
-  - list root, or
-  - a specific parent task ID.
-- Obsidian export/open with folder linking and offline sync queue fallback.
-- Google Calendar event handoff from task metadata.
-- Embedded MCP server for AI assistants.
-- Native-first plugin architecture for all integrations.
-- Dismissable onboarding boxes for Checkvist, Obsidian, and Google Calendar.
+<br clear="left" />
+
+---
+
+Priority lives in the menu bar and is built to be driven without the mouse. Checkvist owns your tasks; Priority adds the things Checkvist has no representation for — priority ranking, start dates, recurrence, focus sessions, daily habits, and a record of what actually happened each day.
+
+It works offline. It works from the terminal. And it exposes the whole surface to an AI assistant over MCP.
+
+- **macOS 15.6+**
+- Repository: [MaybeItsSoftware/priority](https://github.com/MaybeItsSoftware/priority)
+
+## Contents
+
+- [Install](#install) · [First run](#first-run)
+- [Keyboard flow](#keyboard-flow) · [Command palette](#command-palette)
+- [Views](#views) · [The dock row](#the-dock-row)
+- [Daily log](#daily-log) · [Obsidian daily notes](#obsidian-daily-notes)
+- [Command line](#command-line) · [MCP server](#mcp-server) · [Plugins](#plugins)
+- [Build from source](#build-from-source) · [Where your data lives](#where-your-data-lives)
 
 ## Install
 
-1. Download the latest `.dmg` from [Releases](https://github.com/MaybeItsAdam/bar-tasker/releases).
-2. Move `Bar Tasker.app` into `Applications`.
-3. Right-click once and choose **Open** (unsigned app).
+1. Download the latest `.dmg` from [Releases](https://github.com/MaybeItsSoftware/priority/releases).
+2. Drag `Priority.app` into `Applications`.
+3. Right-click it once and choose **Open**.
 
-If Gatekeeper blocks launch:
+The build is signed with a development certificate rather than a Developer ID, so Gatekeeper will ask the first time. If it refuses outright:
 
 ```bash
-xattr -cr /Applications/"Bar Tasker.app"
+xattr -cr /Applications/Priority.app
 ```
 
-## First Run Setup
+Or build it yourself — see [Build from source](#build-from-source).
 
-Open Preferences (`Cmd+,`) and configure:
+## First run
 
-1. Checkvist username
-2. Checkvist remote API key
-3. Checklist/list ID
-4. Global hotkey
-5. Quick-add hotkey and target location
-6. Obsidian inbox folder (optional)
-7. MCP integration controls (optional)
-8. Launch at login toggle (under general Preferences to start the app automatically on system boot)
+Open Preferences with `Cmd+,`:
 
-On first use, optional onboarding boxes can guide setup for Checkvist, Obsidian, and Google Calendar.  
-Each box is dismissable so the app remains usable in offline-first mode.
+| Step | What |
+| --- | --- |
+| 1 | Checkvist username and remote API key (from [checkvist.com/auth/profile](https://checkvist.com/auth/profile)) |
+| 2 | The checklist/list ID to work in |
+| 3 | Global hotkey to toggle the popover |
+| 4 | Quick-add hotkey, and whether it targets the list root or a specific parent |
+| 5 | Day rollover hour — when your day starts, default 04:00 |
+| 6 | Obsidian inbox folder *(optional)* |
+| 7 | MCP integration *(optional)* |
+| 8 | Launch at login |
 
-## Core Keyboard Flow
+Onboarding boxes guide the Checkvist, Obsidian and Google Calendar setup. Each one is dismissable, and the app stays usable offline-first without any of them.
+
+## Keyboard flow
 
 ### Navigation
 
@@ -60,129 +67,261 @@ Each box is dismissable so the app remains usable in offline-first mode.
 | `l` / `→` | Enter subtasks |
 | `h` / `←` | Exit to parent |
 | `Ctrl+←` / `Ctrl+→` | Cycle root view |
-| `q` | Jump to All view |
-| `w` | Jump to Due view |
-| `e` | Jump to Tags view |
-| `r` | Jump to Priority view |
-| `t` | Jump to Kanban view |
+| `q` | All view |
+| `w` | Due view |
+| `e` | Tags view |
+| `r` | Priority view |
+| `t` | Kanban view |
+| `y` | Matrix view |
+| `Shift+T` | Daily view |
 | `Esc` | Cancel input / close popover |
 
 ### Task actions
 
 | Key | Action |
 | --- | --- |
-| `Space` | Complete task |
-| `Shift+Space` | Invalidate task |
+| `Space` | Complete |
+| `Shift+Space` | Invalidate ("won't do") |
 | `Enter` | Add sibling |
 | `Shift+Enter` / `Tab` | Add child |
 | `Shift+Tab` | Unindent |
-| `Shift+A` | Quick-add (configured location) |
+| `Shift+A` | Quick-add at the configured location |
 | `Cmd+↑` / `Cmd+↓` | Move task |
-| `1`–`9` | Set scoped priority rank (within parent) |
-| `Hyper+1`–`Hyper+9` | Set absolute priority rank (`Ctrl+Cmd+Option+Shift`) |
+| `1`–`9` | Scoped priority rank, within the parent |
+| `Hyper+1`–`Hyper+9` | Absolute priority rank (`Ctrl+Cmd+Option+Shift`) |
 | `=` | Send to priority back |
 | `-` | Clear scoped priority |
 | `Hyper+-` | Clear absolute priority |
-| `'` | Start a focus session on the selected task (any view) |
+| `'` | Start a focus session on the selected task, from any view |
 
 ### Kanban
 
 | Key | Action |
 | --- | --- |
-| `h` / `←` | Focus previous column |
-| `l` / `→` | Focus next column |
-| `Cmd+←` | Move task to previous column |
-| `Cmd+→` | Move task to next column |
-| `f` | Show selected task in All view (enters subtasks if present) |
+| `h` / `←` | Previous column |
+| `l` / `→` | Next column |
+| `Cmd+←` / `Cmd+→` | Move task between columns |
+| `f` | Show this task in the All view, entering its subtasks if it has any |
+
+### Dailies
+
+| Key | Action |
+| --- | --- |
+| `j` / `k` | Move through the checklist |
+| `Space` | Tick / un-tick |
+| `Return` | Add a daily — stays open, so a whole routine can be typed in one go |
+| `Cmd+↑` / `Cmd+↓` | Reorder |
+| `Esc` | Close the add field |
 
 ### Integrations
 
 | Key | Action |
 | --- | --- |
-| `o` | Open selected task in Obsidian |
-| `O` | Open in new Obsidian window |
-| `gc` | Add selected task to Google Calendar |
+| `o` | Open the selected task in Obsidian |
+| `O` | Open in a new Obsidian window |
+| `gc` | Add to Google Calendar |
 
-## Command Palette
+## Command palette
 
-Open with `:` / `;` / `Cmd+K`.
+Open with `:`, `;` or `Cmd+K`. Most commands accept several spellings — `unrepeat`, `no repeat`, `remove repeat` and `clear repeat` all do the same thing.
 
-Supported command families:
+| Family | Commands |
+| --- | --- |
+| **Status** | `done`, `undone`, `invalidate`, `delete`, `undo` |
+| **Due** | `due <value>`, `clear due` |
+| **Start date** | `start <value>`, `edit start`, `clear start` |
+| **Repeat** | `repeat <rule>`, `repeat daily`, `repeat every <n> <unit>`, `clear repeat` |
+| **Tags** | `tag <name>`, `untag <name>` |
+| **Priority** | `priority <1-9>`, `priority back`, `clear priority` |
+| **Matrix** | `matrix <quadrant>`, `importance <value>`, `urgency <value>` |
+| **Kanban** | `kanban left` / `right`, `kanban move left` / `right`, `kanban enter`, `kanban exit`, `kanban show in all`, `kanban focus mode` |
+| **View** | `list <name>`, `tab <name>`, `cycle tab next` / `prev`, `cycle filter next` / `prev`, `toggle children`, `toggle subtree`, `toggle context`, `toggle hide future` |
+| **Timer** | `focus mode`, `toggle timer`, `pause timer` |
+| **Obsidian** | `sync obsidian`, `open obsidian new window`, `link` / `create` / `clear obsidian folder`, `choose obsidian inbox` |
+| **Calendar** | `sync google calendar`, `open google calendar` |
+| **MCP** | `mcp guide`, `mcp config`, `copy mcp config`, `refresh mcp path` |
+| **App** | `preferences`, `search`, `quick add`, `refresh lists`, `upload offline tasks` |
 
-- Status: `done`, `undone`, `invalidate`
-- Due: `due <value>`, `clear due`
-- Start date: `start <value>`
-- Repeat: `repeat <rule>`
-- Tags: `tag <name>`, `untag <name>`
-- Priority: `priority <1-9>`, `priority back`, `clear priority`
-- Obsidian: `sync obsidian`, `open obsidian new window`, `link/create/clear obsidian folder`
-- Calendar: `sync google calendar`
+Due values understand natural language and times: `due today 14:30`, `due tomorrow 9am`, `due next week`, `due 4pm fri`, `due next monday morning`. The time words `morning`, `noon`, `afternoon`, `evening`, `midnight`, `eod` and `cob` all resolve to configurable named times.
 
-## Kanban Board
+## Views
 
-The kanban view is accessible via the `Kanban` root tab. Columns are configurable in Preferences and can be filtered by tag or scoped to subtasks of the current task.
+| View | Key | What it shows |
+| --- | --- | --- |
+| **All** | `q` | The full tree |
+| **Due** | `w` | Due and overdue, soonest first |
+| **Tags** | `e` | Grouped by tag |
+| **Priority** | `r` | Your ranked queue |
+| **Kanban** | `t` | Configurable columns, filtered by tag or scoped to subtasks |
+| **Matrix** | `y` | Eisenhower quadrants by importance and urgency |
+| **Daily** | `Shift+T` | Dailies, the chart, and what you finished |
 
-Cards show:
-- Task text (tags stripped from display)
-- Priority badge (`P1`–`P9`) when prioritised
-- Due date with overdue/today highlighting
-- Inline tags
-- Subtask count
+Kanban cards show the task text with tags stripped, a `P1`–`P9` priority badge, the due date with overdue/today highlighting, inline tags, and a subtask count. Columns are configured in Preferences and reorder by drag.
 
-Press `f` on any selected card to jump to it in the All view, with the cursor positioned inside its subtasks if it has any.
+## The dock row
 
-## Plugin System
+A narrow strip along the bottom of the popover, in every view. Right to left:
 
-All external integrations are plugins.
+| Button | Does |
+| --- | --- |
+| ⚙︎ Gear | Preferences |
+| ↻ Refresh | Re-fetch from Checkvist, with a spinner while it runs |
+| ↕ Resize | Reveal the drag strip |
+| ▁▃▅ Graph | Show/hide the Daily chart — **Daily view only** |
 
-- Built-ins:
-  - `NativeCheckvistSyncPlugin`
-  - `NativeObsidianIntegrationPlugin`
-  - `NativeGoogleCalendarIntegrationPlugin`
-  - `NativeMCPIntegrationPlugin`
-- Contracts and registry live under `Bar Tasker/Plugins/`.
-- Plugin authoring guide: [docs/plugins.md](docs/plugins.md)
+**Each root view remembers its own height.** The Daily view stacks a checklist, a chart and a completions list where the All view is a single list, so one shared height would be wrong for one of them at all times. Drag the strip to set a height; double-click it to go back to sizing from the content.
 
-End-user plugin install flow:
-
-- Open `Preferences -> Plugins`
-- Click `Install Plugin` (supports folder, `.zip`, `.bartasker-plugin`)
-- Or drop a plugin folder into:
-  - `~/Library/Application Support/Bar Tasker/Plugins`
-- Use `Open Plugins Folder` and `Reload` in the same Plugins pane
-
-Current scope: built-in plugins are fully functional; user-installed plugins are manifest-driven (settings, metadata, lifecycle) and prepared for runtime capability wiring.
-
-## MCP Server
-
-Bar Tasker includes an MCP stdio server and can run with `--mcp-server`.
-
-- Preferences → Plugins → Native MCP Integration detects the MCP clients installed on your Mac (Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, Zed) and adds Bar Tasker to the one you pick in a single click. Existing servers in that client's config are preserved.
-- Command resolution is app-first with optional script fallback for local dev/debug.
-- Full setup and client examples: [docs/mcp-server.md](docs/mcp-server.md)
-
-## Build From Source
-
-Requirements:
-
-- macOS 15.6+
-- Xcode 17+
-
-Build app and run tests:
+Heights are clamped to 240–900pt on write *and* on read at launch, so a stored value can never put the strip out of reach. If one somehow does:
 
 ```bash
-xcodebuild -project 'Bar Tasker.xcodeproj' -scheme 'Bar Tasker' -configuration Debug -destination 'platform=macOS' build
-swift test
+defaults delete uk.co.maybeitsadam.priority panelHeightOverridesByRootView
 ```
 
-Build DMG:
+Hiding the graph shortens the panel by exactly the chart's height, which turns the Daily view into a compact checklist on days you're only ticking things off.
+
+## Daily log
+
+The Daily view (`Shift+T`) answers "what did I get done, and how does today compare?"
+
+### Dailies
+
+Recurring things you intend to do — habits, not tasks — sitting at the top of the view as a checklist.
+
+- **They reset at every rollover and never go overdue.** Miss one and it's a gap in the history: nothing to clear, nothing to reschedule. That's the whole reason they aren't Checkvist tasks with a `repeat daily` rule — a recurring *task* goes overdue and starts competing with real deadlines.
+- **They're local.** Stored in `~/Library/Application Support/Priority/dailies.json`, so "brush teeth" never clutters your project lists or syncs to other Checkvist clients. Ticking one is instant and works offline.
+- **Ticks land in the same log as task completions**, so they count towards the chart and appear in the Obsidian note.
+- **Schedules and archiving** live in `Preferences → Plugins → Daily Log` — every day, or specific weekdays. Removing a daily archives it, so past days keep their record instead of showing an orphaned id.
+
+### What the day records
+
+- **Recording is always on and always local.** Completions, reopens, invalidations, finished focus sessions and the day's plan are appended to `~/Library/Application Support/Priority/daylog.jsonl` — one JSON object per line, so it stays readable with `tail`, and a torn write costs one event rather than the file.
+- **Checkvist owns current state, the log owns history, Obsidian owns the archive.** Nothing syncs backwards, so there is no conflict resolution anywhere in this.
+- **The day's plan is derived, not authored.** At the first popover open after your rollover hour, whatever is due, overdue or starting that day is snapshotted. That's what "N left" measures against — you never plan a day by hand.
+- **Deferring is not slipping.** Pushing a due date forward is recorded distinctly from letting a task rot, so the view doesn't nag about a decision you made deliberately.
+- **The day starts at your rollover hour, not midnight** (default 04:00), so a session finishing at 01:30 counts towards the day it belonged to.
+- **No backfill.** History starts the day you first run this build. The chart is drawn from day one regardless — a flat run of days is a true statement about a history that has just started — with a "collecting since" line underneath until the window fills.
+
+## Obsidian daily notes
+
+In `Preferences → Plugins → Daily Log`, point Priority at your dailies folder and set the note naming to match your vault (`yyyy-MM-dd` by default; a subfolder pattern like `yyyy/MM` nests them). The preview line shows exactly which note today's block would land in. Then switch on "Write days into Obsidian daily notes", which stays disabled until a folder is chosen.
+
+Once a day closes, its block is spliced into that day's note:
+
+```markdown
+<!-- priority:begin -->
+## Log
+
+**5 done** · **2/3 dailies** · **1h 40m focused** · 2 of 7 planned left
+
+_Dailies:_
+- [x] Read
+- [x] Walk
+- [ ] Stretch
+
+- [x] Ship the DMG
+- [x] Review the sync PR
+
+_Unfinished:_
+- [ ] Write release notes
+<!-- priority:end -->
+```
+
+Only the text between the markers is ever touched, and rewriting a day replaces its own block rather than stacking a second one. **Creating missing notes is off by default**, so the plugin can't beat a Templater or Daily Notes template to the file — turn it on only if nothing else builds your dailies.
+
+## Command line
+
+`priority` is a Rust CLI covering the same ground: your lists, your dailies, your day log. It talks to the Checkvist API directly and reads Priority's local files off disk, so it works whether or not the app is running — and its writes take the same `flock(2)` the app does, so both can be open at once.
 
 ```bash
+./scripts/install_cli.sh     # release build + a symlink onto your PATH
+priority auth login
+
+priority tasks
+priority add Draft the release notes --due friday
+priority search -q report --due-before 2026-09-01
+priority daily add Read for twenty minutes --weekdays mon,wed,fri
+priority log --days 7
+priority --json dailies | jq '.dailies[] | select(.done | not)'
+```
+
+Its credentials are its own, in `~/.config/priority/config.json` at mode 0600 — separate from the app's login-keychain item, so neither depends on how the other was built or signed. The dailies, log and metadata commands need no credentials at all.
+
+Every command is one of the MCP tools under a friendlier name, and the same binary serves them over MCP with `priority --mcp-server`.
+
+**Full guide: [docs/cli.md](docs/cli.md)**
+
+## MCP server
+
+Priority exposes **19 MCP tools** so an AI assistant can work with your lists directly — thirteen that reach the Checkvist API, and six for the local state Checkvist has no representation for (day log, dailies, priority ranks and recurrence).
+
+Set it up from `Preferences → Plugins → Native MCP Integration`. It detects Claude Code, Claude Desktop, Cursor, Windsurf, VS Code and Zed, and adds Priority to the one you pick in a single click, preserving any servers already in that client's config.
+
+There are three interchangeable implementations — the one embedded in the app, a dependency-free Python fallback script, and the Rust CLI. A client may be pointed at any of them, so `scripts/mcp_parity_check.py` drives all three against a fixture and a stub API and diffs their tool lists, their answers, the files they leave on disk, and the HTTP requests they make.
+
+**Full guide: [docs/mcp-server.md](docs/mcp-server.md)**
+
+## Plugins
+
+Every external integration is a plugin behind a protocol.
+
+Built in: `NativeCheckvistSyncPlugin`, `NativeObsidianIntegrationPlugin`, `NativeGoogleCalendarIntegrationPlugin`, `NativeMCPIntegrationPlugin`, `NativeDailyLogPlugin`, `OfflineTaskSyncPlugin`.
+
+To install your own, open `Preferences → Plugins` and click **Install Plugin** (folder, `.zip`, or `.priority-plugin`), or drop a plugin folder into `~/Library/Application Support/Priority/Plugins` and hit **Reload**.
+
+Built-in plugins are fully functional; user-installed plugins are manifest-driven (settings, metadata, lifecycle) and prepared for runtime capability wiring.
+
+**Authoring guide: [docs/plugins.md](docs/plugins.md)**
+
+## Build from source
+
+Requirements: macOS 15.6+, Xcode 17+, and [Rust](https://rustup.rs) for the CLI.
+
+```bash
+git clone https://github.com/MaybeItsSoftware/priority.git
+cd priority
+
+# The app
+xcodebuild -project 'Priority.xcodeproj' -scheme 'Priority' -configuration Debug -destination 'platform=macOS' build
+
+# Headless logic (303 tests)
+swift test
+
+# The CLI (48 tests)
+cargo test --manifest-path cli/Cargo.toml
+
+# All three MCP servers agree
+cargo build --release --manifest-path cli/Cargo.toml
+python3 scripts/mcp_parity_check.py
+
+# Build + launch Debug, or produce a release DMG
+./scripts/run.sh
 ./scripts/build_dmg.sh <version>
 ```
 
-Swift Package name: `bar-tasker-core`  
-Core module name: `BarTaskerCore`
+### Layout
+
+| Path | What |
+| --- | --- |
+| `Priority/` | The macOS app. `CoreLogic/` is pure, headless, UI-free logic. |
+| `Priority/Plugins/` | Integration plugins, one folder each, behind protocols |
+| `cli/` | The Rust CLI crate — shares no source with the Swift side |
+| `scripts/` | Build, install, the Python MCP fallback, and the parity check |
+| `docs/` | [CLI](docs/cli.md) · [MCP](docs/mcp-server.md) · [plugins](docs/plugins.md) · [state ownership](docs/state-ownership.md) |
+
+The same source tree is compiled by two build systems: the Xcode project builds the app, and `Package.swift` exposes `PriorityCore`, `PriorityPlugins` and `PriorityAppLogic` as SPM libraries so the headless logic can be tested without the app shell. Adding or moving a file often means updating `Package.swift` too — see [CLAUDE.md](CLAUDE.md).
+
+## Where your data lives
+
+| Path | What |
+| --- | --- |
+| `~/Library/Application Support/Priority/` | Dailies, day log, task cache, installed plugins |
+| `~/Library/Preferences/uk.co.maybeitsadam.priority.plist` | Settings, priority ranks, recurrence rules, start dates |
+| Login keychain, service `uk.co.maybeitsadam.priority` | The app's Checkvist remote key |
+| `~/.config/priority/config.json` | The CLI's own credentials, mode 0600 |
+
+Nothing is sent anywhere except Checkvist, and Google Calendar or Obsidian if you enable them.
+
+> Upgrading from **Bar Tasker**? Everything is carried across automatically on first launch — preferences, dailies, the day log and your keychain item. The old locations are copied rather than moved, so they stay on disk until you delete them.
 
 ## License
 

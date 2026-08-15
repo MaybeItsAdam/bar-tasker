@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import BarTaskerPlugins
+@testable import PriorityPlugins
 
 final class UserPluginManifestTests: XCTestCase {
   func testManifestDecodesDescriptionIntoSummary() throws {

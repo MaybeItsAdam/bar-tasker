@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import BarTaskerPlugins
+@testable import PriorityPlugins
 
 @MainActor
 final class NativeObsidianIntegrationPluginTests: XCTestCase {

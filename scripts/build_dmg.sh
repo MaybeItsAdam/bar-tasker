@@ -3,16 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$ROOT_DIR"
-XCODEPROJ="$PROJECT_DIR/Bar Tasker.xcodeproj"
-SCHEME="Bar Tasker"
-APP_NAME="Bar Tasker.app"
-VOL_NAME="Bar Tasker"
+XCODEPROJ="$PROJECT_DIR/Priority.xcodeproj"
+SCHEME="Priority"
+APP_NAME="Priority.app"
+VOL_NAME="Priority"
 
 VERSION="${1:-}"
 if [[ -n "$VERSION" ]]; then
-  DMG_BASENAME="bar-tasker-v${VERSION}"
+  DMG_BASENAME="priority-v${VERSION}"
 else
-  DMG_BASENAME="bar-tasker-$(date +%Y%m%d-%H%M%S)"
+  DMG_BASENAME="priority-$(date +%Y%m%d-%H%M%S)"
 fi
 
 # Distributing outside the Mac App Store needs a "Developer ID Application"
@@ -21,7 +21,7 @@ fi
 # so loudly rather than handing over a DMG that fails on first launch.
 SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
   | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
-NOTARY_PROFILE="${NOTARY_PROFILE:-bar-tasker-notary}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-priority-notary}"
 DISTRIBUTABLE=0
 
 if [[ -n "$SIGN_IDENTITY" ]]; then
@@ -34,7 +34,7 @@ else
 fi
 
 BUILD_DIR="$PROJECT_DIR/build"
-DERIVED_DIR="/tmp/bar-tasker-derived-release"
+DERIVED_DIR="/tmp/priority-derived-release"
 STAGE_DIR="$BUILD_DIR/dmg-stage"
 RW_DMG="$BUILD_DIR/${DMG_BASENAME}-rw.dmg"
 FINAL_DMG="$BUILD_DIR/${DMG_BASENAME}.dmg"

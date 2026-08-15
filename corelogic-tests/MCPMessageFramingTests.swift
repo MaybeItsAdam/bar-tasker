@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import BarTaskerCore
+@testable import PriorityCore
 
 final class MCPMessageFramingTests: XCTestCase {
   private func text(_ data: Data?) -> String? {

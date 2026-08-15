@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import BarTaskerPlugins
+@testable import PriorityPlugins
 
 @MainActor
 final class UserPluginManagerLoadingTests: XCTestCase {
@@ -127,7 +127,7 @@ final class UserPluginManagerLoadingTests: XCTestCase {
   /// developer's real preferences (it persists plugin enablement state), so runs
   /// leak into each other and into the local app install.
   private func makeIsolatedDefaults() -> UserDefaults {
-    let suiteName = "bar-tasker-plugin-tests-\(UUID().uuidString)"
+    let suiteName = "priority-plugin-tests-\(UUID().uuidString)"
     guard let defaults = UserDefaults(suiteName: suiteName) else {
       XCTFail("Could not create an isolated UserDefaults suite.")
       return .standard
@@ -138,7 +138,7 @@ final class UserPluginManagerLoadingTests: XCTestCase {
 
   private func makeTemporaryPluginsRoot() throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "bar-tasker-plugin-loading-tests-\(UUID().uuidString)",
+      "priority-plugin-loading-tests-\(UUID().uuidString)",
       isDirectory: true
     )
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

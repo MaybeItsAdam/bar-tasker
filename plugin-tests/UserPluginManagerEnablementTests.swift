@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import BarTaskerPlugins
+@testable import PriorityPlugins
 
 /// Covers which plugins end up enabled after a reload. The rule is:
 /// auto-enable on first discovery, then never touch the user's choice again.
@@ -102,7 +102,7 @@ final class UserPluginManagerEnablementTests: XCTestCase {
   /// falling back to `.standard` would read and write the developer's real
   /// preferences and leak state between runs.
   private func makeIsolatedDefaults() -> UserDefaults {
-    let suiteName = "bar-tasker-enablement-tests-\(UUID().uuidString)"
+    let suiteName = "priority-enablement-tests-\(UUID().uuidString)"
     guard let defaults = UserDefaults(suiteName: suiteName) else {
       XCTFail("Could not create an isolated UserDefaults suite.")
       return .standard
@@ -113,7 +113,7 @@ final class UserPluginManagerEnablementTests: XCTestCase {
 
   private func makeTemporaryPluginsRoot() throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "bar-tasker-enablement-tests-\(UUID().uuidString)",
+      "priority-enablement-tests-\(UUID().uuidString)",
       isDirectory: true
     )
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

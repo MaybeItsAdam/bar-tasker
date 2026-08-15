@@ -1,0 +1,671 @@
+import Foundation
+import OSLog
+import Observation
+
+/// A task creation that was attempted while offline and is awaiting replay.
+struct PendingTaskCreate: Sendable, Codable {
+  let tempId: Int
+  let content: String
+  let parentId: Int?
+  let position: Int?
+}
+
+/// A close/reopen/invalidate action queued while offline.
+struct PendingTaskAction: Sendable, Codable {
+  let taskId: Int
+  let action: CheckvistTaskAction
+}
+
+/// The on-disk shape of a pending update (content/due) — mirrors the
+/// in-memory tuple in `TaskRepository.pendingTaskMutations` for Codable's
+/// sake (tuples aren't Codable).
+struct PendingTaskUpdate: Sendable, Codable {
+  let content: String?
+  let due: String?
+}
+
+@MainActor
+@Observable class TaskRepository {
+  @ObservationIgnored private let logger = Logger(
+    subsystem: "uk.co.maybeitsadam.priority", category: "repository")
+
+  // MARK: - Dependencies
+
+  @ObservationIgnored let preferencesStore: PreferencesStore
+  @ObservationIgnored let localTaskStore: LocalTaskStore
+  @ObservationIgnored let pendingOfflineWorkStore: PendingOfflineWorkStore
+  @ObservationIgnored let checkvistSyncPlugin: any CheckvistSyncPlugin
+  @ObservationIgnored let offlineSyncPlugin: OfflineTaskSyncPlugin
+  @ObservationIgnored let reorderQueue = ReorderQueue()
+  @ObservationIgnored let priorityQueueStore: ListScopedPriorityStore
+  @ObservationIgnored let absolutePriorityQueueStore: ListScopedTaskIDStore
+  @ObservationIgnored let legacyPriorityQueueStore: ListScopedTaskIDStore
+  @ObservationIgnored let eisenhowerStore: ListScopedEisenhowerStore
+  @ObservationIgnored let cacheInvalidationBus: CacheInvalidationBus
+
+  // MARK: - Callbacks
+
+  @ObservationIgnored var onUsernameChanged: (() -> Void)?
+  @ObservationIgnored var onRemoteKeyChanged: ((String) -> Void)?
+  @ObservationIgnored var onListIdChanged: ((String) -> Void)?
+
+  // MARK: - Constants
+
+  /// Keyboard rank bounds (1...9); also used by legacy migration.
+  static let maxPriorityRank = 9
+  private static let priorityQueuesDefaultsKey = "priorityTaskIdsByListId"
+  private static let scopedPriorityQueuesDefaultsKey = "priorityTaskIdsByParentIdByListId"
+  private static let absolutePriorityQueuesDefaultsKey = "absolutePriorityTaskIdsByListId"
+  private static let eisenhowerLevelsDefaultsKey = "eisenhowerLevelsByTaskIdByListId"
+
+  // MARK: - Task Data
+
+  var tasks: [CheckvistTask] = [] {
+    didSet { cacheInvalidationBus.invalidate() }
+  }
+  var availableLists: [CheckvistList] = [] {
+    didSet { cacheInvalidationBus.invalidate() }
+  }
+
+  // MARK: - Auth / Connection
+
+  var username: String {
+    didSet {
+      preferencesStore.set(username, for: .checkvistUsername)
+      onUsernameChanged?()
+    }
+  }
+  var remoteKey: String {
+    didSet {
+      guard remoteKey != oldValue else { return }
+      onRemoteKeyChanged?(remoteKey)
+    }
+  }
+  var listId: String {
+    didSet {
+      preferencesStore.set(listId, for: .checkvistListId)
+      loadPriorityQueue(for: listId)
+      loadAbsolutePriorityQueue(for: listId)
+      loadEisenhowerLevels(for: listId)
+      onListIdChanged?(listId)
+    }
+  }
+  var checkvistIntegrationEnabled: Bool {
+    didSet {
+      guard checkvistIntegrationEnabled != oldValue else { return }
+      preferencesStore.set(checkvistIntegrationEnabled, for: .checkvistIntegrationEnabled)
+      cacheInvalidationBus.invalidate()
+      onCheckvistIntegrationEnabledChanged?()
+    }
+  }
+  @ObservationIgnored var onCheckvistIntegrationEnabledChanged: (() -> Void)?
+
+  // MARK: - UI State
+
+  var isLoading: Bool = false
+  var errorMessage: String?
+  var isNetworkReachable: Bool = true {
+    didSet { cacheInvalidationBus.invalidate() }
+  }
+
+  // MARK: - Priority
+
+  /// Per-parent priority queues. Key = parent task id (0 = root). No cap per scope.
+  var priorityTaskIdsByParentId: [Int: [Int]] {
+    didSet { cacheInvalidationBus.invalidate() }
+  }
+
+  /// Convenience: flattened set of all prioritized task ids across every scope.
+  var prioritizedTaskIds: Set<Int> {
+    Set(priorityTaskIdsByParentId.values.flatMap { $0 })
+  }
+  /// Global absolute-priority queue across all tasks in the list.
+  var absolutePriorityTaskIds: [Int] {
+    didSet { cacheInvalidationBus.invalidate() }
+  }
+  var taskEisenhowerLevels: [Int: EisenhowerLevel] = [:] {
+    didSet { cacheInvalidationBus.invalidate() }
+  }
+
+  var absolutePrioritizedTaskIds: Set<Int> {
+    Set(absolutePriorityTaskIds)
+  }
+
+  // MARK: - Offline State
+
+  /// Updates (content/due) that failed to reach Checkvist while offline.
+  /// Replayed by `SyncService.flushPendingTaskMutations` on reconnect.
+  @ObservationIgnored var pendingTaskMutations: [Int: (content: String?, due: String?)] = [:]
+  /// Task creates that failed while offline. `tempId` is the optimistic
+  /// (negative) id currently sitting in `tasks`; on replay we map it to the
+  /// real server id so dependent actions/updates/deletes can be retargeted.
+  @ObservationIgnored var pendingTaskCreates: [PendingTaskCreate] = []
+  /// close/reopen/invalidate actions queued while offline. `taskId` may be
+  /// negative if it refers to a task in `pendingTaskCreates`.
+  @ObservationIgnored var pendingTaskActions: [PendingTaskAction] = []
+  /// Deletes queued while offline. May contain negative ids referring to
+  /// `pendingTaskCreates`; resolved at flush time.
+  @ObservationIgnored var pendingTaskDeletes: [Int] = []
+  @ObservationIgnored var loadingOperationCount: Int = 0
+  @ObservationIgnored var hasAttemptedRemoteKeyBootstrap: Bool = false
+
+  /// True when any offline-queued work is awaiting a reconnect flush.
+  var hasPendingOfflineWork: Bool {
+    !pendingTaskMutations.isEmpty
+      || !pendingTaskCreates.isEmpty
+      || !pendingTaskActions.isEmpty
+      || !pendingTaskDeletes.isEmpty
+  }
+
+  /// Wipes the in-memory queues *and* the on-disk payload. Use this when the
+  /// queued work is being abandoned (list switch) or has been successfully
+  /// drained — callers that want to re-stash on failure should re-enqueue
+  /// after calling this.
+  func clearPendingOfflineWork() {
+    pendingTaskMutations = [:]
+    pendingTaskCreates = []
+    pendingTaskActions = []
+    pendingTaskDeletes = []
+    pendingOfflineWorkStore.clear()
+  }
+
+  // MARK: - Pending-queue enqueue helpers (write-through to disk)
+
+  /// Append a create and persist. Call instead of mutating
+  /// `pendingTaskCreates` directly so the on-disk payload stays in sync.
+  func enqueuePendingCreate(_ create: PendingTaskCreate) {
+    pendingTaskCreates.append(create)
+    persistPendingOfflineWork()
+  }
+
+  /// Append an action (close/reopen/invalidate) and persist.
+  func enqueuePendingAction(_ action: PendingTaskAction) {
+    pendingTaskActions.append(action)
+    persistPendingOfflineWork()
+  }
+
+  /// Append a delete and persist. `taskId` may be a negative temp id when
+  /// the delete refers to a still-pending create.
+  func enqueuePendingDelete(_ taskId: Int) {
+    pendingTaskDeletes.append(taskId)
+    persistPendingOfflineWork()
+  }
+
+  /// Record (or overwrite) an update for `taskId` and persist.
+  func enqueuePendingMutation(taskId: Int, content: String?, due: String?) {
+    pendingTaskMutations[taskId] = (content: content, due: due)
+    persistPendingOfflineWork()
+  }
+
+  /// Drop any queued work that targets a still-pending temp create. Returns
+  /// `true` if the create was found and cancelled — callers (delete) can use
+  /// that to short-circuit the round-trip create+delete on the server.
+  @discardableResult
+  func cancelPendingCreate(tempId: Int) -> Bool {
+    guard let idx = pendingTaskCreates.firstIndex(where: { $0.tempId == tempId }) else {
+      return false
+    }
+    pendingTaskCreates.remove(at: idx)
+    pendingTaskActions.removeAll { $0.taskId == tempId }
+    pendingTaskMutations.removeValue(forKey: tempId)
+    pendingTaskDeletes.removeAll { $0 == tempId }
+    persistPendingOfflineWork()
+    return true
+  }
+
+  private func persistPendingOfflineWork() {
+    let codableMutations = pendingTaskMutations.mapValues {
+      PendingTaskUpdate(content: $0.content, due: $0.due)
+    }
+    pendingOfflineWorkStore.save(
+      PendingOfflineWorkPayload(
+        listId: listId,
+        creates: pendingTaskCreates,
+        actions: pendingTaskActions,
+        deletes: pendingTaskDeletes,
+        mutations: codableMutations))
+  }
+
+  // MARK: - Computed Properties
+
+  var hasCredentials: Bool {
+    !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !remoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+  var canAttemptLogin: Bool { hasCredentials }
+  var hasListSelection: Bool {
+    !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+  var checkvistConnectionState: CheckvistConnectionState {
+    if !hasCredentials { return .disconnected }
+    if availableLists.isEmpty {
+      return isLoading ? .connecting : .awaitingConnect
+    }
+    return .connected(listCount: availableLists.count)
+  }
+  /// True when the Checkvist integration is enabled, credentials are present,
+  /// and the user has chosen a list — i.e. when the remote sync plugin is the
+  /// active route. When false, mutations and fetches go through the offline
+  /// store. This is the single source of truth for plugin-switch state; do not
+  /// re-derive `!checkvistIntegrationEnabled || !hasListSelection || ...`
+  /// elsewhere in the app.
+  var canSyncRemotely: Bool {
+    checkvistIntegrationEnabled && hasListSelection && hasCredentials
+  }
+  var offlineOpenTaskCount: Int { localTaskStore.load().openTasks.count }
+  var activeCredentials: CheckvistCredentials {
+    CheckvistCredentials(username: username, remoteKey: remoteKey)
+  }
+  var activeSyncPlugin: any CheckvistSyncPlugin {
+    canSyncRemotely ? checkvistSyncPlugin : offlineSyncPlugin
+  }
+
+  // MARK: - Init
+
+  init(
+    preferencesStore: PreferencesStore,
+    checkvistSyncPlugin: any CheckvistSyncPlugin,
+    localTaskStore: LocalTaskStore,
+    // Defaulted to `nil` rather than `PendingOfflineWorkStore()` so it can pick
+    // up the injected `defaults` below. The eager default silently ignored
+    // `defaults:` and always wrote the offline queue to `UserDefaults.standard`,
+    // which leaked queued work between tests — and between any two repositories
+    // that thought they were isolated.
+    pendingOfflineWorkStore: PendingOfflineWorkStore? = nil,
+    initialRemoteKey: String,
+    cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus(),
+    defaults: UserDefaults = .standard
+  ) {
+    self.preferencesStore = preferencesStore
+    self.checkvistSyncPlugin = checkvistSyncPlugin
+    self.localTaskStore = localTaskStore
+    let resolvedPendingOfflineWorkStore =
+      pendingOfflineWorkStore ?? PendingOfflineWorkStore(defaults: defaults)
+    self.pendingOfflineWorkStore = resolvedPendingOfflineWorkStore
+    self.cacheInvalidationBus = cacheInvalidationBus
+    self.offlineSyncPlugin = OfflineTaskSyncPlugin(localStore: localTaskStore)
+    self.priorityQueueStore = ListScopedPriorityStore(
+      defaultsKey: Self.scopedPriorityQueuesDefaultsKey,
+      defaults: defaults
+    )
+    self.absolutePriorityQueueStore = ListScopedTaskIDStore(
+      defaultsKey: Self.absolutePriorityQueuesDefaultsKey,
+      defaults: defaults
+    )
+    self.legacyPriorityQueueStore = ListScopedTaskIDStore(
+      defaultsKey: Self.priorityQueuesDefaultsKey,
+      maximumCount: Self.maxPriorityRank,
+      defaults: defaults
+    )
+    self.eisenhowerStore = ListScopedEisenhowerStore(
+      defaultsKey: Self.eisenhowerLevelsDefaultsKey,
+      defaults: defaults
+    )
+
+    let offlinePayload = localTaskStore.load()
+    let storedUsername = preferencesStore.string(.checkvistUsername)
+    let storedListId = preferencesStore.string(.checkvistListId)
+
+    let hasLegacyCheckvist =
+      !storedUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !storedListId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let storedIntegrationEnabled = preferencesStore.optionalBool(.checkvistIntegrationEnabled)
+    let resolvedIntegrationEnabled = storedIntegrationEnabled ?? hasLegacyCheckvist
+
+    self.checkvistIntegrationEnabled = resolvedIntegrationEnabled
+    self.username = storedUsername
+    self.listId = storedListId
+    self.remoteKey = initialRemoteKey
+    let isOfflineAtLaunch =
+      !resolvedIntegrationEnabled
+      || storedListId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || initialRemoteKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    self.tasks = isOfflineAtLaunch ? offlinePayload.openTasks : []
+    self.priorityTaskIdsByParentId = Self.loadScopedPriorities(
+      scoped: priorityQueueStore,
+      legacy: legacyPriorityQueueStore,
+      listId: storedListId
+    )
+    self.absolutePriorityTaskIds = absolutePriorityQueueStore.load(for: storedListId)
+    self.taskEisenhowerLevels = eisenhowerStore.load(for: storedListId)
+
+    // Restore offline-queued work for the current list. A payload scoped to a
+    // different list is dropped — replaying its mutations against the active
+    // list would silently target the wrong tasks.
+    let pendingPayload = resolvedPendingOfflineWorkStore.load()
+    if !pendingPayload.isEmpty && pendingPayload.listId == storedListId {
+      self.pendingTaskCreates = pendingPayload.creates
+      self.pendingTaskActions = pendingPayload.actions
+      self.pendingTaskDeletes = pendingPayload.deletes
+      self.pendingTaskMutations = pendingPayload.mutations.mapValues {
+        (content: $0.content, due: $0.due)
+      }
+      // Re-insert the optimistic placeholders so the user sees their
+      // unsynced tasks immediately — `fetchTopTask` after a reconnect will
+      // replace them with the real server tasks once the queued creates
+      // replay.
+      for create in pendingPayload.creates where !self.tasks.contains(where: {
+        $0.id == create.tempId
+      }) {
+        self.tasks.append(
+          CheckvistTask(
+            id: create.tempId,
+            content: create.content,
+            status: 0,
+            due: nil,
+            position: create.position,
+            parentId: create.parentId,
+            level: nil
+          ))
+      }
+    } else if !pendingPayload.isEmpty {
+      resolvedPendingOfflineWorkStore.clear()
+    }
+  }
+}
+
+// MARK: - Loading Helpers
+
+extension TaskRepository {
+  @MainActor func beginLoading() {
+    loadingOperationCount += 1
+    isLoading = true
+  }
+
+  @MainActor func endLoading() {
+    loadingOperationCount = max(loadingOperationCount - 1, 0)
+    isLoading = loadingOperationCount > 0
+  }
+
+  @MainActor func withLoadingState<T>(_ operation: () async throws -> T) async rethrows -> T {
+    beginLoading()
+    defer { endLoading() }
+    return try await operation()
+  }
+
+  @MainActor func setAuthenticationRequiredErrorIfNeeded() {
+    if errorMessage == nil {
+      errorMessage = "Authentication required."
+    }
+  }
+
+  @MainActor func runBooleanMutation(
+    failureMessage: String,
+    errorMessageBuilder: @escaping (Error) -> String = { "Error: \($0.localizedDescription)" },
+    action: () async throws -> Bool,
+    onSuccess: @MainActor () async -> Void
+  ) async {
+    do {
+      let success = try await action()
+      if success {
+        await onSuccess()
+      } else {
+        errorMessage = failureMessage
+      }
+    } catch CheckvistSessionError.authenticationUnavailable {
+      setAuthenticationRequiredErrorIfNeeded()
+    } catch {
+      self.errorMessage = errorMessageBuilder(error)
+    }
+  }
+}
+
+// MARK: - Priority Queue
+
+extension TaskRepository {
+  static func normalizedTaskIdQueue(_ queue: [Int], maximumCount: Int? = nil) -> [Int] {
+    var seen = Set<Int>()
+    var normalized: [Int] = []
+    for taskId in queue where taskId > 0 && !seen.contains(taskId) {
+      seen.insert(taskId)
+      normalized.append(taskId)
+    }
+    if let maximumCount, normalized.count > maximumCount {
+      return Array(normalized.prefix(maximumCount))
+    }
+    return normalized
+  }
+
+  static func loadScopedPriorities(
+    scoped: ListScopedPriorityStore,
+    legacy: ListScopedTaskIDStore,
+    listId: String
+  ) -> [Int: [Int]] {
+    let byParent = scoped.load(for: listId)
+    if !byParent.isEmpty { return byParent }
+    let legacyFlat = legacy.load(for: listId)
+    guard !legacyFlat.isEmpty else { return [:] }
+    // Migrate the legacy flat queue to root-scope. We don't have parentId info at this
+    // point (tasks not loaded yet), so drop the legacy key into root. Re-scoping happens
+    // on the next reconcile once tasks are loaded.
+    return [0: legacyFlat]
+  }
+
+  func loadPriorityQueue(for listId: String) {
+    priorityTaskIdsByParentId = Self.loadScopedPriorities(
+      scoped: priorityQueueStore,
+      legacy: legacyPriorityQueueStore,
+      listId: listId
+    )
+  }
+
+  func savePriorityQueue(_ queues: [Int: [Int]]) {
+    var normalized: [Int: [Int]] = [:]
+    for (parentId, ids) in queues {
+      let dedup = ListScopedPriorityStore.normalizedQueue(ids)
+      if !dedup.isEmpty { normalized[parentId] = dedup }
+    }
+    priorityTaskIdsByParentId = normalized
+    priorityQueueStore.save(normalized, for: listId)
+  }
+
+  func loadAbsolutePriorityQueue(for listId: String) {
+    absolutePriorityTaskIds = absolutePriorityQueueStore.load(for: listId)
+  }
+
+  func saveAbsolutePriorityQueue(_ queue: [Int]) {
+    let normalized = Self.normalizedTaskIdQueue(queue)
+    absolutePriorityTaskIds = normalized
+    absolutePriorityQueueStore.save(normalized, for: listId)
+  }
+
+  @MainActor func setAbsolutePriority(taskId: Int, rank: Int) {
+    guard taskId > 0, rank >= 1 else { return }
+    var queue = absolutePriorityTaskIds.filter { $0 != taskId }
+    let insertIndex = min(max(rank - 1, 0), queue.count)
+    queue.insert(taskId, at: insertIndex)
+    saveAbsolutePriorityQueue(queue)
+  }
+
+  @MainActor func clearAbsolutePriority(taskId: Int) {
+    guard taskId > 0 else { return }
+    guard absolutePriorityTaskIds.contains(taskId) else { return }
+    saveAbsolutePriorityQueue(absolutePriorityTaskIds.filter { $0 != taskId })
+  }
+
+  @MainActor func removeTasksFromPriorityQueue(_ taskIds: Set<Int>) {
+    guard !taskIds.isEmpty else { return }
+    var changed = false
+    var updated = priorityTaskIdsByParentId
+    for (parentId, ids) in updated {
+      let filtered = ids.filter { !taskIds.contains($0) }
+      if filtered.count != ids.count {
+        changed = true
+        if filtered.isEmpty {
+          updated.removeValue(forKey: parentId)
+        } else {
+          updated[parentId] = filtered
+        }
+      }
+    }
+    let filteredAbsolute = absolutePriorityTaskIds.filter { !taskIds.contains($0) }
+    if filteredAbsolute.count != absolutePriorityTaskIds.count {
+      changed = true
+    }
+    guard changed else { return }
+    savePriorityQueue(updated)
+    if filteredAbsolute != absolutePriorityTaskIds {
+      saveAbsolutePriorityQueue(filteredAbsolute)
+    }
+    reconcileEisenhowerLevels()
+  }
+
+  @MainActor func reconcilePriorityQueueWithOpenTasks() {
+    let tasksById = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
+    let openTaskIds = Set(tasks.map(\.id))
+    var updated: [Int: [Int]] = [:]
+    var changed = false
+    for (parentId, ids) in priorityTaskIdsByParentId {
+      for id in ids {
+        guard openTaskIds.contains(id) else { changed = true; continue }
+        // Re-scope each task under its *actual* current parent. This keeps stored
+        // queues coherent if a task was moved, and also normalizes legacy-migrated
+        // queues that all landed under root scope.
+        let actualParent = tasksById[id]?.parentId ?? 0
+        if actualParent != parentId { changed = true }
+        updated[actualParent, default: []].append(id)
+      }
+    }
+    if changed {
+      savePriorityQueue(updated)
+    }
+
+    let filteredAbsolute = absolutePriorityTaskIds.filter { openTaskIds.contains($0) }
+    if filteredAbsolute != absolutePriorityTaskIds {
+      saveAbsolutePriorityQueue(filteredAbsolute)
+    }
+    reconcileEisenhowerLevels()
+  }
+}
+
+// MARK: - Eisenhower Matrix
+
+extension TaskRepository {
+  func loadEisenhowerLevels(for listId: String) {
+    taskEisenhowerLevels = eisenhowerStore.load(for: listId)
+  }
+
+  func saveEisenhowerLevels(_ levels: [Int: EisenhowerLevel]) {
+    taskEisenhowerLevels = levels
+    eisenhowerStore.save(levels, for: listId)
+  }
+
+  @MainActor func setUrgency(taskId: Int, level: Double) {
+    var updated = taskEisenhowerLevels
+    var current = updated[taskId] ?? .zero
+    current.urgency = level
+    updated[taskId] = current
+    saveEisenhowerLevels(updated)
+  }
+
+  @MainActor func setImportance(taskId: Int, level: Double) {
+    var updated = taskEisenhowerLevels
+    var current = updated[taskId] ?? .zero
+    current.importance = level
+    updated[taskId] = current
+    saveEisenhowerLevels(updated)
+  }
+
+  @MainActor func reconcileEisenhowerLevels() {
+    let openTaskIds = Set(tasks.map(\.id))
+    let filtered = taskEisenhowerLevels.filter { openTaskIds.contains($0.key) }
+    if filtered.count != taskEisenhowerLevels.count {
+      saveEisenhowerLevels(filtered)
+    }
+  }
+}
+
+// MARK: - API
+
+extension TaskRepository {
+  @MainActor func login() async -> Bool {
+    let credentials = activeCredentials
+    guard !credentials.normalizedUsername.isEmpty, !credentials.normalizedRemoteKey.isEmpty else {
+      errorMessage = "Username or Remote Key is missing."
+      return false
+    }
+
+    errorMessage = nil
+
+    do {
+      return try await withLoadingState {
+        let success = try await checkvistSyncPlugin.login(credentials: credentials)
+        guard success else {
+          errorMessage = "Login failed. Check your credentials."
+          return false
+        }
+        return true
+      }
+    } catch {
+      errorMessage = "Network error: \(error.localizedDescription)"
+      return false
+    }
+  }
+
+  @MainActor func fetchLists() async -> Bool {
+    do {
+      let lists = try await checkvistSyncPlugin.fetchLists(credentials: activeCredentials)
+      self.availableLists = lists
+      return true
+    } catch CheckvistSessionError.authenticationUnavailable {
+      setAuthenticationRequiredErrorIfNeeded()
+      return false
+    } catch {
+      self.errorMessage = "Failed to fetch lists: \(error.localizedDescription)"
+      return false
+    }
+  }
+
+  @MainActor func loadCheckvistLists(assignFirstIfMissing: Bool = false) async -> Bool {
+    let success = await login()
+    guard success else { return false }
+    let didFetchLists = await fetchLists()
+    guard didFetchLists else { return false }
+
+    if assignFirstIfMissing, listId.isEmpty, let first = availableLists.first {
+      listId = String(first.id)
+    }
+    return true
+  }
+
+  @MainActor func selectList(_ list: CheckvistList) {
+    listId = String(list.id)
+  }
+
+  func copyTasks(_ sourceTasks: [CheckvistTask], to destinationListId: String) async throws
+    -> (mergedCount: Int, skippedCount: Int)
+  {
+    var migratedBySourceTaskID: [Int: Int] = [:]
+    var mergedCount = 0
+    var skippedCount = 0
+
+    for sourceTask in sourceTasks {
+      let resolvedParentID = sourceTask.parentId.flatMap { migratedBySourceTaskID[$0] }
+      guard
+        let created = try await checkvistSyncPlugin.createTask(
+          listId: destinationListId,
+          content: sourceTask.content,
+          parentId: resolvedParentID,
+          position: nil,
+          credentials: activeCredentials
+        )
+      else {
+        skippedCount += 1
+        continue
+      }
+
+      migratedBySourceTaskID[sourceTask.id] = created.id
+      if let due = sourceTask.due, !due.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        _ = try await checkvistSyncPlugin.updateTask(
+          listId: destinationListId,
+          taskId: created.id,
+          content: nil,
+          due: due,
+          credentials: activeCredentials
+        )
+      }
+      mergedCount += 1
+    }
+
+    return (mergedCount, skippedCount)
+  }
+}

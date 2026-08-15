@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import BarTaskerPlugins
+@testable import PriorityPlugins
 
 @MainActor
 final class NativeMCPIntegrationPluginTests: XCTestCase {
@@ -43,6 +43,6 @@ final class NativeMCPIntegrationPluginTests: XCTestCase {
     let data = try XCTUnwrap(json.data(using: .utf8))
     let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     let servers = try XCTUnwrap(object?["mcpServers"] as? [String: Any])
-    return try XCTUnwrap(servers["bar-tasker"] as? [String: Any])
+    return try XCTUnwrap(servers["priority"] as? [String: Any])
   }
 }

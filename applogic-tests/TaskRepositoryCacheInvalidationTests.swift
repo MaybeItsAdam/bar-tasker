@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import BarTaskerAppLogic
+@testable import PriorityAppLogic
 
 /// Documents which `TaskRepository` mutations fire the shared
 /// `CacheInvalidationBus`. Phase 2 of the architecture plan replaced the

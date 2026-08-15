@@ -1,6 +1,6 @@
 import Foundation
 
-@testable import BarTaskerAppLogic
+@testable import PriorityAppLogic
 
 /// Stands in for `AppCoordinator` when exercising `TaskMutationService` and
 /// `SyncService`.
@@ -113,6 +113,12 @@ final class StubTaskServiceHost: TaskMutationHost, SyncHost {
 
   func savePendingObsidianSyncQueue(_ taskIds: [Int], listId: String) {
     pendingObsidianSyncTaskIds = taskIds
+  }
+
+  var dayLogTaskActions: [(taskId: Int, title: String, action: CheckvistTaskAction)] = []
+
+  func recordDayLogTaskAction(taskId: Int, title: String, action: CheckvistTaskAction) {
+    dayLogTaskActions.append((taskId, title, action))
   }
 
   func presentOnboardingDialogIfNeeded() {

@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import BarTaskerPlugins
+@testable import PriorityPlugins
 
 @MainActor
 final class NativeGoogleCalendarIntegrationPluginTests: XCTestCase {
@@ -68,7 +68,7 @@ final class NativeGoogleCalendarIntegrationPluginTests: XCTestCase {
   }
 
   private func makeIsolatedDefaults() -> UserDefaults {
-    let suite = "bar-tasker-plugin-tests-google-\(UUID().uuidString)"
+    let suite = "priority-plugin-tests-google-\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite) ?? .standard
     defaults.removePersistentDomain(forName: suite)
     return defaults

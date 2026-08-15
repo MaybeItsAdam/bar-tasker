@@ -1,0 +1,123 @@
+import Foundation
+
+@MainActor
+final class PluginRegistry {
+  private(set) var checkvistSyncPluginsByIdentifier: [String: any CheckvistSyncPlugin] = [:]
+  private(set) var obsidianPluginsByIdentifier: [String: any ObsidianIntegrationPlugin] = [:]
+  private(set) var googleCalendarPluginsByIdentifier:
+    [String: any GoogleCalendarIntegrationPlugin] =
+      [:]
+  private(set) var mcpIntegrationPluginsByIdentifier: [String: any MCPIntegrationPlugin] = [:]
+  private(set) var dailyLogPluginsByIdentifier: [String: any DailyLogPlugin] = [:]
+
+  private(set) var activeCheckvistSyncPluginIdentifier: String?
+  private(set) var activeObsidianPluginIdentifier: String?
+  private(set) var activeGoogleCalendarPluginIdentifier: String?
+  private(set) var activeMCPIntegrationPluginIdentifier: String?
+  private(set) var activeDailyLogPluginIdentifier: String?
+
+  var activeCheckvistSyncPlugin: (any CheckvistSyncPlugin)? {
+    guard let activeCheckvistSyncPluginIdentifier else { return nil }
+    return checkvistSyncPluginsByIdentifier[activeCheckvistSyncPluginIdentifier]
+  }
+
+  var activeObsidianPlugin: (any ObsidianIntegrationPlugin)? {
+    guard let activeObsidianPluginIdentifier else { return nil }
+    return obsidianPluginsByIdentifier[activeObsidianPluginIdentifier]
+  }
+
+  var activeGoogleCalendarPlugin: (any GoogleCalendarIntegrationPlugin)? {
+    guard let activeGoogleCalendarPluginIdentifier else { return nil }
+    return googleCalendarPluginsByIdentifier[activeGoogleCalendarPluginIdentifier]
+  }
+
+  var activeMCPIntegrationPlugin: (any MCPIntegrationPlugin)? {
+    guard let activeMCPIntegrationPluginIdentifier else { return nil }
+    return mcpIntegrationPluginsByIdentifier[activeMCPIntegrationPluginIdentifier]
+  }
+
+  var activeDailyLogPlugin: (any DailyLogPlugin)? {
+    guard let activeDailyLogPluginIdentifier else { return nil }
+    return dailyLogPluginsByIdentifier[activeDailyLogPluginIdentifier]
+  }
+
+  func register(_ plugin: any CheckvistSyncPlugin, activate: Bool = false) {
+    checkvistSyncPluginsByIdentifier[plugin.pluginIdentifier] = plugin
+    if activate || activeCheckvistSyncPluginIdentifier == nil {
+      activeCheckvistSyncPluginIdentifier = plugin.pluginIdentifier
+    }
+  }
+
+  func register(_ plugin: any ObsidianIntegrationPlugin, activate: Bool = false) {
+    obsidianPluginsByIdentifier[plugin.pluginIdentifier] = plugin
+    if activate || activeObsidianPluginIdentifier == nil {
+      activeObsidianPluginIdentifier = plugin.pluginIdentifier
+    }
+  }
+
+  func register(_ plugin: any GoogleCalendarIntegrationPlugin, activate: Bool = false) {
+    googleCalendarPluginsByIdentifier[plugin.pluginIdentifier] = plugin
+    if activate || activeGoogleCalendarPluginIdentifier == nil {
+      activeGoogleCalendarPluginIdentifier = plugin.pluginIdentifier
+    }
+  }
+
+  func register(_ plugin: any MCPIntegrationPlugin, activate: Bool = false) {
+    mcpIntegrationPluginsByIdentifier[plugin.pluginIdentifier] = plugin
+    if activate || activeMCPIntegrationPluginIdentifier == nil {
+      activeMCPIntegrationPluginIdentifier = plugin.pluginIdentifier
+    }
+  }
+
+  func register(_ plugin: any DailyLogPlugin, activate: Bool = false) {
+    dailyLogPluginsByIdentifier[plugin.pluginIdentifier] = plugin
+    if activate || activeDailyLogPluginIdentifier == nil {
+      activeDailyLogPluginIdentifier = plugin.pluginIdentifier
+    }
+  }
+
+  @discardableResult
+  func activateCheckvistSyncPlugin(identifier: String) -> Bool {
+    guard checkvistSyncPluginsByIdentifier[identifier] != nil else { return false }
+    activeCheckvistSyncPluginIdentifier = identifier
+    return true
+  }
+
+  @discardableResult
+  func activateObsidianPlugin(identifier: String) -> Bool {
+    guard obsidianPluginsByIdentifier[identifier] != nil else { return false }
+    activeObsidianPluginIdentifier = identifier
+    return true
+  }
+
+  @discardableResult
+  func activateGoogleCalendarPlugin(identifier: String) -> Bool {
+    guard googleCalendarPluginsByIdentifier[identifier] != nil else { return false }
+    activeGoogleCalendarPluginIdentifier = identifier
+    return true
+  }
+
+  @discardableResult
+  func activateMCPIntegrationPlugin(identifier: String) -> Bool {
+    guard mcpIntegrationPluginsByIdentifier[identifier] != nil else { return false }
+    activeMCPIntegrationPluginIdentifier = identifier
+    return true
+  }
+
+  @discardableResult
+  func activateDailyLogPlugin(identifier: String) -> Bool {
+    guard dailyLogPluginsByIdentifier[identifier] != nil else { return false }
+    activeDailyLogPluginIdentifier = identifier
+    return true
+  }
+
+  static func nativeFirst() -> PluginRegistry {
+    let registry = PluginRegistry()
+    registry.register(NativeCheckvistSyncPlugin(), activate: true)
+    registry.register(NativeObsidianIntegrationPlugin(), activate: true)
+    registry.register(NativeGoogleCalendarIntegrationPlugin(), activate: true)
+    registry.register(NativeMCPIntegrationPlugin(), activate: true)
+    registry.register(NativeDailyLogPlugin(), activate: true)
+    return registry
+  }
+}

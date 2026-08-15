@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import BarTaskerAppLogic
+@testable import PriorityAppLogic
 
 final class OfflineReplayPolicyTests: XCTestCase {
   func testRealIdsPassThroughUnchanged() {

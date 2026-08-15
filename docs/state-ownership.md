@@ -120,11 +120,11 @@ The Phase-3 forwarder cull is finished: `AppCoordinator` no longer re-exposes
 directly — no coordinator forwarder hop.
 
 `SyncService` and `TaskMutationService` no longer hold `AppCoordinator` at all: they take a
-`weak` `SyncHost` / `TaskMutationHost` (`Bar Tasker/TaskServiceHosts.swift`), which
+`weak` `SyncHost` / `TaskMutationHost` (`Priority/TaskServiceHosts.swift`), which
 `AppCoordinator` conforms to in `AppCoordinator+ServiceHosts.swift`. Anything those services
 need from a sibling manager — selection, undo, quick-entry focus, kanban ordering, recurrence
 rules, the completion haptics — is a host member rather than a `coordinator.someManager.X`
-reach-through, which is what lets both services live in `BarTaskerAppLogic` and be tested
+reach-through, which is what lets both services live in `PriorityAppLogic` and be tested
 against `StubTaskServiceHost`. When you give one of them a new dependency, add it to the host
 protocol.
 
