@@ -28,20 +28,26 @@ as the menu bar app, and the same keys to reach them.
 ```
  All q │ Due w │ Tags e │ Priority r │ Kanban t │ Matrix y │ Daily d
 ┌ All ───────────────────────────────────────────────────────────────┐
-│▎[ ] Ship v0.4                                                      │
-│   [ ] Draft the release notes  #work                               │
-│   [x] Tag the commit                                               │
-│ [ ] Buy milk  #home                                                │
+│▎▾ [ ] Ship v0.4                                                    │
+│   ▸ [ ] Draft the release notes  #work                             │
+│     [x] Tag the commit                                             │
+│   ▸ [ ] Buy milk  #home                                            │
 └────────────────────────────────────────────────────────────────────┘
- j/k move · l/h in-out · space done · a add · ? help · esc quit
+ j/k move · l/h open-shut · ] [ zoom · space done · a add · ? help · esc quit
 ```
+
+Tasks start shut. `l` opens one and its subtasks appear indented underneath;
+`▸` marks a task with something behind it and `▾` one that's open. What's open
+is remembered per list between runs, in `outline.json` beside the config file —
+separately from the app, which keeps its own.
 
 | Key | Action |
 | --- | --- |
 | `q` `w` `e` `r` `t` `y` `d` | Jump to All, Due, Tags, Priority, Kanban, Matrix, Daily |
 | `tab` / `shift-tab` | Cycle tabs |
 | `j` `k` or `↓` `↑` | Move |
-| `l` `h` or `→` `←` | Enter / leave subtasks (All tab) |
+| `l` `h` or `→` `←` | Open / shut a task's subtasks, then step in and back out |
+| `]` `[` | Zoom the list into the selected task, and back out (All tab) |
 | `space` | Complete a task, reopen a closed one, or tick a daily |
 | `u` | Reopen |
 | `x` | Mark "won't do" |

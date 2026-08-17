@@ -10,6 +10,7 @@ use crate::tui::state::{self, App, Data, Row, Tab, rows_for};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 
 // -- fixtures -----------------------------------------------------------------
 
@@ -142,11 +143,29 @@ fn the_tab_bar_shows_every_view_at_once() {
 // -- All ----------------------------------------------------------------------
 
 #[test]
-fn the_all_tab_indents_children_under_their_parent() {
-    let app = App::new(sample());
-    let rows = app.rows();
+fn the_all_tab_starts_collapsed_and_expands_a_task_underneath_it() {
+    let mut app = App::new(sample());
+    // Only the two root tasks: subtasks are behind their parent until asked for.
     assert_eq!(
-        rows,
+        app.rows(),
+        vec![
+            Row::Task {
+                index: 0,
+                depth: 0,
+                badge: None
+            },
+            Row::Task {
+                index: 3,
+                depth: 0,
+                badge: None
+            },
+        ]
+    );
+
+    app.expand_or_descend(); // on "Ship v0.4"
+    assert!(app.expanded.contains(&1));
+    assert_eq!(
+        app.rows(),
         vec![
             Row::Task {
                 index: 0,
@@ -173,8 +192,93 @@ fn the_all_tab_indents_children_under_their_parent() {
 }
 
 #[test]
+fn right_again_steps_into_the_children_and_left_walks_back_out() {
+    let mut app = App::new(sample());
+    app.expand_or_descend(); // opens "Ship v0.4"
+    assert_eq!(app.selected, 0);
+
+    app.expand_or_descend(); // steps onto the first child
+    assert_eq!(app.selected, 1);
+
+    app.collapse_or_ascend(); // back up to the parent row
+    assert_eq!(app.selected, 0);
+    assert!(app.expanded.contains(&1));
+
+    app.collapse_or_ascend(); // shuts it
+    assert!(app.expanded.is_empty());
+    assert_eq!(app.rows().len(), 2);
+}
+
+#[test]
+fn right_on_a_task_without_subtasks_does_nothing() {
+    let mut app = App::new(sample());
+    app.selected = 1; // "Buy milk", a leaf
+    app.expand_or_descend();
+    assert!(app.expanded.is_empty());
+    assert_eq!(app.selected, 1);
+}
+
+#[test]
+fn expansion_works_on_the_grouped_tabs_too() {
+    let mut app = App::new(sample());
+    app.select_tab(Tab::Due);
+    // "Buy milk" is the only task in LATER; its parent-less row can't expand,
+    // so expand the overdue "Draft the release notes" parent instead.
+    app.expanded.insert(1);
+    let rows = app.rows();
+    // "Ship v0.4" isn't due, so it isn't listed — expanding it changes nothing
+    // here, and the tab keeps its own membership rules.
+    assert!(
+        rows.iter()
+            .all(|row| !matches!(row, Row::Task { depth, .. } if *depth > 0))
+    );
+}
+
+#[test]
+fn a_child_listed_beside_its_expanded_parent_is_shown_once_underneath_it() {
+    // Both are overdue, so the Due tab lists both at the top level.
+    let mut data = sample();
+    data.tasks[0] = task(1, 0, "Ship v0.4", 0, Some("2026-08-14"));
+
+    let rows = rows_for(Tab::Due, &data, None, &HashSet::from([1]));
+    let tasks: Vec<&Row> = rows
+        .iter()
+        .filter(|row| matches!(row, Row::Task { .. }))
+        .collect();
+    assert_eq!(
+        tasks,
+        vec![
+            &Row::Task {
+                index: 0,
+                depth: 0,
+                badge: Some("2026-08-14".into())
+            },
+            &Row::Task {
+                index: 1,
+                depth: 1,
+                badge: None
+            },
+            &Row::Task {
+                index: 2,
+                depth: 1,
+                badge: None
+            },
+            &Row::Task {
+                index: 3,
+                depth: 0,
+                badge: Some("2999-01-01".into())
+            },
+        ]
+    );
+    // The header counts what the bucket holds, not the rows it now spans.
+    assert!(matches!(&rows[0], Row::Header(text) if text == "OVERDUE  (1)"));
+}
+
+#[test]
 fn inline_tags_are_stripped_from_the_task_text_and_shown_separately() {
-    let text = rendered(&App::new(sample()));
+    let mut app = App::new(sample());
+    app.expanded.insert(1); // the tagged task is a subtask
+    let text = rendered(&app);
     assert!(text.contains("Draft the release notes"));
     // Rendered as its own coloured span, not left in the middle of the title.
     assert!(!text.contains("release notes #work"));
@@ -183,7 +287,9 @@ fn inline_tags_are_stripped_from_the_task_text_and_shown_separately() {
 
 #[test]
 fn a_completed_task_is_marked_done() {
-    let text = rendered(&App::new(sample()));
+    let mut app = App::new(sample());
+    app.expanded.insert(1); // the closed task is a subtask
+    let text = rendered(&app);
     assert!(
         text.contains("[x] Tag the commit"),
         "expected a closed marker:\n{text}"
@@ -215,13 +321,14 @@ fn entering_a_task_scopes_the_list_to_its_subtasks() {
 
     app.exit_scope();
     assert_eq!(app.scope, None);
-    assert_eq!(app.rows().len(), 4);
+    // Back to the two root tasks, still collapsed.
+    assert_eq!(app.rows().len(), 2);
 }
 
 #[test]
 fn entering_a_task_with_no_subtasks_says_so_rather_than_emptying_the_screen() {
     let mut app = App::new(sample());
-    app.selected = 3; // "Buy milk", a leaf
+    app.selected = 1; // "Buy milk", a leaf
     app.enter_scope();
     assert_eq!(app.scope, None);
     assert_eq!(app.status.as_deref(), Some("No subtasks"));
@@ -241,7 +348,7 @@ fn scoping_is_confined_to_the_all_tab() {
 
 #[test]
 fn the_due_tab_groups_by_overdue_today_and_later() {
-    let rows = rows_for(Tab::Due, &sample(), None);
+    let rows = rows_for(Tab::Due, &sample(), None, &HashSet::new());
     let headers: Vec<&String> = rows
         .iter()
         .filter_map(|row| match row {
@@ -273,7 +380,7 @@ fn nothing_due_says_so() {
         ..Data::default()
     };
     assert_eq!(
-        rows_for(Tab::Due, &data, None),
+        rows_for(Tab::Due, &data, None, &HashSet::new()),
         vec![Row::Note("Nothing due.".into())]
     );
 }
@@ -282,7 +389,7 @@ fn nothing_due_says_so() {
 
 #[test]
 fn the_tags_tab_groups_by_tag_and_keeps_the_untagged_together() {
-    let rows = rows_for(Tab::Tags, &sample(), None);
+    let rows = rows_for(Tab::Tags, &sample(), None, &HashSet::new());
     let headers: Vec<String> = rows
         .iter()
         .filter_map(|row| match row {
@@ -310,7 +417,7 @@ fn tags_are_read_from_the_array_the_dictionary_and_the_content() {
 
 #[test]
 fn the_priority_tab_orders_by_rank_and_labels_the_scope() {
-    let rows = rows_for(Tab::Priority, &sample(), None);
+    let rows = rows_for(Tab::Priority, &sample(), None, &HashSet::new());
     let rendered: Vec<String> = rows
         .iter()
         .map(|row| match row {
@@ -339,7 +446,7 @@ fn no_priorities_points_at_where_they_are_set() {
         tasks: vec![task(1, 0, "a", 0, None)],
         ..Data::default()
     };
-    let rows = rows_for(Tab::Priority, &data, None);
+    let rows = rows_for(Tab::Priority, &data, None, &HashSet::new());
     assert!(matches!(&rows[0], Row::Note(text) if text.contains("1-9")));
 }
 
@@ -349,7 +456,7 @@ fn no_priorities_points_at_where_they_are_set() {
 fn the_daily_tab_counts_only_the_dailies_expected_today() {
     // "Stretch" is a weekday habit that isn't due, so it is neither done nor
     // outstanding and must not drag the ratio down.
-    let rows = rows_for(Tab::Daily, &sample(), None);
+    let rows = rows_for(Tab::Daily, &sample(), None, &HashSet::new());
     assert!(
         matches!(&rows[0], Row::Header(text) if text == "DAILIES  (1/1)"),
         "{:?}",
@@ -379,11 +486,11 @@ fn without_credentials_the_checkvist_tabs_explain_and_the_daily_tab_still_works(
     };
 
     for tab in [Tab::All, Tab::Due, Tab::Tags, Tab::Priority] {
-        let rows = rows_for(tab, &data, None);
+        let rows = rows_for(tab, &data, None, &HashSet::new());
         assert!(matches!(&rows[0], Row::Note(text) if text.contains("Missing credentials")));
     }
 
-    let daily = rows_for(Tab::Daily, &data, None);
+    let daily = rows_for(Tab::Daily, &data, None, &HashSet::new());
     assert!(
         daily.iter().any(|row| matches!(row, Row::Daily { .. })),
         "{daily:?}"
@@ -453,7 +560,8 @@ fn help_lists_the_bindings_and_covers_the_screen() {
     app.show_help = true;
     let text = rendered(&app);
     assert!(text.contains("Jump to a tab"));
-    assert!(text.contains("Enter / leave subtasks"));
+    assert!(text.contains("Open / shut subtasks"));
+    assert!(text.contains("Zoom into a task"));
     assert!(text.contains("mirror the menu bar app"));
 }
 
@@ -485,7 +593,7 @@ fn it_renders_in_a_small_terminal_without_panicking() {
 fn a_task_lands_in_the_first_column_it_matches() {
     // "Draft the release notes" is overdue *and* has no matching tag, so it
     // belongs to Today; "Buy milk" is far-future but tagged #home.
-    let rows = rows_for(Tab::Kanban, &sample(), None);
+    let rows = rows_for(Tab::Kanban, &sample(), None, &HashSet::new());
     let laid_out: Vec<String> = rows
         .iter()
         .map(|row| match row {
@@ -516,7 +624,7 @@ fn a_catch_all_column_only_takes_what_the_others_left() {
         .as_array_mut()
         .unwrap()
         .pop();
-    let rows = rows_for(Tab::Kanban, &data, None);
+    let rows = rows_for(Tab::Kanban, &data, None, &HashSet::new());
     assert_eq!(
         rows.iter()
             .filter(|row| matches!(row, Row::Task { .. }))
@@ -532,7 +640,7 @@ fn no_configured_columns_says_where_to_set_them() {
         ..sample()
     };
     assert!(
-        matches!(&rows_for(Tab::Kanban, &data, None)[0], Row::Note(text) if text.contains("app"))
+        matches!(&rows_for(Tab::Kanban, &data, None, &HashSet::new())[0], Row::Note(text) if text.contains("app"))
     );
 }
 
@@ -587,7 +695,7 @@ fn due_buckets_match_the_apps_classification() {
 
 #[test]
 fn the_matrix_splits_into_quadrants_on_zero() {
-    let rows = rows_for(Tab::Matrix, &sample(), None);
+    let rows = rows_for(Tab::Matrix, &sample(), None, &HashSet::new());
     let laid_out: Vec<String> = rows
         .iter()
         .map(|row| match row {
@@ -613,7 +721,7 @@ fn the_matrix_splits_into_quadrants_on_zero() {
 fn a_task_at_the_origin_is_not_placed_at_all() {
     // Task 3 sits at (0, 0) in the fixture: it has not been judged, and
     // calling that "eliminate" would be putting words in the user's mouth.
-    let rows = rows_for(Tab::Matrix, &sample(), None);
+    let rows = rows_for(Tab::Matrix, &sample(), None, &HashSet::new());
     assert!(
         !rows
             .iter()
@@ -628,6 +736,6 @@ fn an_empty_matrix_points_at_how_to_fill_it() {
         ..sample()
     };
     assert!(
-        matches!(&rows_for(Tab::Matrix, &data, None)[0], Row::Note(text) if text.contains("`m`"))
+        matches!(&rows_for(Tab::Matrix, &data, None, &HashSet::new())[0], Row::Note(text) if text.contains("`m`"))
     );
 }

@@ -6,10 +6,11 @@
 //! the terminal cannot do anything the other two can't, or do it differently.
 //!
 //! The tabs and their keys mirror `RootTaskView` in the app — `q` `w` `e` `r`
-//! to jump, `j`/`k` to move, `l`/`h` to walk into subtasks, `space` to
-//! complete. Someone who knows the popover should not have to learn a second
-//! set of habits.
+//! to jump, `j`/`k` to move, `l`/`h` to open and shut a task's subtasks in
+//! place, `]`/`[` to zoom the list into one, `space` to complete. Someone who
+//! knows the popover should not have to learn a second set of habits.
 
+pub mod outline;
 mod render;
 pub mod state;
 #[cfg(test)]
@@ -17,6 +18,7 @@ mod tests;
 
 use crate::error::{Result, ToolError};
 use crate::tools::Tools;
+use crate::tui::outline::OutlineStore;
 use crate::tui::state::{App, Data, Tab};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde_json::{Map, Value, json};
@@ -33,7 +35,11 @@ pub fn run(tools: Tools) -> Result<()> {
         ));
     }
 
-    let mut app = App::new(load(&tools));
+    // No list to scope it to (no credentials yet) means no remembered outline,
+    // which is right: the Daily tab is all that works in that state anyway.
+    let list_id = tools.client.resolve_list_id(None).unwrap_or_default();
+    let outline = OutlineStore::beside_config(&crate::config::Config::default_path(), &list_id);
+    let mut app = App::with_outline(load(&tools), outline);
 
     // `ratatui::init` installs a panic hook that restores the terminal, so a
     // crash can't leave the user in raw mode with no echo.
@@ -171,8 +177,12 @@ fn handle_key(app: &mut App, tools: &Tools, key: KeyEvent) {
 
         KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
         KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
-        KeyCode::Char('l') | KeyCode::Right => app.enter_scope(),
-        KeyCode::Char('h') | KeyCode::Left => app.exit_scope(),
+        // `l`/`h` open and shut a task in place, as in the app; `]`/`[` are the
+        // pair that changes what the whole list is showing, also as in the app.
+        KeyCode::Char('l') | KeyCode::Right => app.expand_or_descend(),
+        KeyCode::Char('h') | KeyCode::Left => app.collapse_or_ascend(),
+        KeyCode::Char(']') => app.enter_scope(),
+        KeyCode::Char('[') => app.exit_scope(),
 
         KeyCode::Char(' ') => toggle_selected(app, tools),
         KeyCode::Char('u') => act_on_task(app, tools, "task_reopen", "Reopened"),

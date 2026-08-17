@@ -110,8 +110,19 @@ fn list_item<'a>(app: &App, row: &Row) -> ListItem<'a> {
             };
             let done = crate::checkvist::status_of(task) != 0;
 
+            // A disclosure marker rather than a bare indent: without it, a
+            // collapsed parent looks exactly like a leaf.
+            let marker = if !state::has_children(&app.data, task) {
+                "  "
+            } else if app.expanded.contains(&state::id_of(task)) {
+                "▾ "
+            } else {
+                "▸ "
+            };
+
             let mut spans = vec![
                 Span::styled("  ".repeat(*depth), Style::default()),
+                Span::styled(marker.to_string(), Style::default().fg(MUTED)),
                 Span::styled(
                     format!("{} ", state::status_marker(task)),
                     Style::default().fg(if done { MUTED } else { Color::Reset }),
@@ -208,8 +219,8 @@ fn footer(app: &App) -> Paragraph<'static> {
 
     let hint = match app.tab {
         Tab::Daily => " j/k move · space tick · a add · ? help · esc quit",
-        Tab::All => " j/k move · l/h in-out · space done · a add · ? help · esc quit",
-        _ => " j/k move · space done · a add · ? help · esc quit",
+        Tab::All => " j/k move · l/h open-shut · ] [ zoom · space done · a add · ? help · esc quit",
+        _ => " j/k move · l/h open-shut · space done · a add · ? help · esc quit",
     };
     Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(MUTED))))
 }
@@ -224,7 +235,8 @@ fn render_help(frame: &mut Frame, area: Rect) {
         help_row("q w e r t y d", "Jump to a tab, as in the app"),
         help_row("tab / shift-tab", "Cycle tabs"),
         help_row("j k  ↓ ↑", "Move"),
-        help_row("l h  → ←", "Enter / leave subtasks (All)"),
+        help_row("l h  → ←", "Open / shut subtasks; step in and out"),
+        help_row("] [", "Zoom into a task, and back out (All)"),
         help_row("space", "Complete a task, or tick a daily"),
         help_row("u", "Reopen a completed task"),
         help_row("x", "Mark won't do"),

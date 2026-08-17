@@ -10,8 +10,10 @@
 //! popover should not have to learn a second set of habits for the terminal.
 
 use crate::checkvist::{parent_id_of, status_of};
+use crate::tui::outline::OutlineStore;
 use chrono::Local;
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -143,35 +145,48 @@ pub struct App {
     pub data: Data,
     pub tab: Tab,
     pub selected: usize,
-    /// The task whose subtasks the All tab is scoped to, as `h`/`l` walk the
-    /// tree. `None` is the list root.
+    /// The task the All tab is zoomed into, as `]`/`[` walk the tree. `None` is
+    /// the list root.
     pub scope: Option<i64>,
+    /// Tasks whose children are shown indented underneath them, as `l`/`h`
+    /// open and shut them. Remembered per list between runs.
+    pub expanded: HashSet<i64>,
     pub status: Option<String>,
     /// The text being typed after `a`. `Some` means every key goes to the
     /// buffer rather than to the bindings.
     pub input: Option<String>,
     pub show_help: bool,
     pub should_quit: bool,
+    outline: OutlineStore,
 }
 
 impl App {
+    /// An app with no remembered outline. Tests only — the real one always has
+    /// a store, even when that store is disabled for want of a list id.
+    #[cfg(test)]
     pub fn new(data: Data) -> Self {
+        Self::with_outline(data, OutlineStore::disabled())
+    }
+
+    pub fn with_outline(data: Data, outline: OutlineStore) -> Self {
         let mut app = App {
             data,
             tab: Tab::All,
             selected: 0,
             scope: None,
+            expanded: outline.load(),
             status: None,
             input: None,
             show_help: false,
             should_quit: false,
+            outline,
         };
         app.clamp_selection();
         app
     }
 
     pub fn rows(&self) -> Vec<Row> {
-        rows_for(self.tab, &self.data, self.scope)
+        rows_for(self.tab, &self.data, self.scope, &self.expanded)
     }
 
     pub fn selected_row(&self) -> Option<Row> {
@@ -243,7 +258,60 @@ impl App {
         }
     }
 
-    /// `l` — descend into the selected task's subtasks, if it has any.
+    /// `l` — open the selected row, then step into what it shows. The list
+    /// keeps its scope; `]` is what changes that.
+    pub fn expand_or_descend(&mut self) {
+        let Some(id) = self.selected_task_id() else {
+            return;
+        };
+        if !self.has_children(id) {
+            return;
+        }
+        if self.expanded.insert(id) {
+            self.outline.save(&self.expanded);
+            return;
+        }
+        let rows = self.rows();
+        let Some(depth) = row_depth(&rows, self.selected) else {
+            return;
+        };
+        if row_depth(&rows, self.selected + 1) == Some(depth + 1) {
+            self.selected += 1;
+        }
+    }
+
+    /// `h` — shut the selected row, step up to the parent showing it, or leave
+    /// the scope, in that order.
+    pub fn collapse_or_ascend(&mut self) {
+        if let Some(id) = self.selected_task_id()
+            && self.expanded.remove(&id)
+        {
+            self.outline.save(&self.expanded);
+            self.clamp_selection();
+            return;
+        }
+        let rows = self.rows();
+        match row_depth(&rows, self.selected) {
+            Some(depth) if depth > 0 => {
+                if let Some(parent) = (0..self.selected)
+                    .rev()
+                    .find(|index| row_depth(&rows, *index).is_some_and(|other| other < depth))
+                {
+                    self.selected = parent;
+                }
+            }
+            _ => self.exit_scope(),
+        }
+    }
+
+    fn has_children(&self, task_id: i64) -> bool {
+        self.data
+            .tasks
+            .iter()
+            .any(|task| parent_id_of(task) == task_id)
+    }
+
+    /// `]` — descend into the selected task's subtasks, if it has any.
     pub fn enter_scope(&mut self) {
         guard_all_tab(self, |app| {
             let Some(id) = app.selected_task_id() else {
@@ -259,7 +327,7 @@ impl App {
         });
     }
 
-    /// `h` — back out to the parent of whatever we're scoped to.
+    /// `[` — back out to the parent of whatever we're scoped to.
     pub fn exit_scope(&mut self) {
         guard_all_tab(self, |app| {
             let Some(current) = app.scope else { return };
@@ -294,9 +362,17 @@ fn guard_all_tab(app: &mut App, body: impl FnOnce(&mut App)) {
     }
 }
 
+/// The indent of a row, or `None` when it isn't a task row.
+fn row_depth(rows: &[Row], index: usize) -> Option<usize> {
+    match rows.get(index) {
+        Some(Row::Task { depth, .. }) => Some(*depth),
+        _ => None,
+    }
+}
+
 // -- row building -------------------------------------------------------------
 
-pub fn rows_for(tab: Tab, data: &Data, scope: Option<i64>) -> Vec<Row> {
+pub fn rows_for(tab: Tab, data: &Data, scope: Option<i64>, expanded: &HashSet<i64>) -> Vec<Row> {
     if tab.needs_checkvist()
         && let Some(error) = &data.task_error
     {
@@ -307,13 +383,175 @@ pub fn rows_for(tab: Tab, data: &Data, scope: Option<i64>) -> Vec<Row> {
     }
 
     match tab {
-        Tab::All => all_rows(data, scope),
-        Tab::Due => due_rows(data),
-        Tab::Tags => tag_rows(data),
-        Tab::Priority => priority_rows(data),
-        Tab::Kanban => kanban_rows(data),
-        Tab::Matrix => matrix_rows(data),
+        Tab::All => all_rows(data, scope, expanded),
+        Tab::Due => due_rows(data, expanded),
+        Tab::Tags => tag_rows(data, expanded),
+        Tab::Priority => priority_rows(data, expanded),
+        Tab::Kanban => kanban_rows(data, expanded),
+        Tab::Matrix => matrix_rows(data, expanded),
         Tab::Daily => daily_rows(data),
+    }
+}
+
+// -- the outline ---------------------------------------------------------------
+
+/// One task in a group: its index into `data.tasks`, and the badge that group
+/// wants shown beside it.
+type Member = (usize, Option<String>);
+/// A titled run of tasks — a due bucket, a tag, a kanban column, a quadrant.
+/// The count in the header is added here rather than by the builders, because
+/// expanding a row can move a task from one group into another.
+type Group = (String, Vec<Member>);
+
+fn task_id_at(data: &Data, index: usize) -> Option<i64> {
+    data.task(index)?.get("id")?.as_i64()
+}
+
+fn children_by_parent(data: &Data) -> HashMap<i64, Vec<usize>> {
+    let mut children: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (index, task) in data.tasks.iter().enumerate() {
+        children.entry(parent_id_of(task)).or_default().push(index);
+    }
+    children
+}
+
+/// Assembles grouped tabs into rows, with each expanded task followed by its
+/// children, indented.
+///
+/// A task listed in its own right *and* sitting under an expanded ancestor
+/// appears once, under the ancestor — the same rule the app's
+/// `TaskOutlineBuilder` follows, so the two don't disagree about what an open
+/// outline looks like.
+fn grouped_rows(groups: Vec<Group>, data: &Data, expanded: &HashSet<i64>) -> Vec<Row> {
+    let children = children_by_parent(data);
+    let listed: HashSet<i64> = groups
+        .iter()
+        .flat_map(|(_, members)| members.iter())
+        .filter_map(|(index, _)| task_id_at(data, *index))
+        .collect();
+
+    let mut absorbed: HashSet<i64> = HashSet::new();
+    for (_, members) in &groups {
+        for (index, _) in members {
+            let Some(id) = task_id_at(data, *index) else {
+                continue;
+            };
+            if expanded.contains(&id) && !absorbed.contains(&id) {
+                let mut visited: HashSet<i64> = HashSet::from([id]);
+                absorb_revealed(
+                    id,
+                    data,
+                    &children,
+                    expanded,
+                    &listed,
+                    &mut visited,
+                    &mut absorbed,
+                );
+            }
+        }
+    }
+
+    let mut emitted: HashSet<i64> = HashSet::new();
+    let mut rows = Vec::new();
+    for (label, members) in groups {
+        let mut group_rows: Vec<Row> = Vec::new();
+        let mut top_level = 0;
+        for (index, badge) in members {
+            let Some(id) = task_id_at(data, index) else {
+                continue;
+            };
+            if absorbed.contains(&id) {
+                continue;
+            }
+            top_level += 1;
+            emit_subtree(
+                index,
+                badge,
+                0,
+                data,
+                &children,
+                expanded,
+                &mut emitted,
+                &mut group_rows,
+            );
+        }
+        if group_rows.is_empty() {
+            continue;
+        }
+        rows.push(Row::Header(format!("{label}  ({top_level})")));
+        rows.append(&mut group_rows);
+    }
+    rows
+}
+
+/// Ids that expanding `task_id` will reveal, limited to tasks the tab already
+/// lists — those are the only ones that can end up shown twice. `visited`
+/// starts on the row the walk began at, so a malformed parent cycle can't
+/// absorb it and make it vanish.
+fn absorb_revealed(
+    task_id: i64,
+    data: &Data,
+    children: &HashMap<i64, Vec<usize>>,
+    expanded: &HashSet<i64>,
+    listed: &HashSet<i64>,
+    visited: &mut HashSet<i64>,
+    absorbed: &mut HashSet<i64>,
+) {
+    for index in children.get(&task_id).into_iter().flatten() {
+        let Some(child) = task_id_at(data, *index) else {
+            continue;
+        };
+        if !visited.insert(child) {
+            continue;
+        }
+        if listed.contains(&child) {
+            absorbed.insert(child);
+        }
+        if expanded.contains(&child) {
+            absorb_revealed(child, data, children, expanded, listed, visited, absorbed);
+        }
+    }
+}
+
+/// Bounded rather than free recursion, for the same reason `depth_within` is.
+const MAX_DEPTH: usize = 64;
+
+#[allow(clippy::too_many_arguments)]
+fn emit_subtree(
+    index: usize,
+    badge: Option<String>,
+    depth: usize,
+    data: &Data,
+    children: &HashMap<i64, Vec<usize>>,
+    expanded: &HashSet<i64>,
+    emitted: &mut HashSet<i64>,
+    rows: &mut Vec<Row>,
+) {
+    let Some(id) = task_id_at(data, index) else {
+        return;
+    };
+    if !emitted.insert(id) {
+        return;
+    }
+    rows.push(Row::Task {
+        index,
+        depth,
+        badge,
+    });
+    if !expanded.contains(&id) || depth >= MAX_DEPTH {
+        return;
+    }
+    for child in children.get(&id).into_iter().flatten() {
+        emit_subtree(
+            *child,
+            None,
+            depth + 1,
+            data,
+            children,
+            expanded,
+            emitted,
+            rows,
+        );
     }
 }
 
@@ -398,7 +636,7 @@ fn condition_matches(condition: &Value, task: &Value, today: chrono::NaiveDate) 
     }
 }
 
-fn kanban_rows(data: &Data) -> Vec<Row> {
+fn kanban_rows(data: &Data, expanded: &HashSet<i64>) -> Vec<Row> {
     let columns = data
         .metadata
         .get("kanban_columns")
@@ -443,30 +681,33 @@ fn kanban_rows(data: &Data) -> Vec<Row> {
         }
     }
 
-    let mut rows = Vec::new();
-    for (column, tasks) in columns.iter().zip(&members) {
-        let name = column.get("name").and_then(Value::as_str).unwrap_or("");
-        rows.push(Row::Header(format!("{name}  ({})", tasks.len())));
-        for index in tasks {
-            rows.push(Row::Task {
-                index: *index,
-                depth: 0,
-                badge: data
-                    .task(*index)
-                    .and_then(|task| task.get("due").and_then(Value::as_str))
-                    .filter(|due| !due.is_empty())
-                    .map(str::to_string),
-            });
-        }
-    }
-    rows
+    let groups: Vec<Group> = columns
+        .iter()
+        .zip(&members)
+        .map(|(column, tasks)| {
+            let name = column.get("name").and_then(Value::as_str).unwrap_or("");
+            let members: Vec<Member> = tasks
+                .iter()
+                .map(|index| {
+                    let due = data
+                        .task(*index)
+                        .and_then(|task| task.get("due").and_then(Value::as_str))
+                        .filter(|due| !due.is_empty())
+                        .map(str::to_string);
+                    (*index, due)
+                })
+                .collect();
+            (name.to_string(), members)
+        })
+        .collect();
+    grouped_rows(groups, data, expanded)
 }
 
 // -- matrix -------------------------------------------------------------------
 
 /// The four Eisenhower quadrants, as `EisenhowerMatrixView` labels them:
 /// urgency is the X axis and importance the Y, both centred on zero.
-fn matrix_rows(data: &Data) -> Vec<Row> {
+fn matrix_rows(data: &Data, expanded: &HashSet<i64>) -> Vec<Row> {
     let Some(levels) = data
         .metadata
         .get("eisenhower_by_task_id")
@@ -496,32 +737,28 @@ fn matrix_rows(data: &Data) -> Vec<Row> {
         }
     }
 
-    let mut rows = Vec::new();
-    for (label, urgent, important) in [
+    let groups: Vec<Group> = [
         ("DO — urgent & important", true, true),
         ("SCHEDULE — important, not urgent", false, true),
         ("DELEGATE — urgent, not important", true, false),
         ("ELIMINATE — neither", false, false),
-    ] {
-        let group: Vec<&(usize, f64, f64)> = placed
+    ]
+    .into_iter()
+    .map(|(label, urgent, important)| {
+        let members: Vec<Member> = placed
             .iter()
             .filter(|(_, urgency, importance)| {
                 (*urgency > 0.0) == urgent && (*importance > 0.0) == important
             })
+            .map(|(index, urgency, importance)| {
+                (*index, Some(format!("U{urgency:.0} I{importance:.0}")))
+            })
             .collect();
-        if group.is_empty() {
-            continue;
-        }
-        rows.push(Row::Header(format!("{label}  ({})", group.len())));
-        for (index, urgency, importance) in group {
-            rows.push(Row::Task {
-                index: *index,
-                depth: 0,
-                badge: Some(format!("U{urgency:.0} I{importance:.0}")),
-            });
-        }
-    }
+        (label.to_string(), members)
+    })
+    .collect();
 
+    let mut rows = grouped_rows(groups, data, expanded);
     if rows.is_empty() {
         rows.push(Row::Note(
             "Nothing placed on the matrix yet. Use `m` in the app.".into(),
@@ -530,20 +767,26 @@ fn matrix_rows(data: &Data) -> Vec<Row> {
     rows
 }
 
-/// The tree as Checkvist returned it — already parents-before-children — with
-/// depth taken from each task's parent chain.
-fn all_rows(data: &Data, scope: Option<i64>) -> Vec<Row> {
+/// The tasks at the current scope, each expanded row followed by its children.
+///
+/// Starts shut rather than showing the whole tree: a long list is easier to
+/// read a level at a time, and `l` opens what you actually want to see.
+fn all_rows(data: &Data, scope: Option<i64>, expanded: &HashSet<i64>) -> Vec<Row> {
     let root = scope.unwrap_or(0);
+    let children = children_by_parent(data);
+    let mut emitted: HashSet<i64> = HashSet::new();
     let mut rows = Vec::new();
-    for (index, task) in data.tasks.iter().enumerate() {
-        let Some(depth) = depth_within(data, task, root) else {
-            continue;
-        };
-        rows.push(Row::Task {
-            index,
-            depth,
-            badge: None,
-        });
+    for index in children.get(&root).into_iter().flatten() {
+        emit_subtree(
+            *index,
+            None,
+            0,
+            data,
+            &children,
+            expanded,
+            &mut emitted,
+            &mut rows,
+        );
     }
     if rows.is_empty() {
         rows.push(Row::Note(if scope.is_some() {
@@ -555,27 +798,7 @@ fn all_rows(data: &Data, scope: Option<i64>) -> Vec<Row> {
     rows
 }
 
-/// How far below `root` this task sits, or `None` if it isn't below it at all.
-fn depth_within(data: &Data, task: &Value, root: i64) -> Option<usize> {
-    let mut parent = parent_id_of(task);
-    // Bounded rather than `loop`: a malformed parent cycle must not spin here.
-    for depth in 0..64 {
-        if parent == root {
-            return Some(depth);
-        }
-        if parent == 0 {
-            return None;
-        }
-        let next = data
-            .tasks
-            .iter()
-            .find(|candidate| candidate.get("id").and_then(Value::as_i64) == Some(parent))?;
-        parent = parent_id_of(next);
-    }
-    None
-}
-
-fn due_rows(data: &Data) -> Vec<Row> {
+fn due_rows(data: &Data, expanded: &HashSet<i64>) -> Vec<Row> {
     let today = Local::now().format("%Y-%m-%d").to_string();
 
     let mut dated: Vec<(usize, String)> = data
@@ -590,39 +813,33 @@ fn due_rows(data: &Data) -> Vec<Row> {
     // Checkvist serialises `due` as YYYY-MM-DD, which sorts correctly as text.
     dated.sort_by(|left, right| left.1.cmp(&right.1));
 
-    let mut rows = Vec::new();
-    for (label, matches) in [
+    let groups: Vec<Group> = [
         (
             "OVERDUE",
             Box::new(|due: &str| due < today.as_str()) as Box<dyn Fn(&str) -> bool>,
         ),
         ("TODAY", Box::new(|due: &str| due == today.as_str())),
         ("LATER", Box::new(|due: &str| due > today.as_str())),
-    ] {
-        let group: Vec<&(usize, String)> = dated
+    ]
+    .into_iter()
+    .map(|(label, matches)| {
+        let members: Vec<Member> = dated
             .iter()
             .filter(|(_, due)| matches(due.as_str()))
+            .map(|(index, due)| (*index, Some(due.clone())))
             .collect();
-        if group.is_empty() {
-            continue;
-        }
-        rows.push(Row::Header(format!("{label}  ({})", group.len())));
-        for (index, due) in group {
-            rows.push(Row::Task {
-                index: *index,
-                depth: 0,
-                badge: Some(due.clone()),
-            });
-        }
-    }
+        (label.to_string(), members)
+    })
+    .collect();
 
+    let mut rows = grouped_rows(groups, data, expanded);
     if rows.is_empty() {
         rows.push(Row::Note("Nothing due.".into()));
     }
     rows
 }
 
-fn tag_rows(data: &Data) -> Vec<Row> {
+fn tag_rows(data: &Data, expanded: &HashSet<i64>) -> Vec<Row> {
     let mut by_tag: Vec<(String, Vec<usize>)> = Vec::new();
     let mut untagged: Vec<usize> = Vec::new();
 
@@ -641,27 +858,23 @@ fn tag_rows(data: &Data) -> Vec<Row> {
     }
     by_tag.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut rows = Vec::new();
-    for (tag, members) in &by_tag {
-        rows.push(Row::Header(format!("#{tag}  ({})", members.len())));
-        for index in members {
-            rows.push(Row::Task {
-                index: *index,
-                depth: 0,
-                badge: None,
-            });
-        }
-    }
+    let mut groups: Vec<Group> = by_tag
+        .iter()
+        .map(|(tag, members)| {
+            (
+                format!("#{tag}"),
+                members.iter().map(|index| (*index, None)).collect(),
+            )
+        })
+        .collect();
     if !untagged.is_empty() {
-        rows.push(Row::Header(format!("UNTAGGED  ({})", untagged.len())));
-        for index in untagged {
-            rows.push(Row::Task {
-                index,
-                depth: 0,
-                badge: None,
-            });
-        }
+        groups.push((
+            "UNTAGGED".to_string(),
+            untagged.into_iter().map(|index| (index, None)).collect(),
+        ));
     }
+
+    let mut rows = grouped_rows(groups, data, expanded);
     if rows.is_empty() {
         rows.push(Row::Note("No tasks to group.".into()));
     }
@@ -710,7 +923,7 @@ pub fn tags_of(task: &Value) -> Vec<String> {
 
 /// The absolute priority queue first, then per-parent scoped ranks — the same
 /// two stores the app keeps, and `task_metadata` reports.
-fn priority_rows(data: &Data) -> Vec<Row> {
+fn priority_rows(data: &Data, expanded: &HashSet<i64>) -> Vec<Row> {
     let index_of = |task_id: &str| -> Option<usize> {
         let id: i64 = task_id.parse().ok()?;
         data.tasks
@@ -730,18 +943,18 @@ fn priority_rows(data: &Data) -> Vec<Row> {
         out
     };
 
-    let mut rows = Vec::new();
+    let members = |ranked: Vec<(usize, i64)>| -> Vec<Member> {
+        ranked
+            .into_iter()
+            .map(|(index, rank)| (index, Some(format!("P{rank}"))))
+            .collect()
+    };
+
+    let mut groups: Vec<Group> = Vec::new();
 
     let absolute = ranked(data.metadata.get("absolute_priority_rank"));
     if !absolute.is_empty() {
-        rows.push(Row::Header(format!("ABSOLUTE  ({})", absolute.len())));
-        for (index, rank) in absolute {
-            rows.push(Row::Task {
-                index,
-                depth: 0,
-                badge: Some(format!("P{rank}")),
-            });
-        }
+        groups.push(("ABSOLUTE".to_string(), members(absolute)));
     }
 
     if let Some(Value::Object(by_parent)) = data.metadata.get("scoped_priority_rank_by_parent_id") {
@@ -759,17 +972,11 @@ fn priority_rows(data: &Data) -> Vec<Row> {
                     .unwrap_or(parent);
                 format!("UNDER {title}")
             };
-            rows.push(Row::Header(format!("{label}  ({})", group.len())));
-            for (index, rank) in group {
-                rows.push(Row::Task {
-                    index,
-                    depth: 0,
-                    badge: Some(format!("P{rank}")),
-                });
-            }
+            groups.push((label, members(group)));
         }
     }
 
+    let mut rows = grouped_rows(groups, data, expanded);
     if rows.is_empty() {
         rows.push(Row::Note(
             "Nothing prioritised. Rank tasks in the app with 1-9.".into(),
@@ -867,6 +1074,17 @@ pub fn display_content(task: &Value) -> String {
         .filter(|word| !word.starts_with('#'))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+pub fn id_of(task: &Value) -> i64 {
+    task.get("id").and_then(Value::as_i64).unwrap_or(0)
+}
+
+/// Whether anything hangs off this task — what the disclosure marker is drawn
+/// from, and what `l` needs to know before opening a row.
+pub fn has_children(data: &Data, task: &Value) -> bool {
+    let id = id_of(task);
+    id != 0 && data.tasks.iter().any(|other| parent_id_of(other) == id)
 }
 
 pub fn status_marker(task: &Value) -> &'static str {
