@@ -55,27 +55,24 @@ enum PopoverLayout {
   /// message, with the action buttons alongside rather than below.
   static let compactOnboardingBarHeight: CGFloat = 72
 
+  /// Everything the popover stacks *around* the current view: the top strip,
+  /// the dock, and whichever bars and prompts are showing.
+  ///
+  /// Split out so a view can work out how much room it is actually being given
+  /// — `preferredHeight` minus this — rather than measuring itself and feeding
+  /// the answer back into its own layout.
   @MainActor
-  static func preferredHeight(for manager: AppCoordinator) -> CGFloat {
-    if manager.needsInitialSetup {
-      return 430
-    }
-
-    // A dragged height wins outright, and is checked before anything else
-    // because the kanban branch below returns unconditionally — content-derived
-    // sizing is a good default and a bad argument once the user has said what
-    // they want.
-    if let override = manager.popoverChrome.height(for: manager.taskListViewModel.rootTaskView) {
-      return override
-    }
-
+  static func fixedChromeHeight(for manager: AppCoordinator) -> CGFloat {
     let dividerHeight: CGFloat = 1
 
     // Top strip + first divider.
     var fixedHeight: CGFloat = topStripHeight + dividerHeight
 
-    // The dock row is in every view; the strip only when it's been summoned.
-    fixedHeight += dockHeight + dividerHeight
+    // The dock row is in every view, with a divider above it *and* one closing
+    // the content area off. Missing that second hairline is small enough to
+    // look like nothing and large enough to leave a visible strip of bare panel
+    // under a view that sizes itself from what is left.
+    fixedHeight += dividerHeight + dockHeight + dividerHeight
     if manager.popoverChrome.isResizeHandleVisible {
       fixedHeight += resizeStripHeight
     }
@@ -84,7 +81,8 @@ enum PopoverLayout {
       fixedHeight += 30 + dividerHeight
     }
     if manager.taskListViewModel.shouldShowRootScopeSection {
-      fixedHeight += (manager.taskListViewModel.rootScopeShowsFilterControls ? 72 : 40) + dividerHeight
+      // 27pt is measured; the filter-controls variant is still an estimate.
+      fixedHeight += (manager.taskListViewModel.rootScopeShowsFilterControls ? 72 : 27) + dividerHeight
     }
     if manager.preferences.showTaskBreadcrumbContext {
       fixedHeight += 24 + dividerHeight
@@ -129,6 +127,60 @@ enum PopoverLayout {
       fixedHeight += 20
     }
 
+    return fixedHeight
+  }
+
+  /// Everything in the Daily view except the checklist rows.
+  @MainActor
+  static func dailyReservedHeight(for manager: AppCoordinator) -> CGFloat {
+    DailyChecklistLayout.reservedHeight(
+      showsChart: manager.popoverChrome.showsDailyChart,
+      hasFullChartHistory: manager.dailyLog.hasFullChartHistory,
+      hasCompletions: !manager.dailyLog.summary().completed.isEmpty,
+      isAddingDaily: manager.dailyLog.isAddingDaily
+    )
+  }
+
+  /// The chart and its range row — what a dragged Daily height has added to it
+  /// when the graph is on, and taken off it before being stored. The same term
+  /// `dailyReservedHeight` uses, so the two can't disagree about what the chart
+  /// costs.
+  @MainActor
+  static func dailyChartBlockHeight(for manager: AppCoordinator) -> CGFloat {
+    DailyChecklistLayout.chartBlockHeight(
+      showsChart: manager.popoverChrome.showsDailyChart,
+      hasFullChartHistory: manager.dailyLog.hasFullChartHistory
+    )
+  }
+
+  /// Converts a height the user has just dragged the panel to into the value
+  /// that gets stored. The Daily view keeps its height chart-free, so that
+  /// toggling the graph moves the panel rather than the checklist.
+  @MainActor
+  static func storedHeight(forDisplayed height: CGFloat, in manager: AppCoordinator) -> CGFloat {
+    guard manager.taskListViewModel.rootTaskView == .daily else { return height }
+    return height - dailyChartBlockHeight(for: manager)
+  }
+
+  @MainActor
+  static func preferredHeight(for manager: AppCoordinator) -> CGFloat {
+    if manager.needsInitialSetup {
+      return 430
+    }
+
+    // A dragged height wins outright, and is checked before anything else
+    // because the kanban branch below returns unconditionally — content-derived
+    // sizing is a good default and a bad argument once the user has said what
+    // they want.
+    if let override = manager.popoverChrome.height(for: manager.taskListViewModel.rootTaskView) {
+      // The Daily view's height is stored *without* the chart, so switching the
+      // graph on grows the panel by exactly the chart's height instead of
+      // taking the room out of the checklist underneath it.
+      return override + dailyChartBlockHeight(for: manager)
+    }
+
+    let fixedHeight = fixedChromeHeight(for: manager)
+
     if manager.taskListViewModel.rootTaskView == .kanban {
       return maxHeight
     }
@@ -141,27 +193,13 @@ enum PopoverLayout {
     // checklist, chart, and the capped completions list. The container has to
     // include the chart's baseline or the card grows a nested scroll bar.
     if manager.taskListViewModel.rootTaskView == .daily {
-      let hasCompletions = !manager.dailyLog.summary().completed.isEmpty
-      // The dailies checklist grows with the list up to the same cap the
-      // section's own ScrollView uses. Both sides read `DailyView.Layout`, so
-      // they can't drift apart and leave a nested scroll bar.
-      let dailyRowCount = manager.dailyLog.todaysDailies.count
-      let rowsHeight = min(
-        DailyView.Layout.listMaxHeight,
-        max(DailyView.Layout.rowHeight, CGFloat(dailyRowCount) * DailyView.Layout.rowHeight)
+      // Sized by `DailyChecklistLayout` rather than here: the view divides the
+      // same budget up again to decide how many whole rows its checklist can
+      // show, and the two answers have to come from one set of numbers.
+      let dailyContentHeight = DailyChecklistLayout.contentHeight(
+        reserved: dailyReservedHeight(for: manager),
+        count: manager.dailyLog.todaysDailies.count
       )
-      let checklistHeight = DailyView.Layout.headerHeight + rowsHeight
-      let addFieldHeight = manager.dailyLog.isAddingDaily ? DailyView.Layout.addFieldHeight : 0
-      // Chart, the range row above it, and the "collecting since" line below
-      // while the window isn't full. Zero when the dock's graph button is off,
-      // which is what makes hiding the graph shorten the panel.
-      let chartBlockHeight =
-        manager.popoverChrome.showsDailyChart
-        ? DailyView.Layout.chartHeight + 28 + (manager.dailyLog.hasFullChartHistory ? 0 : 16)
-        : 0
-      let dailyContentHeight: CGFloat =
-        60 + checklistHeight + addFieldHeight + chartBlockHeight
-        + (hasCompletions ? 128 : 0)
       // Its own ceiling: this view stacks four sections that are each worth
       // seeing at once, where the task views are one scrolling list that the
       // shared cap suits fine.
@@ -177,7 +215,10 @@ enum PopoverLayout {
       let visibleTasks = manager.taskListViewModel.visibleTasks
       let sectionRows = manager.taskListViewModel.rootDueSectionCount(in: visibleTasks)
       let visibleRows = CGFloat(min(visibleTasks.count + sectionRows, 8))
-      taskAreaHeight = max(110, visibleRows * 34)
+      // 36pt is measured: a bare task row. One carrying a metadata line runs to
+      // 40, so a full list still scrolls — but 34 was under every real row, and
+      // the slack that used to hide it went when the chrome count was corrected.
+      taskAreaHeight = max(110, visibleRows * 36)
     }
 
     return min(maxHeight, max(minHeight, fixedHeight + taskAreaHeight))

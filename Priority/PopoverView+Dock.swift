@@ -176,7 +176,14 @@ struct PopoverResizeStrip: View {
           .onChanged { value in
             let start = dragStartHeight ?? PopoverLayout.preferredHeight(for: manager)
             if dragStartHeight == nil { dragStartHeight = start }
-            manager.popoverChrome.setHeight(start + value.translation.height, for: view)
+            // Stored in the view's own terms — the Daily view keeps its height
+            // without the chart, so the graph button adds and removes the
+            // chart's height rather than resizing the checklist under it.
+            manager.popoverChrome.setHeight(
+              PopoverLayout.storedHeight(
+                forDisplayed: start + value.translation.height, in: manager),
+              for: view
+            )
           }
           .onEnded { _ in dragStartHeight = nil }
       )
