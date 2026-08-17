@@ -87,6 +87,15 @@ are pinned by `DailyDefinitionsStoreFormatTests`:
   the next save persists that emptiness.
 - `activeWeekdays` is written sorted, so saves don't churn the file.
 
+A daily is scheduled *either* on weekdays *or* on a cycle. `intervalDays` (with
+`intervalAnchor`, a day the cycle lands on) is present only for the second kind
+and takes over from `activeWeekdays` entirely — the weekday set stays on the
+record so that ending the cycle restores it. Both fields are absent on every
+daily written before cycles existed, which decodes as the weekday case. In the
+tools this is `interval_days`: passing it alongside `active_weekdays` is refused
+rather than resolved in favour of whichever the implementation checks first, and
+passing `active_weekdays` to `daily_update` clears an existing cycle.
+
 ### Keeping the three implementations honest
 
 There are three servers and a client may reach any of them:

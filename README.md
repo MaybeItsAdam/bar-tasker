@@ -111,7 +111,7 @@ Onboarding boxes guide the Checkvist, Obsidian and Google Calendar setup. Each o
 | `Space` | Tick / un-tick |
 | `Return` | Add a daily — stays open, so a whole routine can be typed in one go |
 | `Cmd+↑` / `Cmd+↓` | Reorder |
-| `Esc` | Close the add field |
+| `Esc` | Cancel adding, discarding what's been typed |
 
 ### Integrations
 
@@ -190,7 +190,8 @@ Recurring things you intend to do — habits, not tasks — sitting at the top o
 - **They reset at every rollover and never go overdue.** Miss one and it's a gap in the history: nothing to clear, nothing to reschedule. That's the whole reason they aren't Checkvist tasks with a `repeat daily` rule — a recurring *task* goes overdue and starts competing with real deadlines.
 - **They're local.** Stored in `~/Library/Application Support/Priority/dailies.json`, so "brush teeth" never clutters your project lists or syncs to other Checkvist clients. Ticking one is instant and works offline.
 - **Ticks land in the same log as task completions**, so they count towards the chart and appear in the Obsidian note.
-- **Schedules and archiving** live in `Preferences → Plugins → Daily Log` — every day, or specific weekdays. Removing a daily archives it, so past days keep their record instead of showing an orphaned id.
+- **Two kinds of schedule.** Fixed weekdays (`Mon Wed Fri`, weekdays, weekends, every day) or a rotating cycle — every other day, every three days — counted from the day you set it. A cycle walks through the week, so it's the one for "water the plants", not "standup".
+- **Set the schedule as you type** from the menu in the add field, or edit any daily in full — day-by-day toggles, cycle length, archiving — in `Preferences → Plugins → Daily Log`. Removing a daily archives it, so past days keep their record instead of showing an orphaned id.
 
 ### What the day records
 
@@ -256,6 +257,7 @@ priority tasks
 priority add Draft the release notes --due friday
 priority search -q report --due-before 2026-09-01
 priority daily add Read for twenty minutes --weekdays mon,wed,fri
+priority daily add Water the plants --every-days 3
 priority log --days 7
 priority --json dailies | jq '.dailies[] | select(.done | not)'
 ```

@@ -38,11 +38,13 @@ import json
 import os
 import plistlib
 import re
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -84,6 +86,21 @@ FIXTURE_DAILIES = {
         {"id": "daily-c", "title": "Archived habit", "activeWeekdays": [1, 2, 3, 4, 5, 6, 7],
          "sortIndex": 2, "createdAt": "2026-08-01T00:00:00Z",
          "archivedAt": "2026-08-10T00:00:00Z"},
+        # A rotating schedule, anchored in the past on a fixed date so its
+        # due-ness is a pure function of today rather than of when this ran.
+        # Every third day from a Saturday: no weekday set can express it, so all
+        # three have to be doing the same day arithmetic to agree.
+        {"id": "daily-d", "title": "Every third day habit",
+         "activeWeekdays": [1, 2, 3, 4, 5, 6, 7], "intervalDays": 3,
+         "intervalAnchor": "2026-08-01T09:00:00Z",
+         "sortIndex": 3, "createdAt": "2026-08-01T00:00:00Z"},
+        # Left alone by the calls below, so `daily_log_fetch` compares a cycle
+        # that alternates across the three days it reports — the read side of
+        # the same arithmetic, after daily-d has been rescheduled off it.
+        {"id": "daily-e", "title": "Every other day habit",
+         "activeWeekdays": [1, 2, 3, 4, 5, 6, 7], "intervalDays": 2,
+         "intervalAnchor": "2026-08-01T09:00:00Z",
+         "sortIndex": 4, "createdAt": "2026-08-01T00:00:00Z"},
     ],
 }
 
@@ -96,7 +113,12 @@ FIXTURE_DAILIES = {
 # gets its own copy of the fixture, so they never write to the same file.
 COMPARED_CALLS = [
     ("daily_add", {"title": "Added via MCP", "active_weekdays": [2, 4, 6]}),
+    ("daily_add", {"title": "Cycling via MCP", "interval_days": 4}),
     ("daily_update", {"daily_id": "daily-b", "title": "Renamed via MCP"}),
+    # Onto a cycle and back off it: the weekday set has to survive the round
+    # trip, and the interval has to be gone rather than merely overridden.
+    ("daily_update", {"daily_id": "daily-d", "interval_days": 5}),
+    ("daily_update", {"daily_id": "daily-d", "active_weekdays": [2, 3, 4, 5, 6]}),
     ("daily_update", {"daily_id": "daily-a", "archived": True}),
     ("daily_tick", {"daily_id": "daily-b", "done": True}),
     ("daily_tick", {"daily_id": "daily-b", "done": True}),  # idempotent: changed=false
@@ -278,22 +300,54 @@ def drive(command: list[str], env: dict[str, str], calls: list[Any] = None) -> d
             "params": {"name": name, "arguments": arguments},
         })
 
-    stdin = "".join(json.dumps(request) + "\n" for request in requests)
-    completed = subprocess.run(
-        command, input=stdin, capture_output=True, text=True, env=env, check=False, timeout=120
-    )
-
+    # Replies are collected with stdin still open, the way a real client works,
+    # and the pipe is only closed once they have all arrived. Feeding the whole
+    # script in and reading what falls out at exit would pass against a server
+    # that answers nothing until EOF — which is a server no MCP client can talk
+    # to, and exactly the hang this check exists to notice.
+    expected = {request["id"] for request in requests}
     results: dict[int, Any] = {}
-    for line in completed.stdout.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            message = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(message, dict) and "id" in message:
-            results[message["id"]] = message
+    pending = b""
+
+    process = subprocess.Popen(
+        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, env=env,
+    )
+    try:
+        for request in requests:
+            process.stdin.write(json.dumps(request).encode() + b"\n")
+        process.stdin.flush()
+
+        deadline = time.monotonic() + 120
+        while expected:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if not select.select([process.stdout], [], [], remaining)[0]:
+                break
+            chunk = os.read(process.stdout.fileno(), 65536)
+            if not chunk:
+                break  # The server closed stdout; nothing more is coming.
+            pending += chunk
+
+            while b"\n" in pending:
+                line, _, pending = pending.partition(b"\n")
+                try:
+                    message = json.loads(line.strip())
+                except ValueError:
+                    continue
+                if isinstance(message, dict) and "id" in message:
+                    results[message["id"]] = message
+                    expected.discard(message["id"])
+    finally:
+        with contextlib.suppress(OSError):
+            process.stdin.close()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=10)
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
     return results
 
 

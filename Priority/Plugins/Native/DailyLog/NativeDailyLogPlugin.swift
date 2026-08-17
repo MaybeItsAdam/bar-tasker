@@ -79,12 +79,12 @@ final class NativeDailyLogPlugin: DailyLogPlugin {
   }
 
   @discardableResult
-  func addDaily(title: String, activeWeekdays: Set<Int>) -> Daily? {
-    service.addDaily(title: title, activeWeekdays: activeWeekdays)
+  func addDaily(title: String, schedule: Daily.Schedule) -> Daily? {
+    service.addDaily(title: title, schedule: schedule)
   }
 
-  func updateDaily(id: String, title: String?, activeWeekdays: Set<Int>?) {
-    service.updateDaily(id: id, title: title, activeWeekdays: activeWeekdays)
+  func updateDaily(id: String, title: String?, schedule: Daily.Schedule?) {
+    service.updateDaily(id: id, title: title, schedule: schedule)
   }
 
   func archiveDaily(id: String) {

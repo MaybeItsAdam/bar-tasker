@@ -664,16 +664,13 @@ private struct PriorityMCPLocalState {
   // own schedule, so there is no equivalent of the file lock to make an external
   // write survive.
 
-  func addDaily(title: String, activeWeekdays: Set<Int>?) throws -> [String: Any] {
+  func addDaily(title: String, schedule: Daily.Schedule?) throws -> [String: Any] {
     let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       throw MCPCheckvistError(message: "title must not be empty.")
     }
-    let daily = Daily(
-      title: trimmed,
-      activeWeekdays: activeWeekdays.map { $0.isEmpty ? Daily.allWeekdays : $0 }
-        ?? Daily.allWeekdays
-    )
+    var daily = Daily(title: trimmed)
+    if let schedule { daily.setSchedule(schedule) }
     let saved = try DailyDefinitionsStore(directoryURL: storeDirectory).mutate { $0.add(daily) }
     guard let stored = saved.daily(withId: daily.id) else {
       throw MCPCheckvistError(message: "The daily was not saved.")
@@ -684,7 +681,7 @@ private struct PriorityMCPLocalState {
   func updateDaily(
     id: String,
     title: String?,
-    activeWeekdays: Set<Int>?,
+    schedule: Daily.Schedule?,
     archived: Bool?
   ) throws -> [String: Any] {
     let store = DailyDefinitionsStore(directoryURL: storeDirectory)
@@ -697,9 +694,7 @@ private struct PriorityMCPLocalState {
           let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
           if !trimmed.isEmpty { daily.title = trimmed }
         }
-        if let activeWeekdays, !activeWeekdays.isEmpty {
-          daily.activeWeekdays = activeWeekdays
-        }
+        if let schedule { daily.setSchedule(schedule) }
         if let archived {
           // Archive rather than delete, so history referencing this id still
           // renders with a title instead of as an orphan.
@@ -752,6 +747,9 @@ private struct PriorityMCPLocalState {
       "title": daily.title,
       "schedule": daily.scheduleLabel,
       "active_weekdays": daily.activeWeekdays.sorted(),
+      // Null rather than absent while the daily runs on weekdays, so a client
+      // can tell "not on a cycle" from "this server doesn't know about cycles".
+      "interval_days": daily.intervalDays.map { $0 as Any } ?? NSNull(),
       "archived": daily.isArchived,
     ]
   }
@@ -781,10 +779,15 @@ private final class PriorityMCPMessageReader {
         return decoded
       }
 
+      // `availableData`, not `read(upToCount:)`: the latter blocks until it has
+      // the whole requested count or the peer closes, so a client that sends one
+      // small request and waits — every MCP client — would hang until EOF.
+      //
       // EOF ends the session. Reporting a leftover partial message here instead
       // would loop forever: the buffer never drains, so the caller writes the
       // same error and reads again with the same result.
-      guard let chunk = try input.read(upToCount: 4096), !chunk.isEmpty else {
+      let chunk = input.availableData
+      guard !chunk.isEmpty else {
         return nil
       }
       decoder.append(chunk)
@@ -1173,21 +1176,28 @@ final class MCPServer {
           title: "Priority metadata (list \(listID))", payload: payload)
       case "daily_add":
         let title = try Self.requiredString(arguments, key: "title")
-        let weekdays = try Self.asOptionalWeekdays(arguments["active_weekdays"])
-        let payload = try localState.addDaily(title: title, activeWeekdays: weekdays)
+        let schedule = try Self.schedule(
+          weekdays: Self.asOptionalWeekdays(arguments["active_weekdays"]),
+          intervalDays: Self.asOptionalInterval(arguments["interval_days"])
+        )
+        let payload = try localState.addDaily(title: title, schedule: schedule)
         return Self.textContentResult(title: "Daily added", payload: payload)
       case "daily_update":
         let id = try Self.requiredString(arguments, key: "daily_id")
         let title = Self.asOptionalString(arguments["title"])
-        let weekdays = try Self.asOptionalWeekdays(arguments["active_weekdays"])
+        let schedule = try Self.schedule(
+          weekdays: Self.asOptionalWeekdays(arguments["active_weekdays"]),
+          intervalDays: Self.asOptionalInterval(arguments["interval_days"])
+        )
         let archived = arguments["archived"] == nil
           ? nil : try Self.asBool(arguments["archived"], defaultValue: false)
-        guard title != nil || weekdays != nil || archived != nil else {
+        guard title != nil || schedule != nil || archived != nil else {
           throw MCPCheckvistError(
-            message: "No updates provided. Pass title, active_weekdays and/or archived.")
+            message:
+              "No updates provided. Pass title, active_weekdays, interval_days and/or archived.")
         }
         let payload = try localState.updateDaily(
-          id: id, title: title, activeWeekdays: weekdays, archived: archived)
+          id: id, title: title, schedule: schedule, archived: archived)
         return Self.textContentResult(title: "Daily updated", payload: payload)
       case "daily_tick":
         let id = try Self.requiredString(arguments, key: "daily_id")
@@ -1516,6 +1526,11 @@ final class MCPServer {
               "items": ["type": "integer", "minimum": 1, "maximum": 7],
               "description": "1 = Sunday. Omit for every day.",
             ],
+            "interval_days": [
+              "type": "integer", "minimum": 1, "maximum": 366,
+              "description":
+                "Repeat every N days from today instead of on fixed weekdays. Not combinable with active_weekdays.",
+            ],
           ],
           "required": ["title"],
           "additionalProperties": false,
@@ -1524,7 +1539,7 @@ final class MCPServer {
       [
         "name": "daily_update",
         "description":
-          "Rename a daily, change which weekdays it's expected on, or archive/unarchive it. Archiving keeps history readable rather than deleting.",
+          "Rename a daily, reschedule it (fixed weekdays or an every-N-days cycle), or archive/unarchive it. Archiving keeps history readable rather than deleting.",
         "inputSchema": [
           "type": "object",
           "properties": [
@@ -1533,7 +1548,12 @@ final class MCPServer {
             "active_weekdays": [
               "type": "array",
               "items": ["type": "integer", "minimum": 1, "maximum": 7],
-              "description": "1 = Sunday.",
+              "description": "1 = Sunday. Switches a cycling daily back to fixed weekdays.",
+            ],
+            "interval_days": [
+              "type": "integer", "minimum": 1, "maximum": 366,
+              "description":
+                "Repeat every N days instead of on fixed weekdays. Not combinable with active_weekdays.",
             ],
             "archived": ["type": "boolean"],
           ],
@@ -1701,6 +1721,33 @@ final class MCPServer {
       throw MCPCheckvistError(message: "active_weekdays must not be empty.")
     }
     return weekdays
+  }
+
+  /// Length of a rotating cycle — "every 3 days" — as an alternative to a
+  /// weekday set, matching `Daily.intervalDays`.
+  private static func asOptionalInterval(_ value: Any?) throws -> Int? {
+    guard let value, !(value is NSNull) else { return nil }
+    guard let days = try asOptionalInt(value),
+      Daily.intervalRange.contains(days)
+    else {
+      throw MCPCheckvistError(message: "interval_days must be an integer between 1 and 366.")
+    }
+    return days
+  }
+
+  /// The two schedules are alternatives, not filters that compose, so being
+  /// handed both is a question with no answer — better refused than silently
+  /// resolved in favour of whichever the implementation happens to check first.
+  private static func schedule(
+    weekdays: Set<Int>?, intervalDays: Int?
+  ) throws -> Daily.Schedule? {
+    if weekdays != nil && intervalDays != nil {
+      throw MCPCheckvistError(
+        message: "Pass either active_weekdays or interval_days, not both.")
+    }
+    if let intervalDays { return .everyNDays(intervalDays) }
+    if let weekdays { return .weekdays(weekdays) }
+    return nil
   }
 
   private static func requiredInt(_ arguments: [String: Any], key: String) throws -> Int {

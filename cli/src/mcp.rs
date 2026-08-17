@@ -488,6 +488,10 @@ pub fn tool_definitions() -> Vec<Value> {
                         "items": { "type": "integer", "minimum": 1, "maximum": 7 },
                         "description": "1 = Sunday. Omit for every day.",
                     },
+                    "interval_days": {
+                        "type": "integer", "minimum": 1, "maximum": 366,
+                        "description": "Repeat every N days from today instead of on fixed weekdays. Not combinable with active_weekdays.",
+                    },
                 },
                 "required": ["title"],
                 "additionalProperties": false,
@@ -495,7 +499,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "daily_update",
-            "description": "Rename a daily, change which weekdays it's expected on, or archive/unarchive it. Archiving keeps history readable rather than deleting.",
+            "description": "Rename a daily, reschedule it (fixed weekdays or an every-N-days cycle), or archive/unarchive it. Archiving keeps history readable rather than deleting.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -504,7 +508,11 @@ pub fn tool_definitions() -> Vec<Value> {
                     "active_weekdays": {
                         "type": "array",
                         "items": { "type": "integer", "minimum": 1, "maximum": 7 },
-                        "description": "1 = Sunday.",
+                        "description": "1 = Sunday. Switches a cycling daily back to fixed weekdays.",
+                    },
+                    "interval_days": {
+                        "type": "integer", "minimum": 1, "maximum": 366,
+                        "description": "Repeat every N days instead of on fixed weekdays. Not combinable with active_weekdays.",
                     },
                     "archived": { "type": "boolean" },
                 },

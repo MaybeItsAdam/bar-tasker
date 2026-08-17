@@ -321,19 +321,67 @@ impl LocalState {
             .unwrap_or_default()
     }
 
-    fn due_on(dailies: &[Value], day: DateTime<Local>) -> Vec<Value> {
+    /// The length of a rotating cycle, matching `Daily.intervalDays`.
+    ///
+    /// Clamped the way the app clamps it, so a hand-edited 0 or 100000 is a
+    /// schedule that still comes round rather than one that never does.
+    fn interval_days_of(daily: &Value) -> Option<i64> {
+        let raw = daily.get("intervalDays")?.as_i64()?;
+        Some(raw.clamp(1, 366))
+    }
+
+    fn parse_timestamp(daily: &Value, key: &str) -> Option<DateTime<Local>> {
+        let raw = daily.get(key)?.as_str()?;
+        DateTime::parse_from_rfc3339(raw)
+            .ok()
+            .map(|parsed| parsed.with_timezone(&Local))
+    }
+
+    /// Whether `daily` is expected on the logical day beginning at `day`.
+    ///
+    /// A cycle and a weekday set are alternatives, not filters that compose:
+    /// "every three days" walks through the week, so weekday membership says
+    /// nothing about it. Matches `Daily.isDue`.
+    fn is_due(daily: &Value, day: DateTime<Local>) -> bool {
+        if Self::is_archived(daily) {
+            return false;
+        }
+        if let Some(interval) = Self::interval_days_of(daily) {
+            if interval == 1 {
+                return true;
+            }
+            let Some(anchor) = Self::parse_timestamp(daily, "intervalAnchor")
+                .or_else(|| Self::parse_timestamp(daily, "createdAt"))
+            else {
+                return true;
+            };
+            let delta = (day.date_naive() - anchor.date_naive()).num_days();
+            // Euclidean, so the cycle extends backwards from the anchor as well
+            // as forwards — the history behind a newly-anchored daily is not a
+            // run of days it was never due on.
+            return delta.rem_euclid(interval) == 0;
+        }
         // `Calendar` weekday numbering, 1 = Sunday, matching
         // `Daily.activeWeekdays`.
         let weekday = i64::from(day.weekday().num_days_from_sunday()) + 1;
+        Self::active_weekdays_of(daily).contains(&weekday)
+    }
+
+    fn due_on(dailies: &[Value], day: DateTime<Local>) -> Vec<Value> {
         Self::sorted_dailies(dailies)
             .into_iter()
-            .filter(|daily| {
-                !Self::is_archived(daily) && Self::active_weekdays_of(daily).contains(&weekday)
-            })
+            .filter(|daily| Self::is_due(daily, day))
             .collect()
     }
 
     fn schedule_label(daily: &Value) -> String {
+        if let Some(interval) = Self::interval_days_of(daily) {
+            return match interval {
+                1 => "Every day".into(),
+                2 => "Every other day".into(),
+                days => format!("Every {days} days"),
+            };
+        }
         let mut weekdays = Self::active_weekdays_of(daily);
         weekdays.sort_unstable();
         weekdays.dedup();
@@ -343,8 +391,12 @@ impl LocalState {
         if weekdays == [2, 3, 4, 5, 6] {
             return "Weekdays".into();
         }
+        if weekdays == [1, 7] {
+            return "Weekends".into();
+        }
         weekdays
             .iter()
+            .filter(|day| (1..=7).contains(*day))
             .map(|day| WEEKDAY_NAMES.get(*day as usize).copied().unwrap_or(""))
             .collect::<Vec<_>>()
             .join(" ")
@@ -498,11 +550,19 @@ impl LocalState {
             "title": daily.get("title").and_then(Value::as_str).unwrap_or(""),
             "schedule": Self::schedule_label(daily),
             "active_weekdays": weekdays,
+            // Null rather than absent while the daily runs on weekdays, so a
+            // client can tell "not on a cycle" from "this server predates them".
+            "interval_days": Self::interval_days_of(daily),
             "archived": Self::is_archived(daily),
         })
     }
 
-    pub fn add_daily(&self, title: &str, active_weekdays: Option<Vec<i64>>) -> Result<Value> {
+    pub fn add_daily(
+        &self,
+        title: &str,
+        active_weekdays: Option<Vec<i64>>,
+        interval_days: Option<i64>,
+    ) -> Result<Value> {
         let trimmed = title.trim();
         if trimmed.is_empty() {
             return Err(ToolError::new("title must not be empty."));
@@ -520,13 +580,20 @@ impl LocalState {
         // Uppercase to match Swift's `UUID().uuidString`, which is what every
         // id already in the file looks like.
         let id = uuid::Uuid::new_v4().to_string().to_uppercase();
+        let created_at = Self::now_iso();
         let mut daily = json!({
             "id": id,
             "title": trimmed,
             "activeWeekdays": weekdays,
             "sortIndex": 0,
-            "createdAt": Self::now_iso(),
+            "createdAt": created_at,
         });
+        if let Some(interval) = interval_days {
+            // The weekday set stays on the record so switching off the cycle
+            // later restores it, exactly as `Daily.setSchedule` keeps it.
+            daily["intervalDays"] = json!(interval);
+            daily["intervalAnchor"] = json!(created_at);
+        }
 
         let saved = self.mutate_dailies(|dailies| {
             // Appended at the end of the current order, as `DailyCollection.add`.
@@ -551,6 +618,7 @@ impl LocalState {
         title: Option<&str>,
         active_weekdays: Option<Vec<i64>>,
         archived: Option<bool>,
+        interval_days: Option<i64>,
     ) -> Result<Value> {
         if find_daily(&self.load_collection(), daily_id).is_none() {
             return Err(ToolError::new(format!("No daily with id {daily_id}.")));
@@ -573,6 +641,22 @@ impl LocalState {
                     days.sort_unstable();
                     days.dedup();
                     daily["activeWeekdays"] = json!(days);
+                    // Weekdays end the cycle: the two are alternatives, and a
+                    // stale interval left behind would keep winning.
+                    if let Some(object) = daily.as_object_mut() {
+                        object.remove("intervalDays");
+                        object.remove("intervalAnchor");
+                    }
+                }
+                if let Some(interval) = interval_days
+                    && let Some(object) = daily.as_object_mut()
+                {
+                    object.insert("intervalDays".into(), json!(interval));
+                    // Only the first switch anchors: changing the length
+                    // re-spaces the cycle rather than restarting it.
+                    object
+                        .entry("intervalAnchor")
+                        .or_insert_with(|| json!(Self::now_iso()));
                 }
                 if let Some(archived) = archived
                     && let Some(object) = daily.as_object_mut()

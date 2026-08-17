@@ -579,6 +579,15 @@ struct KeyboardShortcutRouter {
         manager.kanban.addText = ""
         return true
       }
+      // Then the Daily view's, for the same reason and ahead of the quick-entry
+      // branch below: this router runs before the responder chain, so the
+      // field's own `.onExitCommand` never sees Escape. Without this the field
+      // could only be dismissed by closing the whole popover — and it reopened
+      // still showing, because `isAddingDaily` outlives the window.
+      if manager.dailyLog.isAddingDaily {
+        manager.dailyLog.cancelAddingDaily()
+        return true
+      }
       if rootScopeFocused {
         manager.navigationState.rootScopeFocusLevel = 0
         return true

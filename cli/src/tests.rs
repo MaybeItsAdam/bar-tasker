@@ -198,7 +198,9 @@ fn created_at_is_written_without_fractional_seconds() {
     // here makes every daily vanish in the app, and its next save persists that
     // emptiness over the file.
     let local = scratch();
-    local.add_daily("Written by the CLI", None).expect("add");
+    local
+        .add_daily("Written by the CLI", None, None)
+        .expect("add");
 
     let created_at = stored_dailies(&local)[0]["createdAt"]
         .as_str()
@@ -225,7 +227,9 @@ fn active_weekdays_are_written_in_sorted_order() {
     // `Set` has no order on the Swift side, so an unsorted write here would
     // make every save a spurious diff in a file the user is invited to edit.
     let local = scratch();
-    local.add_daily("Habit", Some(vec![6, 2, 4])).expect("add");
+    local
+        .add_daily("Habit", Some(vec![6, 2, 4]), None)
+        .expect("add");
     assert_eq!(
         stored_dailies(&local)[0]["activeWeekdays"],
         json!([2, 4, 6])
@@ -236,7 +240,7 @@ fn active_weekdays_are_written_in_sorted_order() {
 fn a_daily_is_appended_at_the_end_of_the_current_order() {
     let local = scratch();
     for title in ["First", "Second", "Third"] {
-        local.add_daily(title, None).expect("add");
+        local.add_daily(title, None, None).expect("add");
     }
     let indexes: Vec<i64> = stored_dailies(&local)
         .iter()
@@ -250,17 +254,17 @@ fn archiving_keeps_the_daily_rather_than_deleting_it() {
     // History references the id, so a delete would leave past days rendering an
     // orphan instead of a title.
     let local = scratch();
-    let added = local.add_daily("Habit", None).expect("add");
+    let added = local.add_daily("Habit", None, None).expect("add");
     let id = added["id"].as_str().unwrap().to_string();
 
     let archived = local
-        .update_daily(&id, None, None, Some(true))
+        .update_daily(&id, None, None, Some(true), None)
         .expect("archive");
     assert_eq!(archived["archived"], json!(true));
     assert_eq!(stored_dailies(&local).len(), 1);
 
     let restored = local
-        .update_daily(&id, None, None, Some(false))
+        .update_daily(&id, None, None, Some(false), None)
         .expect("unarchive");
     assert_eq!(restored["archived"], json!(false));
     assert!(stored_dailies(&local)[0].get("archivedAt").is_none());
@@ -269,7 +273,7 @@ fn archiving_keeps_the_daily_rather_than_deleting_it() {
 #[test]
 fn ticking_twice_is_idempotent_and_appends_only_once() {
     let local = scratch();
-    let id = local.add_daily("Habit", None).expect("add")["id"]
+    let id = local.add_daily("Habit", None, None).expect("add")["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -292,7 +296,7 @@ fn a_mutation_sees_what_is_on_disk_now_rather_than_an_earlier_snapshot() {
     // its own in-memory copy would erase whatever they added in the meantime,
     // with no error, because from its point of view the write succeeded.
     let local = scratch();
-    local.add_daily("From the CLI", None).expect("add");
+    local.add_daily("From the CLI", None, None).expect("add");
 
     // Stand in for the other process: write a second daily straight to the file.
     let mut collection: Value =
@@ -303,7 +307,9 @@ fn a_mutation_sees_what_is_on_disk_now_rather_than_an_earlier_snapshot() {
     }));
     std::fs::write(local.dailies_path(), collection.to_string()).unwrap();
 
-    local.add_daily("From the CLI again", None).expect("add");
+    local
+        .add_daily("From the CLI again", None, None)
+        .expect("add");
 
     let saved = stored_dailies(&local);
     let titles: Vec<&str> = saved.iter().map(|d| d["title"].as_str().unwrap()).collect();
@@ -311,6 +317,146 @@ fn a_mutation_sees_what_is_on_disk_now_rather_than_an_earlier_snapshot() {
         titles,
         vec!["From the CLI", "From the app", "From the CLI again"]
     );
+}
+
+// -- rotating schedules ------------------------------------------------------
+
+/// Writes `dailies.json` directly, so a cycle can be pinned to a fixed anchor
+/// rather than to whenever the test happens to run.
+fn write_dailies(local: &LocalState, dailies: &[Value]) {
+    let collection = json!({ "version": 1, "dailies": dailies });
+    std::fs::write(local.dailies_path(), collection.to_string()).expect("write dailies");
+}
+
+fn due_ids(local: &LocalState, on: chrono::DateTime<Local>) -> Vec<String> {
+    local.dailies_snapshot(on)["dailies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|daily| daily["due_today"] == json!(true))
+        .map(|daily| daily["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn an_every_n_days_daily_rotates_through_the_week() {
+    // Anchored on a Friday. A weekday set could never express this: by the
+    // third occurrence it has walked onto Sunday.
+    let local = scratch();
+    write_dailies(
+        &local,
+        &[json!({
+            "id": "cycle", "title": "Bins", "activeWeekdays": [1, 2, 3, 4, 5, 6, 7],
+            "intervalDays": 3, "intervalAnchor": "2026-08-14T09:00:00Z",
+            "sortIndex": 0, "createdAt": "2026-08-01T00:00:00Z",
+        })],
+    );
+
+    let at = |day| Local.with_ymd_and_hms(2026, 8, day, 12, 0, 0).unwrap();
+    assert_eq!(due_ids(&local, at(14)), vec!["cycle".to_string()]);
+    assert!(due_ids(&local, at(15)).is_empty());
+    assert!(due_ids(&local, at(16)).is_empty());
+    assert_eq!(due_ids(&local, at(17)), vec!["cycle".to_string()]);
+    // Two days before the anchor: the cycle runs backwards too, so the history
+    // behind it isn't full of days it was "never expected on".
+    assert_eq!(due_ids(&local, at(11)), vec!["cycle".to_string()]);
+}
+
+#[test]
+fn a_cycle_is_labelled_by_its_length() {
+    let local = scratch();
+    let added = local.add_daily("Bins", None, Some(3)).expect("add");
+    assert_eq!(added["schedule"], json!("Every 3 days"));
+    assert_eq!(added["interval_days"], json!(3));
+
+    let every_other = local.add_daily("Long run", None, Some(2)).expect("add");
+    assert_eq!(every_other["schedule"], json!("Every other day"));
+}
+
+/// A weekday-scheduled daily reports the field as null rather than omitting it,
+/// so a client can tell "not on a cycle" from "server predates cycles".
+#[test]
+fn a_weekday_daily_reports_a_null_interval() {
+    let local = scratch();
+    let added = local
+        .add_daily("Standup", Some(vec![2, 3, 4, 5, 6]), None)
+        .expect("add");
+    assert_eq!(added["interval_days"], Value::Null);
+    assert!(stored_dailies(&local)[0].get("intervalDays").is_none());
+}
+
+#[test]
+fn adding_a_cycle_anchors_it_and_switching_to_weekdays_clears_it() {
+    let local = scratch();
+    let id = local.add_daily("Bins", None, Some(4)).expect("add")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let stored = stored_dailies(&local);
+    assert_eq!(stored[0]["intervalDays"], json!(4));
+    let anchor = stored[0]["intervalAnchor"].as_str().expect("anchor");
+    assert!(chrono::DateTime::parse_from_rfc3339(anchor).is_ok());
+    assert_eq!(
+        anchor.len(),
+        20,
+        "expected yyyy-MM-ddTHH:mm:ssZ, got {anchor}"
+    );
+
+    // Changing the length re-spaces the cycle rather than restarting it.
+    let anchor = anchor.to_string();
+    local
+        .update_daily(&id, None, None, None, Some(6))
+        .expect("relength");
+    assert_eq!(stored_dailies(&local)[0]["intervalAnchor"], json!(anchor));
+
+    // Weekdays end the cycle outright; a stale interval left behind would keep
+    // winning over the weekday set the user just chose.
+    let back = local
+        .update_daily(&id, None, Some(vec![2, 4]), None, None)
+        .expect("weekdays");
+    assert_eq!(back["schedule"], json!("Mon Wed"));
+    assert_eq!(back["interval_days"], Value::Null);
+    assert!(stored_dailies(&local)[0].get("intervalAnchor").is_none());
+}
+
+#[test]
+fn the_two_schedules_cannot_be_combined() {
+    let tools = tools_for(scratch());
+    let mut arguments = Map::new();
+    arguments.insert("title".into(), json!("Bins"));
+    arguments.insert("active_weekdays".into(), json!([2, 4]));
+    arguments.insert("interval_days".into(), json!(3));
+    let Err(error) = tools.call("daily_add", &arguments) else {
+        panic!("a daily with both schedules must be refused");
+    };
+    assert_eq!(
+        error.message,
+        "Pass either active_weekdays or interval_days, not both."
+    );
+}
+
+#[test]
+fn an_out_of_range_interval_is_refused_rather_than_stored() {
+    let tools = tools_for(scratch());
+    let mut arguments = Map::new();
+    arguments.insert("title".into(), json!("Bins"));
+    arguments.insert("interval_days".into(), json!(0));
+    let Err(error) = tools.call("daily_add", &arguments) else {
+        panic!("an out-of-range interval must be refused");
+    };
+    assert_eq!(
+        error.message,
+        "interval_days must be an integer between 1 and 366."
+    );
+}
+
+#[test]
+fn every_days_reaches_the_tool_layer_as_interval_days() {
+    let cli = Cli::parse_from(["priority", "daily", "add", "Bins", "--every-days", "3"]);
+    let (name, arguments) = resolve(&cli).expect("resolve");
+    assert_eq!(name, "daily_add");
+    assert_eq!(arguments["interval_days"], json!(3));
+    assert!(arguments.get("active_weekdays").is_none());
 }
 
 #[test]

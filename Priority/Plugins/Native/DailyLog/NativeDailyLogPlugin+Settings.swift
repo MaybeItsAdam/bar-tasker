@@ -155,45 +155,46 @@ private struct DailyLogPluginSettingsView: View {
       .foregroundColor(.secondary)
 
       ForEach(dailyLog.allDailies) { daily in
-        HStack(spacing: 8) {
-          TextField(
-            "Title",
-            text: Binding(
-              get: { daily.title },
-              set: { dailyLog.renameDaily(daily, to: $0) }
+        VStack(alignment: .leading, spacing: 6) {
+          HStack(spacing: 8) {
+            TextField(
+              "Title",
+              text: Binding(
+                get: { daily.title },
+                set: { dailyLog.renameDaily(daily, to: $0) }
+              )
             )
-          )
-          .textFieldStyle(.roundedBorder)
-          Picker(
-            "",
-            selection: Binding(
-              get: { daily.isEveryDay ? 0 : (daily.activeWeekdays == Daily.mondayToFriday ? 1 : 2) },
-              set: { choice in
-                // "Custom" is only ever a readout of an existing custom set —
-                // selecting it shouldn't silently rewrite the days.
-                guard choice != 2 else { return }
-                dailyLog.setDailyWeekdays(
-                  daily, to: choice == 0 ? Daily.allWeekdays : Daily.mondayToFriday)
-              }
-            )
-          ) {
-            Text("Every day").tag(0)
-            Text("Weekdays").tag(1)
-            if !daily.isEveryDay && daily.activeWeekdays != Daily.mondayToFriday {
-              Text(daily.scheduleLabel).tag(2)
-            }
-          }
-          .labelsHidden()
-          .frame(width: 130)
+            .textFieldStyle(.roundedBorder)
 
-          Button {
-            dailyLog.archiveDaily(daily)
-          } label: {
-            Image(systemName: "trash")
+            // Which *kind* of schedule. The days or the interval themselves are
+            // edited below rather than hidden behind a "Custom…" item, because
+            // this is the full editor — a schedule you can read but not change
+            // is what the previous picker did, and it is why arbitrary weekday
+            // sets could only be made from the MCP server.
+            Picker("", selection: scheduleKindBinding(for: daily)) {
+              Text("On weekdays").tag(0)
+              Text("Every N days").tag(1)
+            }
+            .labelsHidden()
+            .frame(width: 130)
+
+            Button {
+              dailyLog.archiveDaily(daily)
+            } label: {
+              Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Archive. Past days keep their record of this daily.")
           }
-          .buttonStyle(.borderless)
-          .help("Archive. Past days keep their record of this daily.")
+
+          switch daily.schedule {
+          case .weekdays(let days):
+            weekdayChips(for: daily, days: days)
+          case .everyNDays(let interval):
+            intervalStepper(for: daily, interval: interval)
+          }
         }
+        .padding(.vertical, 2)
       }
 
       if dailyLog.allDailies.isEmpty {
@@ -203,6 +204,104 @@ private struct DailyLogPluginSettingsView: View {
       }
     }
     .padding(.top, 4)
+  }
+
+  private func scheduleKindBinding(for daily: Daily) -> Binding<Int> {
+    Binding(
+      get: {
+        if case .everyNDays = daily.schedule { return 1 }
+        return 0
+      },
+      set: { choice in
+        let dailyLog = manager.dailyLog
+        switch (choice, daily.schedule) {
+        case (1, .weekdays):
+          // Every other day is the shortest cycle that isn't just "every day",
+          // so it is the only sensible thing to land on.
+          dailyLog.setDailySchedule(daily, to: .everyNDays(2))
+        case (0, .everyNDays):
+          // Back to whatever weekday set was stored before the switch — kept
+          // for exactly this, so a round trip isn't destructive.
+          dailyLog.setDailySchedule(daily, to: .weekdays(daily.activeWeekdays))
+        default:
+          break
+        }
+      }
+    )
+  }
+
+  /// Seven toggles, plus the two presets that would otherwise take four clicks.
+  @ViewBuilder
+  private func weekdayChips(for daily: Daily, days: Set<Int>) -> some View {
+    let names = ["", "S", "M", "T", "W", "T", "F", "S"]
+    let accessibleNames = ["", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                           "Saturday"]
+
+    HStack(spacing: 4) {
+      ForEach(1...7, id: \.self) { weekday in
+        let isOn = days.contains(weekday)
+        Button {
+          var updated = days
+          if isOn {
+            updated.remove(weekday)
+            // Turning the last day off would make the daily permanently
+            // invisible with no row left to click, so it is simply refused.
+            guard !updated.isEmpty else { return }
+          } else {
+            updated.insert(weekday)
+          }
+          manager.dailyLog.setDailySchedule(daily, to: .weekdays(updated))
+        } label: {
+          Text(names[weekday])
+            .font(.system(size: 11, weight: .medium))
+            .frame(width: 20, height: 20)
+            .background(
+              RoundedRectangle(cornerRadius: 4)
+                .fill(isOn ? Color.accentColor.opacity(0.85) : Color.secondary.opacity(0.15))
+            )
+            .foregroundColor(isOn ? .white : .secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibleNames[weekday])
+        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+      }
+
+      Button("Every day") {
+        manager.dailyLog.setDailySchedule(daily, to: .weekdays(Daily.allWeekdays))
+      }
+      .buttonStyle(.link)
+      .font(.caption)
+      Button("Weekdays") {
+        manager.dailyLog.setDailySchedule(daily, to: .weekdays(Daily.mondayToFriday))
+      }
+      .buttonStyle(.link)
+      .font(.caption)
+      Spacer(minLength: 0)
+    }
+  }
+
+  @ViewBuilder
+  private func intervalStepper(for daily: Daily, interval: Int) -> some View {
+    HStack(spacing: 8) {
+      Stepper(
+        value: Binding(
+          get: { interval },
+          set: { manager.dailyLog.setDailySchedule(daily, to: .everyNDays($0)) }
+        ),
+        // The model's own range, so a cycle set from the MCP server or a
+        // hand-edited file is editable here rather than stuck outside the
+        // stepper's bounds.
+        in: Daily.intervalRange
+      ) {
+        Text(daily.scheduleLabel)
+          .font(.caption)
+      }
+      .fixedSize()
+      Text("Counted from the day the cycle was set, so it keeps its phase.")
+        .font(.caption)
+        .foregroundColor(.secondary)
+      Spacer(minLength: 0)
+    }
   }
 
   // The plugin's settings are plain stored properties rather than `@Observable`

@@ -130,9 +130,14 @@ protocol DailyLogDataSource: AnyObject {
   var selectedDailyIndex: Int = 0
 
   /// Whether the inline "add a daily" field is open. Owned here rather than as
-  /// view `@State` so the keyboard router can open it.
+  /// view `@State` so the keyboard router can open it — and close it, which is
+  /// what Escape does.
   var isAddingDaily: Bool = false
   var newDailyTitle: String = ""
+  /// Schedule applied to the next daily added from the inline field. Sticky
+  /// across commits so a run of "every other day" habits can be typed in one
+  /// go, and reset by `cancelAddingDaily` along with everything else.
+  var newDailySchedule: Daily.Schedule = .weekdays(Daily.allWeekdays)
 
   var todaysDailies: [Daily] { plugin.dailies(dueOn: Date()) }
 
@@ -172,20 +177,23 @@ protocol DailyLogDataSource: AnyObject {
   }
 
   @discardableResult
-  func addDaily(title: String, activeWeekdays: Set<Int> = Daily.allWeekdays) -> Bool {
-    guard plugin.addDaily(title: title, activeWeekdays: activeWeekdays) != nil else { return false }
+  func addDaily(title: String, schedule: Daily.Schedule = .weekdays(Daily.allWeekdays)) -> Bool {
+    guard plugin.addDaily(title: title, schedule: schedule) != nil else { return false }
     revision &+= 1
     return true
   }
 
   func renameDaily(_ daily: Daily, to title: String) {
-    plugin.updateDaily(id: daily.id, title: title, activeWeekdays: nil)
+    plugin.updateDaily(id: daily.id, title: title, schedule: nil)
     revision &+= 1
   }
 
-  func setDailyWeekdays(_ daily: Daily, to weekdays: Set<Int>) {
-    plugin.updateDaily(id: daily.id, title: nil, activeWeekdays: weekdays)
+  func setDailySchedule(_ daily: Daily, to schedule: Daily.Schedule) {
+    plugin.updateDaily(id: daily.id, title: nil, schedule: schedule)
     revision &+= 1
+    // A daily can leave today's list by being rescheduled off it, so the cursor
+    // has to be pulled back in the same way archiving does it.
+    clampDailySelection()
   }
 
   func archiveDaily(_ daily: Daily) {
@@ -231,7 +239,7 @@ protocol DailyLogDataSource: AnyObject {
   @discardableResult
   func commitNewDaily() -> Bool {
     let title = newDailyTitle
-    guard addDaily(title: title) else { return false }
+    guard addDaily(title: title, schedule: newDailySchedule) else { return false }
     newDailyTitle = ""
     return true
   }
@@ -239,6 +247,7 @@ protocol DailyLogDataSource: AnyObject {
   func cancelAddingDaily() {
     isAddingDaily = false
     newDailyTitle = ""
+    newDailySchedule = .weekdays(Daily.allWeekdays)
   }
 
   // MARK: - Day lifecycle

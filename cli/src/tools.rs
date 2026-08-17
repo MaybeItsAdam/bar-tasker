@@ -216,9 +216,11 @@ impl Tools {
             "daily_add" => {
                 let title = required_string(arguments, "title")?;
                 let weekdays = as_optional_weekdays(arguments.get("active_weekdays"))?;
+                let interval = as_optional_interval(arguments.get("interval_days"))?;
+                reject_both_schedules(weekdays.as_ref(), interval)?;
                 Ok(outcome(
                     "Daily added",
-                    self.local.add_daily(&title, weekdays)?,
+                    self.local.add_daily(&title, weekdays, interval)?,
                 ))
             }
 
@@ -226,18 +228,25 @@ impl Tools {
                 let daily_id = required_string(arguments, "daily_id")?;
                 let title = as_string(arguments.get("title"));
                 let weekdays = as_optional_weekdays(arguments.get("active_weekdays"))?;
+                let interval = as_optional_interval(arguments.get("interval_days"))?;
+                reject_both_schedules(weekdays.as_ref(), interval)?;
                 let archived = match arguments.get("archived") {
                     None | Some(Value::Null) => None,
                     value => Some(as_bool(value, false)?),
                 };
-                if title.is_none() && weekdays.is_none() && archived.is_none() {
+                if title.is_none() && weekdays.is_none() && interval.is_none() && archived.is_none()
+                {
                     return Err(ToolError::new(
-                        "No updates provided. Pass title, active_weekdays and/or archived.",
+                        "No updates provided. Pass title, active_weekdays, interval_days and/or archived.",
                     ));
                 }
-                let payload =
-                    self.local
-                        .update_daily(&daily_id, title.as_deref(), weekdays, archived)?;
+                let payload = self.local.update_daily(
+                    &daily_id,
+                    title.as_deref(),
+                    weekdays,
+                    archived,
+                    interval,
+                )?;
                 Ok(outcome("Daily updated", payload))
             }
 
@@ -430,6 +439,31 @@ pub fn as_optional_weekdays(value: Option<&Value>) -> Result<Option<Vec<i64>>> {
     }
     weekdays.sort_unstable();
     Ok(Some(weekdays))
+}
+
+/// Length of a rotating cycle, matching `Daily.intervalDays`.
+pub fn as_optional_interval(value: Option<&Value>) -> Result<Option<i64>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => match value.as_i64().filter(|days| (1..=366).contains(days)) {
+            Some(days) => Ok(Some(days)),
+            None => Err(ToolError::new(
+                "interval_days must be an integer between 1 and 366.",
+            )),
+        },
+    }
+}
+
+/// The two schedules are alternatives, not filters that compose, so being
+/// handed both is a question with no answer — better refused than silently
+/// resolved in favour of whichever the implementation checks first.
+pub fn reject_both_schedules(weekdays: Option<&Vec<i64>>, interval: Option<i64>) -> Result<()> {
+    if weekdays.is_some() && interval.is_some() {
+        return Err(ToolError::new(
+            "Pass either active_weekdays or interval_days, not both.",
+        ));
+    }
+    Ok(())
 }
 
 pub fn required_string(arguments: &Map<String, Value>, key: &str) -> Result<String> {

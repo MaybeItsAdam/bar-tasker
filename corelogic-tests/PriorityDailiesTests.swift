@@ -44,6 +44,99 @@ final class DailyModelTests: XCTestCase {
     XCTAssertEqual(
       Daily(title: "B", activeWeekdays: Daily.mondayToFriday).scheduleLabel, "Weekdays")
     XCTAssertEqual(Daily(title: "C", activeWeekdays: [2, 4]).scheduleLabel, "Mon Wed")
+    XCTAssertEqual(Daily(title: "D", activeWeekdays: Daily.weekend).scheduleLabel, "Weekends")
+  }
+
+  // MARK: - Rotating schedules
+
+  /// The point of an interval schedule: it walks through the week rather than
+  /// sitting on the same days, so weekday membership says nothing about it.
+  func testAnIntervalDailyIsDueEveryNthDayRegardlessOfWeekday() {
+    var daily = Daily(title: "Water the plants")
+    daily.setSchedule(.everyNDays(3), anchor: date(2026, 8, 14))
+
+    XCTAssertTrue(daily.isDue(on: date(2026, 8, 14), calendar: calendar))
+    XCTAssertFalse(daily.isDue(on: date(2026, 8, 15), calendar: calendar))
+    XCTAssertFalse(daily.isDue(on: date(2026, 8, 16), calendar: calendar))
+    XCTAssertTrue(daily.isDue(on: date(2026, 8, 17), calendar: calendar))
+    XCTAssertTrue(daily.isDue(on: date(2026, 8, 20), calendar: calendar))
+  }
+
+  /// The cycle runs backwards from the anchor too, so the history behind a
+  /// newly-anchored daily isn't a run of days it was "never expected on".
+  func testTheCycleExtendsBackwardsFromTheAnchor() {
+    var daily = Daily(title: "Bins")
+    daily.setSchedule(.everyNDays(2), anchor: date(2026, 8, 14))
+
+    XCTAssertTrue(daily.isDue(on: date(2026, 8, 12), calendar: calendar))
+    XCTAssertFalse(daily.isDue(on: date(2026, 8, 13), calendar: calendar))
+  }
+
+  /// Set at 22:00, asked about at 09:00 — the times differ, only the days count.
+  func testDuenessIgnoresTheTimeOfDayWithinEachDay() {
+    var daily = Daily(title: "Long run")
+    daily.setSchedule(.everyNDays(2), anchor: date(2026, 8, 14, 22))
+    XCTAssertTrue(daily.isDue(on: date(2026, 8, 16, 9), calendar: calendar))
+    XCTAssertFalse(daily.isDue(on: date(2026, 8, 17, 9), calendar: calendar))
+  }
+
+  func testAnEveryOneDayCycleIsJustEveryDay() {
+    var daily = Daily(title: "Stretch")
+    daily.setSchedule(.everyNDays(1), anchor: date(2026, 8, 14))
+    XCTAssertTrue(daily.isEveryDay)
+    XCTAssertTrue(daily.isDue(on: date(2026, 8, 15), calendar: calendar))
+    XCTAssertEqual(daily.scheduleLabel, "Every day")
+  }
+
+  func testAnArchivedIntervalDailyIsStillNeverDue() {
+    var daily = Daily(title: "Old cycle", archivedAt: date(2026, 8, 1))
+    daily.setSchedule(.everyNDays(2), anchor: date(2026, 8, 14))
+    XCTAssertFalse(daily.isDue(on: date(2026, 8, 14), calendar: calendar))
+  }
+
+  func testIntervalScheduleLabels() {
+    XCTAssertEqual(Daily.scheduleLabel(for: .everyNDays(2)), "Every other day")
+    XCTAssertEqual(Daily.scheduleLabel(for: .everyNDays(3)), "Every 3 days")
+    XCTAssertEqual(Daily.scheduleLabel(for: .weekdays(Daily.mondayToFriday)), "Weekdays")
+  }
+
+  /// A hand-edited file (or a future client) can put anything in the field; a
+  /// daily that never comes round again is worse than a clamped one.
+  func testAnAbsurdIntervalIsClampedRatherThanHonoured() {
+    XCTAssertEqual(Daily(title: "A", intervalDays: 0).intervalDays, 1)
+    XCTAssertEqual(Daily(title: "B", intervalDays: 10_000).intervalDays, 366)
+  }
+
+  /// Weekdays stay stored while a cycle is running, so switching back restores
+  /// what was chosen rather than resetting to every day.
+  func testSwitchingToACycleAndBackKeepsTheWeekdaySet() {
+    var daily = Daily(title: "Gym", activeWeekdays: [2, 4, 6])
+    daily.setSchedule(.everyNDays(3), anchor: date(2026, 8, 14))
+    XCTAssertEqual(daily.activeWeekdays, [2, 4, 6])
+
+    daily.setSchedule(.weekdays(daily.activeWeekdays))
+    XCTAssertNil(daily.intervalDays)
+    XCTAssertNil(daily.intervalAnchor)
+    XCTAssertEqual(daily.scheduleLabel, "Mon Wed Fri")
+  }
+
+  /// Changing the length re-spaces the cycle from where it already was;
+  /// re-anchoring on every edit would silently restart the habit.
+  func testChangingTheIntervalKeepsTheExistingAnchor() {
+    var daily = Daily(title: "Bins")
+    daily.setSchedule(.everyNDays(2), anchor: date(2026, 8, 14))
+    daily.setSchedule(.everyNDays(4), anchor: date(2026, 8, 20))
+    XCTAssertEqual(daily.intervalAnchor, date(2026, 8, 14))
+    XCTAssertTrue(daily.isDue(on: date(2026, 8, 18), calendar: calendar))
+  }
+
+  /// Files written before cycles existed have neither field, and must keep
+  /// behaving exactly as they did.
+  func testADailyWithoutAnIntervalIsUnchanged() {
+    let daily = Daily(title: "Standup", activeWeekdays: Daily.mondayToFriday)
+    XCTAssertNil(daily.intervalDays)
+    XCTAssertEqual(daily.schedule, .weekdays(Daily.mondayToFriday))
+    XCTAssertFalse(daily.isDue(on: date(2026, 8, 15), calendar: calendar))
   }
 }
 
@@ -83,6 +176,18 @@ final class DailyCollectionTests: XCTestCase {
     // Saturday.
     let saturday = collection.due(on: date(2026, 8, 15), calendar: calendar)
     XCTAssertEqual(saturday.map(\.id), ["a"])
+  }
+
+  func testDueFiltersByRotatingSchedule() {
+    var collection = DailyCollection()
+    var rotating = Daily(id: "a", title: "Every third day")
+    rotating.setSchedule(.everyNDays(3), anchor: date(2026, 8, 15))
+    collection.add(rotating)
+    collection.add(Daily(id: "b", title: "Every day"))
+
+    XCTAssertEqual(collection.due(on: date(2026, 8, 15), calendar: calendar).map(\.id), ["a", "b"])
+    XCTAssertEqual(collection.due(on: date(2026, 8, 16), calendar: calendar).map(\.id), ["b"])
+    XCTAssertEqual(collection.due(on: date(2026, 8, 18), calendar: calendar).map(\.id), ["a", "b"])
   }
 
   func testMoveReordersAndRenumbers() {
@@ -381,6 +486,46 @@ final class DailyDefinitionsStoreFormatTests: XCTestCase {
       store.load().dailies.isEmpty,
       "If this ever starts decoding, the Python server's format constraint can be relaxed."
     )
+  }
+
+  /// A daily on fixed weekdays writes neither interval field, so files written
+  /// by this app stay byte-identical to what they were before cycles existed —
+  /// and to what the Python and Rust servers write for the same daily.
+  func testAWeekdayDailyWritesNoIntervalFields() throws {
+    let (store, directory) = makeStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    var collection = DailyCollection()
+    collection.add(Daily(title: "Read"))
+    try store.save(collection)
+
+    let json = try String(contentsOf: store.fileURL, encoding: .utf8)
+    XCTAssertFalse(json.contains("intervalDays"))
+    XCTAssertFalse(json.contains("intervalAnchor"))
+  }
+
+  /// The anchor is a timestamp in the same whole-second UTC shape as
+  /// `createdAt`, for the same reason: the decoder rejects fractional seconds,
+  /// and a rejected decode empties the file rather than erroring.
+  func testAnIntervalDailyRoundTripsWithAWholeSecondAnchor() throws {
+    let (store, directory) = makeStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    var collection = DailyCollection()
+    var daily = Daily(id: "cycle", title: "Bins")
+    daily.setSchedule(.everyNDays(3))
+    collection.add(daily)
+    try store.save(collection)
+
+    let json = try String(contentsOf: store.fileURL, encoding: .utf8)
+    XCTAssertNotNil(
+      json.range(
+        of: #""intervalAnchor"\s*:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z""#,
+        options: .regularExpression),
+      "intervalAnchor must be whole-second UTC; got:\n\(json)"
+    )
+    XCTAssertEqual(store.load().daily(withId: "cycle")?.intervalDays, 3)
+    XCTAssertNotNil(store.load().daily(withId: "cycle")?.intervalAnchor)
   }
 
   /// Weekdays round-trip sorted, so the file is stable across saves and can be

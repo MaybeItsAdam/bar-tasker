@@ -64,8 +64,8 @@ protocol DailyLogPlugin: Plugin, AnyObject {
   func completedDailyIds(on date: Date) -> Set<String>
 
   @discardableResult
-  func addDaily(title: String, activeWeekdays: Set<Int>) -> Daily?
-  func updateDaily(id: String, title: String?, activeWeekdays: Set<Int>?)
+  func addDaily(title: String, schedule: Daily.Schedule) -> Daily?
+  func updateDaily(id: String, title: String?, schedule: Daily.Schedule?)
   /// Archives rather than deletes, so days that recorded a tick against this id
   /// still render with a title instead of an orphan.
   func archiveDaily(id: String)

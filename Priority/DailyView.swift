@@ -8,23 +8,10 @@ import SwiftUI
 /// Checkvist knows what is open right now; only the log knows what happened,
 /// and "what happened" is the entire question this view answers.
 struct DailyView: View {
-  /// Shared with `PopoverView.panelHeight`, which reserves space for this
-  /// section. Two independent guesses at the row height is how a view ends up
-  /// with a nested scroll bar it was never meant to have.
-  enum Layout {
-    /// 13pt line box + `rowVerticalPadding` top and bottom.
-    static let rowHeight: CGFloat = 30
-    static let headerHeight: CGFloat = 26
-    static let addFieldHeight: CGFloat = 32
-    /// Eight rows before it scrolls. A morning routine is usually five to eight
-    /// things, and scrolling a list you're working straight down is the one
-    /// thing that makes it easy to lose your place.
-    static let listMaxHeight: CGFloat = rowHeight * 8
-    /// Taller than the shared 64pt: the chart is now shown from day one, so it
-    /// spends its early life mostly flat and needs the height to read as a
-    /// chart rather than as a rule.
-    static let chartHeight: CGFloat = 84
-  }
+  /// The sizing arithmetic, which lives in `CoreLogic` so it can be tested
+  /// without a window — see `DailyChecklistLayout`. `PopoverLayout` reads the
+  /// same type when it decides how tall the panel should be.
+  typealias Layout = DailyChecklistLayout
 
   @Environment(AppCoordinator.self) var manager
 
@@ -67,10 +54,13 @@ struct DailyView: View {
         completionsList(summary)
           .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
       }
-      Spacer(minLength: 0)
     }
-    .padding(.vertical, 10)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    // Top only, and no trailing `Spacer`. A spacer of zero height still costs
+    // the stack's 10pt spacing in front of it, so the two together left 20pt of
+    // bare panel under the checklist — a grey bar between the last row and the
+    // dock that no amount of sizing the list differently could remove.
+    .padding(.top, 10)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
   // MARK: - Headline
@@ -122,19 +112,42 @@ struct DailyView: View {
       if dailies.isEmpty && !dailyLog.isAddingDaily {
         emptyDailiesHint
       } else {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(dailies.enumerated()), id: \.element.id) { index, daily in
-              dailyRow(
-                daily,
-                isDone: completed.contains(daily.id),
-                isSelected: index == dailyLog.selectedDailyIndex
-              )
+        // `ScrollViewReader`, because the selection is moved by the keyboard
+        // from `KeyboardShortcutRouter` and the list has no idea it happened.
+        // Without this, j/↓ walks the cursor straight off the bottom of a
+        // clipped list and the view sits still while it goes.
+        ScrollViewReader { proxy in
+          ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+              ForEach(Array(dailies.enumerated()), id: \.element.id) { index, daily in
+                dailyRow(
+                  daily,
+                  isDone: completed.contains(daily.id),
+                  isSelected: index == dailyLog.selectedDailyIndex
+                )
+                .id(daily.id)
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          // Fills whatever room is left, and scrolls. Not a fixed height and
+          // not a computed one: either leaves a strip of bare panel under the
+          // last row, or overflows the window and pushes the dock off the
+          // bottom. The eight-row cap lives in `preferredRowsHeight`, where it
+          // decides how tall the *panel* gets when nothing has been dragged —
+          // applying it here as well would cap a panel you deliberately dragged
+          // taller, leaving the extra as dead space.
+          .frame(maxHeight: .infinity)
+          .onChange(of: dailyLog.selectedDailyIndex) { _, index in
+            guard dailies.indices.contains(index) else { return }
+            // No anchor: scroll the minimum needed to bring the row into view,
+            // so walking down a list moves it a row at a time rather than
+            // yanking the selection to the middle on every keypress.
+            withAnimation(.easeOut(duration: 0.12)) {
+              proxy.scrollTo(dailies[index].id)
             }
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxHeight: Layout.listMaxHeight)
       }
 
       if dailyLog.isAddingDaily {
@@ -152,16 +165,22 @@ struct DailyView: View {
         .font(.system(size: 10, weight: .semibold))
         .foregroundColor(themeColor(.textSecondary))
       Spacer(minLength: 0)
+      // Toggles rather than only opening: a button that does nothing when the
+      // field is already showing is a button that looks broken.
       Button {
-        dailyLog.isAddingDaily = true
+        if dailyLog.isAddingDaily {
+          dailyLog.cancelAddingDaily()
+        } else {
+          dailyLog.isAddingDaily = true
+        }
       } label: {
-        Image(systemName: "plus.circle.fill")
+        Image(systemName: dailyLog.isAddingDaily ? "xmark.circle.fill" : "plus.circle.fill")
           .font(.system(size: 13))
           .foregroundColor(themeColor(.textSecondary))
       }
       .buttonStyle(.plain)
-      .help("Add a daily (Return)")
-      .accessibilityLabel("Add a daily")
+      .help(dailyLog.isAddingDaily ? "Stop adding (Esc)" : "Add a daily (Return)")
+      .accessibilityLabel(dailyLog.isAddingDaily ? "Stop adding a daily" : "Add a daily")
     }
     .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
     .padding(.top, 8)
@@ -202,7 +221,10 @@ struct DailyView: View {
       }
     }
     .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
-    .padding(.vertical, PopoverLayout.rowVerticalPadding)
+    // A fixed height, not padding: the schedule badge is a point taller than a
+    // bare title, so padded rows come out 34 or 35 depending on their content
+    // and the list stops landing on a clean grid.
+    .frame(height: Layout.rowHeight)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(isSelected ? themeColor(.selectionBackground).opacity(0.7) : Color.clear)
     .overlay(alignment: .leading) {
@@ -235,25 +257,89 @@ struct DailyView: View {
   @ViewBuilder
   private var addDailyField: some View {
     @Bindable var log = manager.dailyLog
-    HStack(alignment: .center, spacing: PopoverLayout.rowContentSpacing) {
-      Image(systemName: "plus")
-        .font(.system(size: 14))
-        .foregroundColor(themeColor(.textSecondary))
-        .frame(width: PopoverLayout.rowIconWidth)
-      TextField("New daily", text: $log.newDailyTitle)
-        .textFieldStyle(.plain)
-        .font(Typography.taskFont(size: 13, name: manager.preferences.appFontName))
-        .foregroundColor(themeColor(.textPrimary))
-        .focused($addFieldFocused)
-        // Return keeps the field open so a routine can be typed in one go;
-        // Escape is the way out. Adding five habits shouldn't need five clicks.
-        .onSubmit { log.commitNewDaily() }
-        .onExitCommand { log.cancelAddingDaily() }
-        .onAppear { addFieldFocused = true }
+    VStack(alignment: .leading, spacing: 3) {
+      HStack(alignment: .center, spacing: PopoverLayout.rowContentSpacing) {
+        Image(systemName: "plus")
+          .font(.system(size: 14))
+          .foregroundColor(themeColor(.textSecondary))
+          .frame(width: PopoverLayout.rowIconWidth)
+        TextField("New daily", text: $log.newDailyTitle)
+          .textFieldStyle(.plain)
+          .font(Typography.taskFont(size: 13, name: manager.preferences.appFontName))
+          .foregroundColor(themeColor(.textPrimary))
+          .focused($addFieldFocused)
+          // Return keeps the field open so a routine can be typed in one go;
+          // Escape is the way out. Adding five habits shouldn't need five clicks.
+          //
+          // `onExitCommand` is the fallback, not the mechanism: the popover's
+          // key router sees Escape first and cancels there. This stays for the
+          // case where the field is focused without that router in play.
+          .onSubmit { log.commitNewDaily() }
+          .onExitCommand { log.cancelAddingDaily() }
+          .onAppear { addFieldFocused = true }
+
+        newDailyScheduleMenu
+
+        Button {
+          log.cancelAddingDaily()
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(themeColor(.textSecondary))
+        }
+        .buttonStyle(.plain)
+        .help("Cancel (Esc)")
+        .accessibilityLabel("Cancel adding a daily")
+      }
+      Text("Return adds · Esc cancels")
+        .font(.system(size: 10))
+        .foregroundColor(themeColor(.textMuted))
+        .padding(.leading, PopoverLayout.rowIconWidth + PopoverLayout.rowContentSpacing)
     }
     .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
     .padding(.vertical, PopoverLayout.inlineEntryVerticalPadding)
     .background(themeColor(.panelSurfaceElevated))
+  }
+
+  /// The handful of schedules worth choosing *while typing a habit down*.
+  ///
+  /// Arbitrary weekday sets and arbitrary intervals live in
+  /// `Preferences → Plugins → Daily Log`, which is the full editor. Putting
+  /// seven day toggles and a stepper in this row would make the fast path —
+  /// type a name, press Return — the slow one.
+  @ViewBuilder
+  private var newDailyScheduleMenu: some View {
+    let log = manager.dailyLog
+    let choices: [Daily.Schedule] = [
+      .weekdays(Daily.allWeekdays),
+      .weekdays(Daily.mondayToFriday),
+      .weekdays(Daily.weekend),
+      .everyNDays(2),
+      .everyNDays(3),
+      .everyNDays(7),
+    ]
+
+    Menu {
+      ForEach(Array(choices.enumerated()), id: \.offset) { _, choice in
+        Button {
+          log.newDailySchedule = choice
+        } label: {
+          if log.newDailySchedule == choice {
+            Label(Daily.scheduleLabel(for: choice), systemImage: "checkmark")
+          } else {
+            Text(Daily.scheduleLabel(for: choice))
+          }
+        }
+      }
+    } label: {
+      Text(Daily.scheduleLabel(for: log.newDailySchedule))
+        .font(.system(size: 10, weight: .medium))
+        .foregroundColor(themeColor(.textSecondary))
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .help("How often the new daily repeats")
   }
 
   @ViewBuilder

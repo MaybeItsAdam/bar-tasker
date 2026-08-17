@@ -205,7 +205,10 @@ priority done 12345
 priority log --days 7
 priority dailies
 priority daily add Read for twenty minutes --weekdays mon,wed,fri
+priority daily add Water the plants --every-days 3
 priority daily tick 5F385C47-E2A6-488E-B3E1-84B0511FFAD4
+priority daily update <id> --every-days 4
+priority daily update <id> --weekdays weekdays   # back off the cycle
 priority daily update <id> --archive
 
 priority --json dailies | jq '.dailies[] | select(.done | not)'
@@ -214,6 +217,11 @@ priority --json dailies | jq '.dailies[] | select(.done | not)'
 `--weekdays` takes what you would actually type: `mon,wed,fri`, `weekdays`,
 `weekend`, `every day`, or `Calendar` numbers where 1 is Sunday. The numbers are
 what everything downstream sees; the spellings exist only at this boundary.
+
+`--every-days N` is the other kind of schedule: a cycle that rotates through the
+week rather than sitting on fixed days, counted from the day you set it. The two
+are alternatives — passing both is refused rather than silently resolved — and
+`--weekdays` on an existing cycle ends it, restoring the days it had before.
 
 ### The escape hatch
 

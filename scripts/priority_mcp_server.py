@@ -586,24 +586,65 @@ class LocalState:
     def _sorted_dailies(dailies: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return sorted(dailies, key=lambda d: (d.get("sortIndex", 0), d.get("createdAt", "")))
 
-    def _due_on(self, dailies: list[dict[str, Any]], day: datetime) -> list[dict[str, Any]]:
+    @staticmethod
+    def _interval_days_of(daily: dict[str, Any]) -> Optional[int]:
+        """The length of a rotating cycle, matching ``Daily.intervalDays``.
+
+        Clamped the same way the app clamps it, so a hand-edited 0 or 100000 is
+        a schedule that still comes round rather than one that never does.
+        """
+        raw = daily.get("intervalDays")
+        if not isinstance(raw, int) or isinstance(raw, bool):
+            return None
+        return min(366, max(1, raw))
+
+    def _is_due(self, daily: dict[str, Any], day: datetime) -> bool:
+        """Whether ``daily`` is expected on the logical day beginning at ``day``.
+
+        A cycle and a weekday set are alternatives, not filters that compose:
+        "every three days" walks through the week, so weekday membership says
+        nothing about it. Matches ``Daily.isDue``.
+        """
+        if self._is_archived(daily):
+            return False
+        interval = self._interval_days_of(daily)
+        if interval is not None:
+            if interval == 1:
+                return True
+            anchor = self._parse_at(daily.get("intervalAnchor")) or self._parse_at(
+                daily.get("createdAt")
+            )
+            if anchor is None:
+                return True
+            # Python's ``%`` is already non-negative, so the cycle extends
+            # backwards from the anchor as well as forwards — the history behind
+            # a newly-anchored daily is not a run of days it was never due on.
+            return (day.date() - anchor.date()).days % interval == 0
         # Calendar weekday numbering, 1 = Sunday, matching ``Daily.activeWeekdays``.
         weekday = (day.weekday() + 1) % 7 + 1
-        return [
-            daily
-            for daily in self._sorted_dailies(dailies)
-            if not self._is_archived(daily) and weekday in (daily.get("activeWeekdays") or [])
-        ]
+        return weekday in (daily.get("activeWeekdays") or [])
+
+    def _due_on(self, dailies: list[dict[str, Any]], day: datetime) -> list[dict[str, Any]]:
+        return [daily for daily in self._sorted_dailies(dailies) if self._is_due(daily, day)]
 
     @staticmethod
     def _schedule_label(daily: dict[str, Any]) -> str:
+        interval = LocalState._interval_days_of(daily)
+        if interval is not None:
+            if interval == 1:
+                return "Every day"
+            if interval == 2:
+                return "Every other day"
+            return f"Every {interval} days"
         weekdays = set(daily.get("activeWeekdays") or [])
         if weekdays == {1, 2, 3, 4, 5, 6, 7}:
             return "Every day"
         if weekdays == {2, 3, 4, 5, 6}:
             return "Weekdays"
+        if weekdays == {1, 7}:
+            return "Weekends"
         names = ["", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-        return " ".join(names[day] for day in sorted(weekdays))
+        return " ".join(names[day] for day in sorted(weekdays) if 1 <= day <= 7)
 
     # -- tool payloads -------------------------------------------------------
 
@@ -728,10 +769,18 @@ class LocalState:
             "title": daily.get("title", ""),
             "schedule": LocalState._schedule_label(daily),
             "active_weekdays": sorted(daily.get("activeWeekdays") or []),
+            # Null rather than absent while the daily runs on weekdays, so a
+            # client can tell "not on a cycle" from "this server predates them".
+            "interval_days": LocalState._interval_days_of(daily),
             "archived": bool(daily.get("archivedAt")),
         }
 
-    def add_daily(self, title: str, active_weekdays: Optional[list[int]]) -> dict[str, Any]:
+    def add_daily(
+        self,
+        title: str,
+        active_weekdays: Optional[list[int]],
+        interval_days: Optional[int] = None,
+    ) -> dict[str, Any]:
         trimmed = (title or "").strip()
         if not trimmed:
             raise CheckvistError("title must not be empty.")
@@ -743,6 +792,11 @@ class LocalState:
             "sortIndex": 0,
             "createdAt": self._now_iso(),
         }
+        if interval_days is not None:
+            # The weekday set stays on the record so switching off the cycle
+            # later restores it, exactly as `Daily.setSchedule` keeps it.
+            daily["intervalDays"] = interval_days
+            daily["intervalAnchor"] = daily["createdAt"]
 
         def transform(collection: dict[str, Any]) -> None:
             # Appended at the end of the current order, as `DailyCollection.add`.
@@ -762,6 +816,7 @@ class LocalState:
         title: Optional[str],
         active_weekdays: Optional[list[int]],
         archived: Optional[bool],
+        interval_days: Optional[int] = None,
     ) -> dict[str, Any]:
         if not any(d.get("id") == daily_id for d in self._load_collection()["dailies"]):
             raise CheckvistError(f"No daily with id {daily_id}.")
@@ -773,7 +828,16 @@ class LocalState:
                 if title is not None and title.strip():
                     daily["title"] = title.strip()
                 if active_weekdays:
+                    # Weekdays end the cycle: the two are alternatives, and a
+                    # stale interval left behind would keep winning.
                     daily["activeWeekdays"] = sorted(set(active_weekdays))
+                    daily.pop("intervalDays", None)
+                    daily.pop("intervalAnchor", None)
+                if interval_days is not None:
+                    daily["intervalDays"] = interval_days
+                    # Only the first switch anchors: changing the length
+                    # re-spaces the cycle rather than restarting it.
+                    daily.setdefault("intervalAnchor", self._now_iso())
                 if archived is not None:
                     # Archive rather than delete, so history referencing this id
                     # still renders with a title instead of as an orphan.
@@ -1277,6 +1341,15 @@ class PriorityMCPServer:
                             "items": {"type": "integer", "minimum": 1, "maximum": 7},
                             "description": "1 = Sunday. Omit for every day.",
                         },
+                        "interval_days": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 366,
+                            "description": (
+                                "Repeat every N days from today instead of on fixed "
+                                "weekdays. Not combinable with active_weekdays."
+                            ),
+                        },
                     },
                     "required": ["title"],
                     "additionalProperties": False,
@@ -1285,9 +1358,9 @@ class PriorityMCPServer:
             {
                 "name": "daily_update",
                 "description": (
-                    "Rename a daily, change which weekdays it's expected on, or "
-                    "archive/unarchive it. Archiving keeps history readable rather "
-                    "than deleting."
+                    "Rename a daily, reschedule it (fixed weekdays or an every-N-days "
+                    "cycle), or archive/unarchive it. Archiving keeps history readable "
+                    "rather than deleting."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -1297,7 +1370,18 @@ class PriorityMCPServer:
                         "active_weekdays": {
                             "type": "array",
                             "items": {"type": "integer", "minimum": 1, "maximum": 7},
-                            "description": "1 = Sunday.",
+                            "description": (
+                                "1 = Sunday. Switches a cycling daily back to fixed weekdays."
+                            ),
+                        },
+                        "interval_days": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 366,
+                            "description": (
+                                "Repeat every N days instead of on fixed weekdays. "
+                                "Not combinable with active_weekdays."
+                            ),
                         },
                         "archived": {"type": "boolean"},
                     },
@@ -1583,7 +1667,9 @@ class PriorityMCPServer:
             if name == "daily_add":
                 title = _required_string(arguments, "title")
                 weekdays = _as_optional_weekdays(arguments.get("active_weekdays"))
-                payload = self.local_state.add_daily(title, weekdays)
+                interval = _as_optional_interval(arguments.get("interval_days"))
+                _reject_both_schedules(weekdays, interval)
+                payload = self.local_state.add_daily(title, weekdays, interval)
                 text = _tool_result_text("Daily added", payload)
                 return {"content": [{"type": "text", "text": text}]}
 
@@ -1591,16 +1677,21 @@ class PriorityMCPServer:
                 daily_id = _required_string(arguments, "daily_id")
                 title = _as_optional_string(arguments.get("title"))
                 weekdays = _as_optional_weekdays(arguments.get("active_weekdays"))
+                interval = _as_optional_interval(arguments.get("interval_days"))
+                _reject_both_schedules(weekdays, interval)
                 archived = (
                     None
                     if arguments.get("archived") is None
                     else _as_bool(arguments.get("archived"), default=False)
                 )
-                if title is None and weekdays is None and archived is None:
+                if title is None and weekdays is None and interval is None and archived is None:
                     raise CheckvistError(
-                        "No updates provided. Pass title, active_weekdays and/or archived."
+                        "No updates provided. Pass title, active_weekdays, "
+                        "interval_days and/or archived."
                     )
-                payload = self.local_state.update_daily(daily_id, title, weekdays, archived)
+                payload = self.local_state.update_daily(
+                    daily_id, title, weekdays, archived, interval
+                )
                 text = _tool_result_text("Daily updated", payload)
                 return {"content": [{"type": "text", "text": text}]}
 
@@ -1740,6 +1831,24 @@ def _as_optional_int(value: Any) -> Optional[int]:
         except ValueError as err:
             raise CheckvistError(f"Invalid integer value: {value}") from err
     raise CheckvistError(f"Expected integer value, got {type(value).__name__}.")
+
+
+def _as_optional_interval(value: Any) -> Optional[int]:
+    """Length of a rotating cycle, matching `Daily.intervalDays`."""
+    if value is None:
+        return None
+    days = _as_optional_int(value)
+    if days is None or days < 1 or days > 366:
+        raise CheckvistError("interval_days must be an integer between 1 and 366.")
+    return days
+
+
+def _reject_both_schedules(weekdays: Optional[list[int]], interval: Optional[int]) -> None:
+    """The two schedules are alternatives, not filters that compose, so being
+    handed both is a question with no answer — better refused than silently
+    resolved in favour of whichever the implementation checks first."""
+    if weekdays is not None and interval is not None:
+        raise CheckvistError("Pass either active_weekdays or interval_days, not both.")
 
 
 def _as_optional_weekdays(value: Any) -> Optional[list[int]]:

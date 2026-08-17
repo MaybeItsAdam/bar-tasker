@@ -226,6 +226,10 @@ pub enum DailyCommand {
         title: Vec<String>,
         #[command(flatten)]
         weekdays: WeekdayArg,
+        /// Repeat every N days from today rather than on fixed weekdays — the
+        /// schedule that rotates through the week instead of sitting in it.
+        #[arg(long, value_name = "N", conflicts_with = "weekdays")]
+        every_days: Option<i64>,
     },
     /// Rename, reschedule, archive or unarchive a daily.
     Update {
@@ -234,6 +238,10 @@ pub enum DailyCommand {
         title: Option<String>,
         #[command(flatten)]
         weekdays: WeekdayArg,
+        /// Switch to repeating every N days. Passing --weekdays instead puts it
+        /// back on fixed weekdays.
+        #[arg(long, value_name = "N", conflicts_with = "weekdays")]
+        every_days: Option<i64>,
         /// Archive it. History that references it still renders with a title.
         #[arg(long, conflicts_with = "unarchive")]
         archive: bool,
@@ -461,10 +469,17 @@ pub fn resolve(cli: &Cli) -> Result<(String, Map<String, Value>)> {
         Command::Metadata => "task_metadata",
 
         Command::Daily { command } => match command {
-            DailyCommand::Add { title, weekdays } => {
+            DailyCommand::Add {
+                title,
+                weekdays,
+                every_days,
+            } => {
                 arguments.insert("title".into(), json!(title.join(" ")));
                 if let Some(weekdays) = weekdays.parse()? {
                     arguments.insert("active_weekdays".into(), json!(weekdays));
+                }
+                if let Some(interval) = every_days {
+                    arguments.insert("interval_days".into(), json!(interval));
                 }
                 "daily_add"
             }
@@ -472,6 +487,7 @@ pub fn resolve(cli: &Cli) -> Result<(String, Map<String, Value>)> {
                 daily_id,
                 title,
                 weekdays,
+                every_days,
                 archive,
                 unarchive,
             } => {
@@ -479,6 +495,9 @@ pub fn resolve(cli: &Cli) -> Result<(String, Map<String, Value>)> {
                 insert_if_some(&mut arguments, "title", title.as_deref());
                 if let Some(weekdays) = weekdays.parse()? {
                     arguments.insert("active_weekdays".into(), json!(weekdays));
+                }
+                if let Some(interval) = every_days {
+                    arguments.insert("interval_days".into(), json!(interval));
                 }
                 if *archive || *unarchive {
                     arguments.insert("archived".into(), json!(*archive));

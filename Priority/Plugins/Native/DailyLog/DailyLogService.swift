@@ -267,10 +267,11 @@ final class DailyLogService {
   }
 
   @discardableResult
-  func addDaily(title: String, activeWeekdays: Set<Int>) -> Daily? {
+  func addDaily(title: String, schedule: Daily.Schedule) -> Daily? {
     let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
-    let daily = Daily(title: trimmed, activeWeekdays: activeWeekdays)
+    var daily = Daily(title: trimmed)
+    daily.setSchedule(schedule)
     mutateDailies { $0.add(daily) }
     // Re-read rather than returning the local copy: `add` assigns the sort
     // index against whatever was on disk, so the stored value is the truthful
@@ -278,7 +279,7 @@ final class DailyLogService {
     return cachedDailies.daily(withId: daily.id)
   }
 
-  func updateDaily(id: String, title: String?, activeWeekdays: Set<Int>?) {
+  func updateDaily(id: String, title: String?, schedule: Daily.Schedule?) {
     mutateDailies { collection in
       collection.update(id: id) { daily in
         if let title {
@@ -286,9 +287,7 @@ final class DailyLogService {
           // An empty rename is a slip, not an instruction to blank the row.
           if !trimmed.isEmpty { daily.title = trimmed }
         }
-        if let activeWeekdays, !activeWeekdays.isEmpty {
-          daily.activeWeekdays = activeWeekdays
-        }
+        if let schedule { daily.setSchedule(schedule) }
       }
     }
   }
