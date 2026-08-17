@@ -402,8 +402,15 @@ extension SettingsView {
       items: [
         .init(keys: "j / ↓", action: "Next task", note: nil),
         .init(keys: "k / ↑", action: "Previous task", note: nil),
-        .init(keys: "h / ←", action: "Exit to parent", note: nil),
-        .init(keys: "l / →", action: "Enter subtasks", note: nil),
+        .init(
+          keys: "l / →", action: "Expand subtasks, then step into them",
+          note: "Children appear indented under the task"),
+        .init(
+          keys: "h / ←", action: "Collapse, step out to the parent row, or leave the scope",
+          note: nil),
+        .init(
+          keys: "Shift+→ / Shift+←", action: "Zoom into the selected task / back out",
+          note: "The list becomes just that subtree. Also on ] and ["),
         .init(keys: "Shift+L", action: "Open list switch command", note: nil),
         .init(
           keys: "Ctrl+← / Ctrl+→", action: "Cycle root tabs", note: "All / Due / Tags / Priority"),

@@ -670,6 +670,9 @@ final class SyncService {
       repository.tasks.filter { ($0.parentId ?? 0) == (task.parentId ?? 0) }
     guard let idx = siblings.firstIndex(where: { $0.id == task.id }), idx > 0 else { return }
     let newParent = siblings[idx - 1]
+    // The task is about to move underneath a sibling. Open that sibling, or
+    // indenting reads as the task vanishing.
+    repository.setExpanded(true, taskId: newParent.id)
 
     await repository.runBooleanMutation(
       failureMessage: "Failed to indent task.",

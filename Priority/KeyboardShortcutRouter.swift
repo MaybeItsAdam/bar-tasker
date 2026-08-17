@@ -473,28 +473,43 @@ struct KeyboardShortcutRouter {
       }
     }
 
-    // Shift+→ - focus/hoist (Checkvist), plain → - enter children.
+    // Shift+→ / Shift+← - zoom the whole list into the selected task, or back
+    // out of it. The scope-changing pair, as `]` / `[` are in every view.
+    if !isFocused && !rootScopeFocused && matches(.zoomIntoTask) {
+      manager.navigationState.rootScopeFocusLevel = 0
+      if manager.taskListViewModel.rootTaskView == .kanban {
+        manager.kanban.enterSelectedTaskAsScope()
+      } else {
+        manager.taskNavigationService.enterChildren()
+        clearSearchFilter()
+      }
+      updateTitle()
+      return true
+    }
+    if !isFocused && !rootScopeFocused && matches(.zoomOutOfTask) {
+      manager.navigationState.rootScopeFocusLevel = 0
+      if manager.taskListViewModel.rootTaskView == .kanban {
+        manager.kanban.exitToParentScope()
+      } else {
+        clearSearchFilter()
+        manager.taskNavigationService.exitToParent()
+      }
+      updateTitle()
+      return true
+    }
+    // → - open the selected row in place, then walk into what it shows.
     if matches(.enterChildren) {
       if isFocused { return false }
       manager.navigationState.rootScopeFocusLevel = 0
-      manager.taskNavigationService.enterChildren()
-      if !manager.quickEntry.searchText.isEmpty {
-        manager.quickEntry.searchText = ""
-        manager.quickEntry.quickEntryMode = .search
-        manager.quickEntry.isQuickEntryFocused = false
-      }
+      manager.taskNavigationService.expandOrDescend()
+      updateTitle()
       return true
     }
-    // Shift+← - un-focus (Checkvist), plain ← - exit to parent.
+    // ← - shut the row, step back up to its parent, or leave the scope.
     if matches(.exitToParent) {
       if isFocused { return false }
       manager.navigationState.rootScopeFocusLevel = 0
-      if !manager.quickEntry.searchText.isEmpty {
-        manager.quickEntry.searchText = ""
-        manager.quickEntry.quickEntryMode = .search
-        manager.quickEntry.isQuickEntryFocused = false
-      }
-      manager.taskNavigationService.exitToParent()
+      manager.taskNavigationService.collapseOrAscend()
       updateTitle()
       return true
     }
@@ -983,6 +998,15 @@ struct KeyboardShortcutRouter {
     }
 
     return false
+  }
+
+  /// Drops an active search filter so a scope change lands in the real list
+  /// rather than inside the results of a search the user has moved on from.
+  private func clearSearchFilter() {
+    guard !manager.quickEntry.searchText.isEmpty else { return }
+    manager.quickEntry.searchText = ""
+    manager.quickEntry.quickEntryMode = .search
+    manager.quickEntry.isQuickEntryFocused = false
   }
 
   private static func keyToken(

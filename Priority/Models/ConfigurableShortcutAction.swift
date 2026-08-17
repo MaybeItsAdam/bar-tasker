@@ -12,8 +12,13 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
   case openInObsidianNewWindow
   case nextTask
   case previousTask
+  /// Right / left on a row. These open and shut the row in place; the scope
+  /// changing pair is `zoomIntoTask` / `zoomOutOfTask`. The raw values are kept
+  /// as they were so custom bindings survive the change.
   case enterChildren
   case exitToParent
+  case zoomIntoTask
+  case zoomOutOfTask
   case markDone
   case invalidateTask
   case addSibling
@@ -87,8 +92,10 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .openInObsidianNewWindow: return "Open in new Obsidian window"
     case .nextTask: return "Next task"
     case .previousTask: return "Previous task"
-    case .enterChildren: return "Enter children"
-    case .exitToParent: return "Exit to parent"
+    case .enterChildren: return "Expand / step into subtasks"
+    case .exitToParent: return "Collapse / step out to parent"
+    case .zoomIntoTask: return "Zoom into selected task"
+    case .zoomOutOfTask: return "Zoom out to parent scope"
     case .markDone: return "Mark done"
     case .invalidateTask: return "Invalidate task"
     case .addSibling: return "Add sibling"
@@ -151,7 +158,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
 
   var category: String {
     switch self {
-    case .nextTask, .previousTask, .enterChildren, .exitToParent, .rootCycleTabPrevious,
+    case .nextTask, .previousTask, .enterChildren, .exitToParent, .zoomIntoTask, .zoomOutOfTask,
+      .rootCycleTabPrevious,
       .rootCycleTabNext, .rootCycleFilterPrevious, .rootCycleFilterNext, .rootTabAll, .rootTabDue,
       .rootTabTags, .rootTabPriority, .rootFilter1, .rootFilter2, .rootFilter3, .rootFilter4,
       .rootFilter5, .rootFilter6, .rootFilter7, .rootTabKanban,
@@ -189,6 +197,8 @@ enum ConfigurableShortcutAction: String, CaseIterable, Identifiable {
     case .previousTask: return "up,k"
     case .enterChildren: return "right,l"
     case .exitToParent: return "left,h"
+    case .zoomIntoTask: return "shift+right"
+    case .zoomOutOfTask: return "shift+left"
     case .markDone: return "space"
     case .invalidateTask: return "shift+space"
     case .addSibling: return "enter"

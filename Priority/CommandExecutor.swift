@@ -97,6 +97,14 @@ final class CommandExecutor {
     case .exitParent:
       manager.taskNavigationService.exitToParent()
       return
+    case .expandAll:
+      manager.taskNavigationService.expandAll()
+      manager.statusMessage = "Expanded every task with subtasks"
+      return
+    case .collapseAll:
+      manager.taskNavigationService.collapseAll()
+      manager.statusMessage = "Collapsed everything"
+      return
     case .switchTab(let raw):
       let view: RootTaskView?
       switch raw {
@@ -255,6 +263,10 @@ final class CommandExecutor {
       await manager.syncService.moveTask(task, direction: 1)
     case .enterChildren:
       manager.taskNavigationService.enterChildren()
+    case .expandTask:
+      manager.taskNavigationService.setExpanded(true, taskId: task.id)
+    case .collapseTask:
+      manager.taskNavigationService.setExpanded(false, taskId: task.id)
     case .tag(let tagName):
       guard !tagName.isEmpty else {
         manager.repository.errorMessage = "Missing tag name. Try: tag urgent"

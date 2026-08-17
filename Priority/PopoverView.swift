@@ -26,6 +26,9 @@ enum PopoverLayout {
   static let rowIconWidth: CGFloat = 16
   static let rowContentSpacing: CGFloat = 10
   static let rowTextFadeWidth: CGFloat = 18
+  /// One level of outline indent. Narrow on purpose: the popover is 400pt wide
+  /// and a deep subtree still has to leave room for the task itself.
+  static let outlineIndentWidth: CGFloat = 14
   static let inlineEntryVerticalPadding: CGFloat = 7
   /// The bottom dock row, present in every view.
   static let dockHeight: CGFloat = 24
@@ -1247,7 +1250,8 @@ struct PopoverView: View {
                   task: task,
                   index: index,
                   childCount: childCountsByTaskId[task.id, default: 0],
-                  elapsed: elapsedByTaskId[task.id, default: 0]
+                  elapsed: elapsedByTaskId[task.id, default: 0],
+                  depth: taskListViewModel.outlineDepth(atVisibleIndex: index)
                 )
                 .id(task.id)
 
@@ -1256,7 +1260,11 @@ struct PopoverView: View {
                 {
                   quickEntryBar(
                     verticalPadding: PopoverLayout.inlineEntryVerticalPadding,
-                    leadingInset: manager.quickEntry.quickEntryMode == .addChild ? 20 : 0
+                    // Line the composer up with the row it belongs to, which is
+                    // indented once the outline is open.
+                    leadingInset: CGFloat(taskListViewModel.outlineDepth(atVisibleIndex: index))
+                      * PopoverLayout.outlineIndentWidth
+                      + (manager.quickEntry.quickEntryMode == .addChild ? 20 : 0)
                   )
                   .background(Color(NSColor.textBackgroundColor).opacity(0.3))
                   .overlay(alignment: .leading) {

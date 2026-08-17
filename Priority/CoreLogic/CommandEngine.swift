@@ -63,6 +63,10 @@ enum Command: Equatable, Sendable {
   case moveDown
   case enterChildren
   case exitParent
+  case expandTask
+  case collapseTask
+  case expandAll
+  case collapseAll
   case tag(String)
   case untag(String)
   case list(String)
@@ -295,12 +299,27 @@ enum CommandEngine {
       label: "Move task down", command: "move down", preview: "Reorder current task downward",
       keybind: "Cmd+↓", submitImmediately: true),
     .init(
-      label: "Enter subtasks (tree)", command: "enter children", preview: "Go to child level",
-      keybind: nil, submitImmediately: true, boundActionRawValue: "enterChildren"),
+      label: "Zoom into subtasks (tree)", command: "enter children",
+      preview: "Make the selected task the whole list", keybind: "Shift+→",
+      submitImmediately: true, boundActionRawValue: "zoomIntoTask"),
     .init(
-      label: "Exit to parent (tree)", command: "exit parent",
-      preview: "Go up one level in list/tree views", keybind: nil, submitImmediately: true,
+      label: "Zoom out to parent (tree)", command: "exit parent",
+      preview: "Go up one level in list/tree views", keybind: "Shift+←",
+      submitImmediately: true, boundActionRawValue: "zoomOutOfTask"),
+    .init(
+      label: "Expand selected task", command: "expand",
+      preview: "Show subtasks indented underneath", keybind: "→", submitImmediately: true,
+      boundActionRawValue: "enterChildren"),
+    .init(
+      label: "Collapse selected task", command: "collapse",
+      preview: "Hide the subtasks shown underneath", keybind: "←", submitImmediately: true,
       boundActionRawValue: "exitToParent"),
+    .init(
+      label: "Expand all", command: "expand all",
+      preview: "Open every task that has subtasks", keybind: nil, submitImmediately: true),
+    .init(
+      label: "Collapse all", command: "collapse all",
+      preview: "Shut every expanded task", keybind: nil, submitImmediately: true),
     .init(
       label: "Switch to All tab", command: "tab all",
       preview: "Show all tasks", keybind: nil, submitImmediately: true,
@@ -447,6 +466,10 @@ enum CommandEngine {
     if cmd == "move down" { return .moveDown }
     if cmd == "enter children" { return .enterChildren }
     if cmd == "exit parent" { return .exitParent }
+    if cmd == "expand" { return .expandTask }
+    if cmd == "collapse" { return .collapseTask }
+    if cmd == "expand all" { return .expandAll }
+    if cmd == "collapse all" { return .collapseAll }
     if cmd.hasPrefix("tag ") {
       return .tag(String(cmd.dropFirst(4)).trimmingCharacters(in: .whitespaces))
     }

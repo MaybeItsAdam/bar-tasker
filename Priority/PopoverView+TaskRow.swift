@@ -21,8 +21,13 @@ extension PopoverView {
   }
 
   @ViewBuilder
-  func taskRow(task: CheckvistTask, index: Int, childCount: Int, elapsed: TimeInterval) -> some View
-  {
+  func taskRow(
+    task: CheckvistTask,
+    index: Int,
+    childCount: Int,
+    elapsed: TimeInterval,
+    depth: Int = 0
+  ) -> some View {
     let isSelected = index == navigationState.currentSiblingIndex
     let showsInlineComposer = isSelected && isAddMode
     let listFocusIsActive = navigationState.rootScopeFocusLevel == 0
@@ -33,8 +38,14 @@ extension PopoverView {
     let hasGoogleCalendarLink = manager.integrations.hasGoogleCalendarEventLink(taskId: task.id, listId: repository.listId)
 
     HStack(alignment: .top, spacing: PopoverLayout.rowContentSpacing) {
+      // One step of indent per level revealed by expanding a parent. Drawn as a
+      // leading spacer rather than row padding so the selection band and its
+      // edge marker still run the full width.
+      if depth > 0 {
+        Color.clear.frame(width: CGFloat(depth) * PopoverLayout.outlineIndentWidth, height: 1)
+      }
       VStack(alignment: .leading, spacing: 3) {
-        if taskListViewModel.shouldShowBreadcrumbPath(for: task) {
+        if taskListViewModel.shouldShowBreadcrumbPath(for: task, depth: depth) {
           let includeCurrentParent =
             manager.preferences.showTaskBreadcrumbContext
             && !(manager.quickEntry.quickEntryMode == .search && !manager.quickEntry.searchText.isEmpty)
@@ -122,21 +133,35 @@ extension PopoverView {
       }
 
       if childCount > 0 {
+        let isExpanded = taskListViewModel.isExpanded(task)
         Button {
+          navigationState.rootScopeFocusLevel = 0
           navigationState.currentSiblingIndex = index
-          manager.taskNavigationService.enterChildren()
-          if !manager.quickEntry.searchText.isEmpty {
-            manager.quickEntry.searchText = ""
-            manager.quickEntry.quickEntryMode = .search
-            manager.quickEntry.isQuickEntryFocused = false
+          // Shift-click zooms the list into the task instead, matching Shift+→.
+          if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+            manager.taskNavigationService.enterChildren()
+            if !manager.quickEntry.searchText.isEmpty {
+              manager.quickEntry.searchText = ""
+              manager.quickEntry.quickEntryMode = .search
+              manager.quickEntry.isQuickEntryFocused = false
+            }
+          } else {
+            manager.taskNavigationService.toggleExpansion(taskId: task.id)
           }
         } label: {
           HStack(spacing: 3) {
             Text("\(childCount)").font(.caption2).foregroundColor(themeColor(.textSecondary))
-            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundColor(
-              themeColor(.textSecondary))
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+              .font(.system(size: 10))
+              .foregroundColor(themeColor(isExpanded ? .textPrimary : .textSecondary))
           }
-        }.buttonStyle(PlainButtonStyle()).help("Enter subtasks (→)")
+        }
+        .buttonStyle(PlainButtonStyle())
+        .help(
+          isExpanded
+            ? "Hide subtasks (←). Shift-click to zoom into them"
+            : "Show subtasks (→). Shift-click to zoom into them"
+        )
       }
     }
     .padding(.horizontal, PopoverLayout.rowHorizontalPadding)

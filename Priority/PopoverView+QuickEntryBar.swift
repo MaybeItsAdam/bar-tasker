@@ -345,6 +345,8 @@ extension PopoverView {
     manager.quickEntry.quickEntryMode = .search
     manager.quickEntry.isQuickEntryFocused = false
     repository.errorMessage = nil
+    // Open the parent, or the task you just added lands somewhere you can't see.
+    manager.taskNavigationService.setExpanded(true, taskId: parent.id)
     Task { await manager.taskMutationService.addTaskAsChild(content: content, parentId: parent.id) }
   }
 

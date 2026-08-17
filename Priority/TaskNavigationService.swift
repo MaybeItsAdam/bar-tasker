@@ -69,6 +69,81 @@ final class TaskNavigationService {
     navigationState.currentSiblingIndex = selection.currentSiblingIndex
   }
 
+  // MARK: - Outline expansion
+
+  /// Right: open the selected row, or step into the children it already shows.
+  /// The list itself never changes scope — that is what `enterChildren()` is
+  /// for, on `Shift+→`.
+  func expandOrDescend() {
+    guard let coordinator else { return }
+    let viewModel = coordinator.taskListViewModel
+    let outcome = logic.expandOrDescend(
+      selectedIndex: navigationState.currentSiblingIndex,
+      rows: viewModel.outlineRows,
+      expandedTaskIds: repository.expandedTaskIds,
+      childCountByTaskId: viewModel.childCountByTaskId()
+    )
+    apply(outcome)
+  }
+
+  /// Left: shut the selected row, walk up to the parent showing it, or — at the
+  /// top level with nothing open — leave the current scope, as left always has.
+  func collapseOrAscend() {
+    guard let coordinator else { return }
+    let viewModel = coordinator.taskListViewModel
+    let outcome = logic.collapseOrAscend(
+      selectedIndex: navigationState.currentSiblingIndex,
+      rows: viewModel.outlineRows,
+      expandedTaskIds: repository.expandedTaskIds,
+      childCountByTaskId: viewModel.childCountByTaskId()
+    )
+    apply(outcome)
+  }
+
+  /// Click on a row's disclosure control.
+  func toggleExpansion(taskId: Int) {
+    setExpanded(!repository.isExpanded(taskId: taskId), taskId: taskId)
+  }
+
+  func setExpanded(_ expanded: Bool, taskId: Int) {
+    repository.setExpanded(expanded, taskId: taskId)
+    clampSelectionToVisibleRange()
+  }
+
+  func expandAll() {
+    repository.expandAll()
+    clampSelectionToVisibleRange()
+  }
+
+  func collapseAll() {
+    repository.collapseAll()
+    clampSelectionToVisibleRange()
+  }
+
+  private func apply(_ outcome: OutlineNavigationOutcome) {
+    switch outcome {
+    case .expand(let taskId):
+      repository.setExpanded(true, taskId: taskId)
+    case .collapse(let taskId):
+      repository.setExpanded(false, taskId: taskId)
+      // The selection is on the row that just closed, so it stays valid; the
+      // rows that vanished were all below it.
+    case .select(let index):
+      navigationState.currentSiblingIndex = index
+    case .exitScope:
+      // Left off the top of a search result leaves the search, the same way it
+      // used to leave the level.
+      if let quickEntry = coordinator?.quickEntry, !quickEntry.searchText.isEmpty {
+        quickEntry.searchText = ""
+        quickEntry.quickEntryMode = .search
+        quickEntry.isQuickEntryFocused = false
+      }
+      exitToParent()
+    case .none:
+      break
+    }
+  }
+
   func exitToParent() {
     guard
       let selection = logic.exitToParent(

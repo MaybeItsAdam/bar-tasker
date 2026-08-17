@@ -64,8 +64,9 @@ Onboarding boxes guide the Checkvist, Obsidian and Google Calendar setup. Each o
 | --- | --- |
 | `j` / `↓` | Next task |
 | `k` / `↑` | Previous task |
-| `l` / `→` | Enter subtasks |
-| `h` / `←` | Exit to parent |
+| `l` / `→` | Expand the task — subtasks appear indented underneath — then step into them |
+| `h` / `←` | Collapse, step back out to the parent row, or leave the scope |
+| `Shift+→` / `Shift+←` | Zoom in: the list becomes that task's subtree, and back out. Also `]` / `[` |
 | `Ctrl+←` / `Ctrl+→` | Cycle root view |
 | `q` | All view |
 | `w` | Due view |
@@ -135,6 +136,7 @@ Open with `:`, `;` or `Cmd+K`. Most commands accept several spellings — `unrep
 | **Priority** | `priority <1-9>`, `priority back`, `clear priority` |
 | **Matrix** | `matrix <quadrant>`, `importance <value>`, `urgency <value>` |
 | **Kanban** | `kanban left` / `right`, `kanban move left` / `right`, `kanban enter`, `kanban exit`, `kanban show in all`, `kanban focus mode` |
+| **Outline** | `expand`, `collapse`, `expand all`, `collapse all`, `enter children`, `exit parent` |
 | **View** | `list <name>`, `tab <name>`, `cycle tab next` / `prev`, `cycle filter next` / `prev`, `toggle children`, `toggle subtree`, `toggle context`, `toggle hide future` |
 | **Timer** | `focus mode`, `toggle timer`, `pause timer` |
 | **Obsidian** | `sync obsidian`, `open obsidian new window`, `link` / `create` / `clear obsidian folder`, `choose obsidian inbox` |
