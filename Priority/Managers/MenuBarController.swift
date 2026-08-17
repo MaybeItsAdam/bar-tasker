@@ -71,8 +71,22 @@ class MenuBarController: NSObject {
     )
   }
 
+  /// What the menu bar is pointed at.
+  ///
+  /// Normally the selected task, but the Daily view renders the log rather than
+  /// the task list, so `visibleTasks` is empty there and `currentTaskText` came
+  /// back empty however you moved the cursor — the title just sat at "…". A
+  /// `Daily` isn't a `CheckvistTask`, so this can't be folded into
+  /// `currentTask` alongside the kanban branch; the split has to be on the text.
+  private var menuBarSelectionText: String {
+    if manager.taskListViewModel.rootTaskView == .daily {
+      return manager.dailyLog.selectedDaily?.title ?? ""
+    }
+    return manager.taskListViewModel.currentTaskText
+  }
+
   func updateTitle() {
-    let rawTaskText = manager.taskListViewModel.currentTaskText
+    let rawTaskText = menuBarSelectionText
     let baseTaskText = menuBarDisplayTaskText(rawTaskText)
     let taskText =
       manager.integrations.pendingSyncMenuBarPrefix.isEmpty
@@ -480,7 +494,14 @@ class MenuBarController: NSObject {
 
   private func observeForTitleUpdates() {
     withObservationTracking {
-      _ = self.manager.taskListViewModel.currentTaskText
+      _ = self.menuBarSelectionText
+      // The Daily view's cursor and its list. `selectedDaily` reads the plugin
+      // directly, which isn't observable — `revision` is the app-side signal
+      // that the dailies themselves changed (added, archived, rescheduled, or
+      // written by the MCP server), so without it the title would keep naming a
+      // daily that had left today's list.
+      _ = self.manager.dailyLog.selectedDailyIndex
+      _ = self.manager.dailyLog.revision
       _ = self.manager.timer.timerBarLeading
       _ = self.manager.timer.timerRunning
       _ = self.manager.timer.timedTaskId
