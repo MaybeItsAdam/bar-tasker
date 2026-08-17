@@ -77,6 +77,7 @@ let pluginTargetExcludes = [
   "Priority/TaskMutationService.swift",
   "Priority/TaskServiceHosts.swift",
   "Priority/TaskNavigationCoordinator.swift",
+  "Priority/TaskOutlineBuilder.swift",
   "Priority/TaskTreeFormatter.swift",
   "Priority/TaskNavigationService.swift",
   "Priority/TaskVisibilityEngine.swift",
@@ -287,6 +288,9 @@ let package = Package(
         // an AppLogic source. Still pure, still headless, still unit-tested.
         "Priority/OfflineReplayPolicy.swift",
         "Priority/TaskNavigationCoordinator.swift",
+        // The outline flattening `TaskNavigationCoordinator` decides against.
+        // Pure, and covered by `TaskOutlineBuilderTests`.
+        "Priority/TaskOutlineBuilder.swift",
         "Priority/ListScopedPriorityStore.swift",
         "Priority/ListScopedTaskIDStore.swift",
         "Priority/ListScopedEisenhowerStore.swift",

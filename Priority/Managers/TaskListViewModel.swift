@@ -138,7 +138,25 @@ import Observation
     )
     cacheStorage.dirty = false
     let visibility = computeVisibility()
-    cacheStorage.visibleTasks = visibility.tasks
+    // Children revealed by expansion are ordered the same way the view orders
+    // its own rows, so an expanded subtree reads like the list it sits in.
+    let rows = TaskOutlineBuilder.flatten(
+      base: visibility.tasks,
+      tasks: tasks,
+      expandedTaskIds: repository.expandedTaskIds,
+      sortChildren: { children in
+        children.sorted { lhs, rhs in
+          TaskFilterEngine.compareByPriorityThenPosition(
+            lhs,
+            rhs,
+            priorityRankById: self.cacheStorage.priorityRank,
+            absolutePriorityRankById: self.cacheStorage.absolutePriorityRank
+          )
+        }
+      }
+    )
+    cacheStorage.visibleTasks = rows.map(\.task)
+    cacheStorage.outlineDepths = rows.map(\.depth)
     cacheStorage.remainderStartIndex = visibility.remainderStartIndex
     let nodes = tasks.map { TimerNode(id: $0.id, parentId: $0.parentId) }
     cacheStorage.childCount = TimerStore.childCountByTaskId(nodes: nodes)
@@ -342,9 +360,14 @@ import Observation
     // Due-bucket section headers only apply to the matching portion of the list.
     // Remainder tasks get their own header via `remainderSectionHeader`.
     if let remainderStart = remainderStartIndex, index >= remainderStart { return nil }
+    // Expanded children belong to the row above them, not to a bucket of their
+    // own — a subtask due next month must not push a "Next month" header into
+    // the middle of today's section.
+    guard outlineDepth(atVisibleIndex: index) == 0 else { return nil }
     let currentBucket = rootDueBucket(for: visibleTasks[index])
-    if index == 0 { return currentBucket.title }
-    let previousBucket = rootDueBucket(for: visibleTasks[index - 1])
+    guard let previousIndex = (0..<index).reversed().first(where: { outlineDepth(atVisibleIndex: $0) == 0 })
+    else { return currentBucket.title }
+    let previousBucket = rootDueBucket(for: visibleTasks[previousIndex])
     return previousBucket == currentBucket ? nil : currentBucket.title
   }
 
@@ -369,7 +392,9 @@ import Observation
     guard shouldShowDueSectionHeaders, !visibleTasks.isEmpty else { return 0 }
     var total = 0
     var previousBucket: RootDueBucket?
-    for task in visibleTasks {
+    for (index, task) in visibleTasks.enumerated() {
+      // Mirrors `rootDueSectionHeader`: only top-level rows start a section.
+      guard outlineDepth(atVisibleIndex: index) == 0 else { continue }
       let bucket = rootDueBucket(for: task)
       if bucket != previousBucket {
         total += 1
@@ -466,8 +491,29 @@ import Observation
     return repository.tasks.filter { ($0.parentId ?? 0) == task.id }
   }
 
+  /// `visibleTasks` with its indent levels — what the outline actually is.
+  var outlineRows: [TaskOutlineRow] {
+    let tasks = visibleTasks
+    ensureVisibleTasksCacheValid()
+    let depths = cacheStorage.outlineDepths
+    return tasks.enumerated().map { index, task in
+      TaskOutlineRow(task: task, depth: index < depths.count ? depths[index] : 0)
+    }
+  }
+
+  func outlineDepth(atVisibleIndex index: Int) -> Int {
+    ensureVisibleTasksCacheValid()
+    guard cacheStorage.outlineDepths.indices.contains(index) else { return 0 }
+    return cacheStorage.outlineDepths[index]
+  }
+
+  func isExpanded(_ task: CheckvistTask) -> Bool {
+    repository.expandedTaskIds.contains(task.id)
+  }
+
   var visibleTasks: [CheckvistTask] {
     _ = repository.tasks
+    _ = repository.expandedTaskIds
     _ = navigationState.currentParentId
     _ = quickEntry.searchText
     _ = quickEntry.quickEntryMode
@@ -480,7 +526,10 @@ import Observation
     return cacheStorage.visibleTasks
   }
 
-  func shouldShowBreadcrumbPath(for task: CheckvistTask) -> Bool {
+  func shouldShowBreadcrumbPath(for task: CheckvistTask, depth: Int = 0) -> Bool {
+    // An expanded child sits directly under its parent, so its path is on
+    // screen already; repeating it above every subtask is noise.
+    guard depth == 0 else { return false }
     let pid = task.parentId ?? 0
     if isRootLevel && shouldShowRootScopeSection && rootTaskView != .all {
       return pid != 0

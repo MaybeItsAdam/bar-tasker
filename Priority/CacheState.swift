@@ -11,6 +11,9 @@ struct CacheState {
   var isRebuilding = false
 
   var visibleTasks: [CheckvistTask] = []
+  /// Indent level per entry of `visibleTasks`, parallel to it. 0 for the rows
+  /// the view chose; deeper for children revealed by expanding one of them.
+  var outlineDepths: [Int] = []
   /// Index in `visibleTasks` at which the "Remainder" section begins, or nil when
   /// the current view does not split matching / non-matching tasks. Used by
   /// due/tags/priority root views to render a header and keep the full task list

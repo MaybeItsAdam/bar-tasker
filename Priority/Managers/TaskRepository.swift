@@ -41,6 +41,7 @@ struct PendingTaskUpdate: Sendable, Codable {
   @ObservationIgnored let absolutePriorityQueueStore: ListScopedTaskIDStore
   @ObservationIgnored let legacyPriorityQueueStore: ListScopedTaskIDStore
   @ObservationIgnored let eisenhowerStore: ListScopedEisenhowerStore
+  @ObservationIgnored let expandedTaskIdStore: ListScopedTaskIDStore
   @ObservationIgnored let cacheInvalidationBus: CacheInvalidationBus
 
   // MARK: - Callbacks
@@ -57,6 +58,7 @@ struct PendingTaskUpdate: Sendable, Codable {
   private static let scopedPriorityQueuesDefaultsKey = "priorityTaskIdsByParentIdByListId"
   private static let absolutePriorityQueuesDefaultsKey = "absolutePriorityTaskIdsByListId"
   private static let eisenhowerLevelsDefaultsKey = "eisenhowerLevelsByTaskIdByListId"
+  private static let expandedTaskIdsDefaultsKey = "expandedTaskIdsByListId"
 
   // MARK: - Task Data
 
@@ -87,6 +89,7 @@ struct PendingTaskUpdate: Sendable, Codable {
       loadPriorityQueue(for: listId)
       loadAbsolutePriorityQueue(for: listId)
       loadEisenhowerLevels(for: listId)
+      loadExpandedTaskIds(for: listId)
       onListIdChanged?(listId)
     }
   }
@@ -125,6 +128,22 @@ struct PendingTaskUpdate: Sendable, Codable {
   }
   var taskEisenhowerLevels: [Int: EisenhowerLevel] = [:] {
     didSet { cacheInvalidationBus.invalidate() }
+  }
+
+  // MARK: - Outline
+
+  /// Tasks whose children are shown inline, indented beneath them. Persisted
+  /// per list, so the outline looks how it was left across launches.
+  ///
+  /// Lives here rather than on `NavigationState` because it is list-scoped
+  /// state with a store behind it, like the priority queues either side of it —
+  /// switching lists has to swap it, not carry it over.
+  var expandedTaskIds: Set<Int> = [] {
+    didSet {
+      guard expandedTaskIds != oldValue else { return }
+      cacheInvalidationBus.invalidate()
+      expandedTaskIdStore.save(expandedTaskIds.sorted(), for: listId)
+    }
   }
 
   var absolutePrioritizedTaskIds: Set<Int> {
@@ -301,6 +320,10 @@ struct PendingTaskUpdate: Sendable, Codable {
       defaultsKey: Self.eisenhowerLevelsDefaultsKey,
       defaults: defaults
     )
+    self.expandedTaskIdStore = ListScopedTaskIDStore(
+      defaultsKey: Self.expandedTaskIdsDefaultsKey,
+      defaults: defaults
+    )
 
     let offlinePayload = localTaskStore.load()
     let storedUsername = preferencesStore.string(.checkvistUsername)
@@ -327,6 +350,7 @@ struct PendingTaskUpdate: Sendable, Codable {
     )
     self.absolutePriorityTaskIds = absolutePriorityQueueStore.load(for: storedListId)
     self.taskEisenhowerLevels = eisenhowerStore.load(for: storedListId)
+    self.expandedTaskIds = Set(expandedTaskIdStore.load(for: storedListId))
 
     // Restore offline-queued work for the current list. A payload scoped to a
     // different list is dropped — replaying its mutations against the active
@@ -458,6 +482,37 @@ extension TaskRepository {
     priorityQueueStore.save(normalized, for: listId)
   }
 
+  func loadExpandedTaskIds(for listId: String) {
+    expandedTaskIds = Set(expandedTaskIdStore.load(for: listId))
+  }
+
+  func isExpanded(taskId: Int) -> Bool {
+    expandedTaskIds.contains(taskId)
+  }
+
+  func setExpanded(_ expanded: Bool, taskId: Int) {
+    guard taskId != 0 else { return }
+    if expanded {
+      expandedTaskIds.insert(taskId)
+    } else {
+      expandedTaskIds.remove(taskId)
+    }
+  }
+
+  func toggleExpanded(taskId: Int) {
+    setExpanded(!isExpanded(taskId: taskId), taskId: taskId)
+  }
+
+  /// Opens every task that has children. Used by the `expand all` command.
+  func expandAll() {
+    let parentIds = Set(tasks.compactMap { $0.parentId }).subtracting([0])
+    expandedTaskIds = parentIds
+  }
+
+  func collapseAll() {
+    expandedTaskIds = []
+  }
+
   func loadAbsolutePriorityQueue(for listId: String) {
     absolutePriorityTaskIds = absolutePriorityQueueStore.load(for: listId)
   }
@@ -532,6 +587,16 @@ extension TaskRepository {
     let filteredAbsolute = absolutePriorityTaskIds.filter { openTaskIds.contains($0) }
     if filteredAbsolute != absolutePriorityTaskIds {
       saveAbsolutePriorityQueue(filteredAbsolute)
+    }
+    // Drop expansion state for tasks that are gone, so the store doesn't grow
+    // forever. Skipped when there are no tasks at all — that's the pre-fetch
+    // state, not an empty list, and pruning against it would forget the whole
+    // outline every launch.
+    if !tasks.isEmpty {
+      let stillOpen = expandedTaskIds.intersection(openTaskIds)
+      if stillOpen != expandedTaskIds {
+        expandedTaskIds = stillOpen
+      }
     }
     reconcileEisenhowerLevels()
   }

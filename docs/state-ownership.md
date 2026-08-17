@@ -65,6 +65,12 @@ source of truth for online vs. offline routing), `activeCredentials`, **`activeS
 themselves), `prioritizedTaskIds`, `absolutePrioritizedTaskIds`, `hasPendingOfflineWork`,
 `offlineOpenTaskCount`.
 
+Also owns **`expandedTaskIds: Set<Int>`** — which tasks show their children inline. It lives
+here rather than on `NavigationState` because it is list-scoped and persisted
+(`ListScopedTaskIDStore`, key `expandedTaskIdsByListId`), so switching lists has to swap it
+the way it swaps the priority queues. `reconcilePriorityQueueWithOpenTasks()` prunes ids whose
+tasks are gone.
+
 ### `NavigationState` — where the user is in the tree
 | State | Fires bus |
 |---|---|
@@ -85,7 +91,11 @@ Also owns the cache-derived view helpers consolidated here in step 3.7d (they re
 `cache` directly rather than forwarding through `AppCoordinator`): `priorityBadgeLabel` /
 `eisenhowerBadgeLabel` / `priorityRank` / `absolutePriorityRank` / `priorityPath`,
 `rootDueBucket`, `rootDueSectionHeader` / `remainderSectionHeader` / `rootDueSectionCount` /
-`remainderStartIndex`, `rootLevelTagNames`, and `isDescendant`. Views read these via
+`remainderStartIndex`, `rootLevelTagNames`, `isDescendant`, and the outline accessors
+(`outlineRows` / `outlineDepth(atVisibleIndex:)` / `isExpanded`). `visibleTasks` is the
+flattened outline: `TaskVisibilityEngine` picks the rows a tab wants, then
+`TaskOutlineBuilder` inserts the children of expanded rows after them, with
+`cache.outlineDepths` holding the indent per row. Views read these via
 `@Environment(TaskListViewModel.self)`.
 
 
@@ -131,8 +141,8 @@ protocol.
 ## Cache-invalidation producer list (who fires the bus)
 
 `TaskRepository` (`tasks`, `availableLists`, `priorityTaskIdsByParentId`,
-`absolutePriorityTaskIds`, `taskEisenhowerLevels`, `checkvistIntegrationEnabled`,
-`isNetworkReachable`), `NavigationState` (`currentParentId`), `QuickEntryManager`
+`absolutePriorityTaskIds`, `taskEisenhowerLevels`, `expandedTaskIds`,
+`checkvistIntegrationEnabled`, `isNetworkReachable`), `NavigationState` (`currentParentId`), `QuickEntryManager`
 (`searchText`), `TimerManager` (`timerByTaskId`), `StartDateManager` (`taskStartDatesByTaskId`),
 `KanbanManager`, `FocusSessionManager`. The lone **subscriber** is `AppCoordinator` →
 `TaskListViewModel.invalidateCaches()`.
