@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 /// Owns the imperative side of navigation: moving the cursor between siblings,
 /// drilling in/out of subtrees, and switching root-task views (All / Due /

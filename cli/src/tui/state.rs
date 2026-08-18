@@ -59,8 +59,8 @@ impl Tab {
             Tab::Priority => 'r',
             Tab::Kanban => 't',
             Tab::Matrix => 'y',
-            // The app uses `Shift+T`, which a terminal reports inconsistently
-            // across emulators; `d` is unclaimed and unambiguous.
+            // The app uses `u`, which is already reopen here; `d` is
+            // unclaimed and unambiguous.
             Tab::Daily => 'd',
         }
     }

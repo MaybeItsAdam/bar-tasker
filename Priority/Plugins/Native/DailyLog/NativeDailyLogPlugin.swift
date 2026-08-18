@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 @MainActor
 final class NativeDailyLogPlugin: DailyLogPlugin {
@@ -90,6 +91,12 @@ final class NativeDailyLogPlugin: DailyLogPlugin {
   func archiveDaily(id: String) {
     service.archiveDaily(id: id)
   }
+
+  func restoreDaily(id: String) {
+    service.restoreDaily(id: id)
+  }
+
+  var allDailiesIncludingArchived: [Daily] { service.allDailiesIncludingArchived }
 
   func moveDaily(id: String, by offset: Int) {
     service.moveDaily(id: id, by: offset)

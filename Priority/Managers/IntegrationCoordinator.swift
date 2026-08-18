@@ -1,7 +1,8 @@
 import AppKit
 import Foundation
-import Observation
 import OSLog
+import Observation
+import PriorityCore
 
 /// Provides read-only access to task/list data that IntegrationCoordinator needs.
 @MainActor
@@ -81,9 +82,7 @@ protocol IntegrationDataSource: AnyObject {
   var hasPendingObsidianSync: Bool { !pendingObsidianSyncTaskIds.isEmpty }
 
   var pendingSyncMenuBarPrefix: String {
-    guard hasPendingObsidianSync else { return "" }
-    return pendingObsidianSyncTaskIds.count == 1
-      ? "Pending Sync" : "Pending Sync (\(pendingObsidianSyncTaskIds.count))"
+    PendingSyncQueue.menuBarPrefix(count: pendingObsidianSyncTaskIds.count)
   }
 
   var hasResolvedMCPServerCommand: Bool {
@@ -133,60 +132,45 @@ protocol IntegrationDataSource: AnyObject {
   }
 
   func savePendingObsidianSyncQueue(_ queue: [Int], listId: String) {
-    let normalized = Self.normalizedTaskIdQueue(queue)
+    let normalized = PendingSyncQueue.normalized(queue)
     pendingObsidianSyncTaskIds = normalized
     guard !listId.isEmpty else { return }
     pendingSyncQueueStore.save(normalized, for: listId)
   }
 
   func enqueuePendingObsidianSync(taskId: Int, listId: String) {
-    var queue = pendingObsidianSyncTaskIds
-    queue.removeAll { $0 == taskId }
-    queue.append(taskId)
-    savePendingObsidianSyncQueue(queue, listId: listId)
+    savePendingObsidianSyncQueue(
+      PendingSyncQueue.enqueue(taskId, into: pendingObsidianSyncTaskIds), listId: listId)
   }
 
   func dequeuePendingObsidianSync(taskId: Int, listId: String) {
     savePendingObsidianSyncQueue(
-      pendingObsidianSyncTaskIds.filter { $0 != taskId }, listId: listId)
+      PendingSyncQueue.dequeue(taskId, from: pendingObsidianSyncTaskIds), listId: listId)
   }
 
   func reconcilePendingObsidianSyncQueueWithOpenTasks(openTaskIds: Set<Int>, listId: String) {
-    let filtered = pendingObsidianSyncTaskIds.filter { openTaskIds.contains($0) }
-    if filtered != pendingObsidianSyncTaskIds {
-      savePendingObsidianSyncQueue(filtered, listId: listId)
-    }
-  }
-
-  private static func normalizedTaskIdQueue(_ queue: [Int]) -> [Int] {
-    var seen = Set<Int>()
-    var normalized: [Int] = []
-    for taskId in queue where taskId > 0 && !seen.contains(taskId) {
-      seen.insert(taskId)
-      normalized.append(taskId)
-    }
-    return normalized
+    let filtered = PendingSyncQueue.reconciled(
+      pendingObsidianSyncTaskIds, withOpenTaskIds: openTaskIds)
+    // Only write when something actually went, so a routine fetch doesn't churn
+    // the preferences store or the observation bus.
+    guard filtered != pendingObsidianSyncTaskIds else { return }
+    savePendingObsidianSyncQueue(filtered, listId: listId)
   }
 
   // MARK: - Google Calendar Event Links
 
   private func integrationTaskStorageKey(taskId: Int, listId: String) -> String {
-    let normalizedListId = listId.trimmingCharacters(in: .whitespacesAndNewlines)
-    let scope = normalizedListId.isEmpty ? "offline" : normalizedListId
-    return "\(scope):\(taskId)"
+    IntegrationLinkStore.storageKey(taskId: taskId, listId: listId)
   }
 
   func hasGoogleCalendarEventLink(taskId: Int, listId: String) -> Bool {
-    let key = integrationTaskStorageKey(taskId: taskId, listId: listId)
-    return googleCalendarEventLinksByTaskKey[key] != nil
+    IntegrationLinkStore.hasEventLink(
+      taskId: taskId, listId: listId, in: googleCalendarEventLinksByTaskKey)
   }
 
   func googleCalendarEventLinkURL(taskId: Int, listId: String) -> URL? {
-    let key = integrationTaskStorageKey(taskId: taskId, listId: listId)
-    guard let rawValue = googleCalendarEventLinksByTaskKey[key], rawValue != "created" else {
-      return nil
-    }
-    return URL(string: rawValue)
+    IntegrationLinkStore.eventLinkURL(
+      taskId: taskId, listId: listId, in: googleCalendarEventLinksByTaskKey)
   }
 
   func recordGoogleCalendarEventLink(
@@ -194,8 +178,9 @@ protocol IntegrationDataSource: AnyObject {
     listId: String,
     eventURL: URL?
   ) {
-    let key = integrationTaskStorageKey(taskId: taskId, listId: listId)
-    googleCalendarEventLinksByTaskKey[key] = eventURL?.absoluteString ?? "created"
+    googleCalendarEventLinksByTaskKey = IntegrationLinkStore.recording(
+      eventURL: eventURL, taskId: taskId, listId: listId,
+      into: googleCalendarEventLinksByTaskKey)
     preferencesStore.set(googleCalendarEventLinksByTaskKey, for: .googleCalendarEventLinksByTaskKey)
   }
 

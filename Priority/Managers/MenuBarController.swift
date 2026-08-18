@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import OSLog
 import Observation
+import PriorityCore
 import SwiftUI
 
 @MainActor
@@ -484,6 +485,7 @@ class MenuBarController: NSObject {
       _ = self.manager.popoverChrome.panelHeightOverrides
       _ = self.manager.popoverChrome.isResizeHandleVisible
       _ = self.manager.popoverChrome.showsDailyChart
+      _ = self.manager.popoverChrome.showsDailyCompletions
     } onChange: {
       Task { @MainActor [weak self] in
         self?.reanchorPopoverToStatusItem()

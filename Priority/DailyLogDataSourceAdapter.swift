@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 /// Bridges `DailyLogManager`'s data needs to the repository and view model, so
 /// `AppCoordinator` doesn't have to conform to yet another protocol. Same role

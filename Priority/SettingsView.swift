@@ -1,4 +1,5 @@
 import AppKit
+import PriorityCore
 import SwiftUI
 // MARK: - Carbon modifier constants (avoid importing Carbon in SwiftUI file)
 private let carbonCmdKey = 0x0100
@@ -279,43 +280,53 @@ struct SettingsView: View {
   private var pluginsPane: some View {
     HStack(spacing: 0) {
       // Sidebar
-      VStack(spacing: 0) {
-        List(selection: $selectedPluginCardID) {
-          Section("Built-in") {
-            ForEach(pluginCards) { card in
+      List(selection: $selectedPluginCardID) {
+        Section("Built-in") {
+          ForEach(pluginCards) { card in
+            pluginListRow(for: card).tag(card.id as String?)
+          }
+        }
+        if !userPluginCards.isEmpty {
+          Section("User Plugins") {
+            ForEach(userPluginCards) { card in
               pluginListRow(for: card).tag(card.id as String?)
             }
           }
-          if !userPluginCards.isEmpty {
-            Section("User Plugins") {
-              ForEach(userPluginCards) { card in
-                pluginListRow(for: card).tag(card.id as String?)
-              }
-            }
-          }
         }
-        .listStyle(.sidebar)
-
-        Divider()
-        HStack(spacing: 6) {
-          Button {
-            checkvistManager.userPluginManager.installPluginPackageInteractively()
-          } label: {
-            Label("Install Plugin", systemImage: "plus")
-          }
-          Button {
-            checkvistManager.userPluginManager.openPluginsFolder()
-          } label: {
-            Label("Open Folder", systemImage: "folder")
-          }
-        }
-        .buttonStyle(.borderless)
-        .labelStyle(.iconOnly)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
       }
-      .frame(minWidth: 180, idealWidth: 200, maxWidth: 240)
+      .listStyle(.sidebar)
+      // A safe-area inset rather than a third element in a VStack: the bar is
+      // then laid out *inside* the list's own bounds and the list insets its
+      // scroll content to clear it. Stacked, the sidebar's height became the
+      // list's ideal height plus the bar, which overflowed the window once
+      // there were enough plugins to fill it — and because `paneContent`
+      // centres the pane, the overflow clipped the bar off the bottom.
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        VStack(spacing: 0) {
+          Divider()
+          HStack(spacing: 6) {
+            Button {
+              checkvistManager.userPluginManager.installPluginPackageInteractively()
+            } label: {
+              Label("Install Plugin", systemImage: "plus")
+            }
+            .help("Install a plugin package")
+            Button {
+              checkvistManager.userPluginManager.openPluginsFolder()
+            } label: {
+              Label("Open Folder", systemImage: "folder")
+            }
+            .help("Open the plugins folder in Finder")
+          }
+          .buttonStyle(.borderless)
+          .labelStyle(.iconOnly)
+          .padding(.horizontal, 10)
+          .padding(.vertical, 6)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(.bar)
+      }
+      .frame(minWidth: 180, idealWidth: 200, maxWidth: 240, maxHeight: .infinity)
 
       Divider()
 
@@ -402,7 +413,10 @@ struct SettingsView: View {
     if navState.selectedPane == .plugins {
       content()
         .padding(.top, 8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Top-aligned, not the default centre: if the pane ever does exceed the
+        // window, the overflow should run off one edge where a scroll view can
+        // take it, rather than being trimmed off both.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     } else {
       Form {
         content()

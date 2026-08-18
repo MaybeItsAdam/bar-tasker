@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 /// The coordinator-shaped surface that `TaskMutationService` and `SyncService`
 /// need, expressed without AppKit, SwiftUI, or any app-only model type.
@@ -60,6 +61,12 @@ protocol TaskMutationHost: TaskServiceHost {
 
   /// The single-step undo slot. Mutations claim it as they go.
   var lastUndoableAction: UndoableAction? { get set }
+
+  /// The kanban board's selected card, as a bare id so the service needn't
+  /// know `KanbanManager`. An optimistic insert claims it immediately and then
+  /// hands it over to the real id, or the new card loses selection the moment
+  /// the server answers.
+  var kanbanSelectedTaskId: Int? { get set }
 
   /// Re-reads the list from the active sync plugin. Lives on the host because
   /// it belongs to `SyncService`, which is a sibling rather than a dependency.
@@ -135,5 +142,46 @@ protocol SyncHost: TaskServiceHost {
   func markOnboardingCompleted()
 
   /// Applies a content/due edit optimistically and syncs it in the background.
-  func applyOptimisticMoveAndSync(task: CheckvistTask, content: String?, due: String?)
+  ///
+  /// Owned by `TaskMutationService`, which is a sibling of `SyncService` rather
+  /// than a dependency — so, like `fetchTopTask` in the other direction, it is
+  /// reached through the host.
+  func applyOptimisticUpdate(task: CheckvistTask, content: String?, due: String?)
+}
+
+// MARK: - TaskListViewModel
+
+/// The five app-only managers `TaskListViewModel` reads, as a single read-only
+/// surface.
+///
+/// The view model is the most load-bearing untested type in the app: it owns
+/// `cacheVersion`, whose entire job is to be correct about SwiftUI observation,
+/// and the visibility pipeline every list view renders from. It could not be
+/// reached from a test because it named `NavigationState`, `TimerManager`,
+/// `QuickEntryManager`, `PreferencesManager` and `KanbanManager` concretely,
+/// and those pull in the whole app.
+///
+/// Everything it actually needs from them is read-only and scalar — which is
+/// why this is worth doing at all. `AppCoordinator` provides the production
+/// conformance in `AppCoordinator+ServiceHosts.swift`.
+///
+/// Reads go through here rather than being copied in, so SwiftUI's observation
+/// still registers on the underlying `@Observable` managers: the access happens
+/// inside their real getters either way.
+@MainActor
+protocol TaskListViewModelHost: AnyObject {
+  /// The task whose children are being shown; 0 at the root.
+  var currentParentId: Int { get }
+  /// Selected index within the current level.
+  var currentSiblingIndex: Int { get }
+  /// Whether a search is narrowing the list.
+  var isSearchFilterActive: Bool { get }
+  var searchText: String { get }
+  /// Accumulated time per task, for the roll-up columns.
+  var timerElapsedByTaskId: [Int: TimeInterval] { get }
+  /// Whether rows show their ancestor path.
+  var showsTaskBreadcrumbContext: Bool { get }
+  /// The kanban board's own selection, which replaces the list's when the
+  /// board is the active view.
+  var kanbanCurrentTask: CheckvistTask? { get }
 }

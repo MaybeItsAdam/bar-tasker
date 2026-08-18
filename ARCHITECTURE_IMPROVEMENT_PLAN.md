@@ -10,51 +10,227 @@ This document captures the structural problems in Priority as it stands today an
 - **One source of truth per fact.** No duplicated computed properties across `AppCoordinator` and `TaskRepository`.
 - **Tests are part of the contract.** New seams introduced by this plan ship with tests; existing untested code is not refactored without a test first.
 
-## Current Findings
+## Current State
 
-### 1. AppCoordinator god object — 2,205 LOC across 9 files
+Last audited 2026-08-18. Figures are from the working tree at that point, not
+from when a phase landed — the previous version of this section still described
+`AppCoordinator` as "2,205 LOC across 9 files" and cited line numbers in
+`AppCoordinator+TaskScoping.swift` and `+StateAndLifecycle.swift`, files that no
+longer exist. If you are reading a claim here that the code contradicts, the
+code is right; fix this section.
 
-- Base `AppCoordinator.swift:1` (453 LOC) holds 14 direct properties, ~25 forwarded properties, and 10+ child managers (`repository`, `navigationState`, `taskListViewModel`, `timer`, `quickEntry`, `kanban`, `focusSessionManager`, `startDates`, `recurrence`, `preferences`, `integrations`, `userPluginManager`).
-- Largest extensions: `+TaskMutations.swift` (549 LOC), `+TaskScoping.swift` (543 LOC), `+ReorderingAndTiming.swift` (366 LOC), `+StateAndLifecycle.swift` (328 LOC).
-- Forwarding pattern hides ownership: e.g. `currentParentId`, `hideFuture`, `tasks`, `username`, `remoteKey` all read through `AppCoordinator` even though their state lives in three different managers.
+| | Then (plan written) | Now |
+|---|---|---|
+| `AppCoordinator` | 2,205 LOC / 9 files | **525 LOC / 2 files** (`AppCoordinator.swift`, `+ServiceHosts.swift`) |
+| `PopoverView.swift` | 2,068 LOC | 1,461 LOC |
+| `SettingsView.swift` | 1,473 LOC | 526 LOC |
+| `KanbanManager.swift` | 778 LOC | 625 LOC (rules and selection moved to `PriorityCore`) |
+| `KeyboardShortcutRouter.swift` | 1,011 LOC | 923 LOC across 2 files; gates, sequences and guards in `PriorityCore` |
+| MCP implementations | 3 (Swift, Python, Rust) | **1** (the Rust CLI, bundled in the app) |
+| How the app gets `PriorityCore` | compiled its sources | **links the package product** |
+| Test count | — | **570 SPM + 92 cargo** |
+| SwiftLint in CI | never ran | runs (non-strict); 11 standing warnings |
 
-### 2. UI files past SwiftLint limits
+Phases 0–5 are complete. What follows is the open list.
 
-- `PopoverView.swift` — 2,068 LOC (config error threshold is 1,500). Bundles list rendering, command palette, kanban embed, and modal overlays in one file.
-- `SettingsView.swift` — 1,473 LOC. Approaches the same limit because plugin settings pages are stitched in here rather than rendered generically.
+Each open finding below is either *partly addressed* (with what remains stated)
+or *decided* (with the reason it has not been acted on). None is a bare "this is
+bad" — if one reads that way it has gone stale, which is how this section got
+into the state described above.
 
-### 3. Cache invalidation is dual-mechanism and incomplete
+## Open Findings
 
-Two parallel systems coexist:
+### 1. `KeyboardShortcutRouter.handle` is a single ~950-line function
 
-- ~~**Callback hooks** — `TaskRepository.onCacheRelevantChange` wired in `AppCoordinator+StateAndLifecycle.swift:26`; same hook on `KanbanManager`, `QuickEntryManager`, `TimerManager`, `FocusSessionManager`, `StartDateManager` (lines 51–66).~~ (Phase 2: replaced by `CacheInvalidationBus`; the per-manager `onCacheRelevantChange` properties are gone.)
-- ~~**`didSet` observers** — `AppCoordinator.currentParentId` calls `invalidateCaches()` directly (line 26); `TaskRepository.tasks/priorityTaskIdsByParentId/absolutePriorityTaskIds/taskEisenhowerLevels` fire the hook from `didSet`.~~ (Phase 2: `currentParentId`'s `didSet` lives on `NavigationState` and fires the bus; `TaskRepository`'s `didSet`s call `bus.invalidate()`.)
+**Mostly addressed.** Three pure pieces are out, in `PriorityCore` and tested:
 
-Gaps:
+- `ShortcutKeyToken` — the token spelling (`"cmd+k"`, `"shift+enter"`), next to
+  `ConfigurableShortcutAction.defaultBinding`, which has to agree with it.
+  Writing its test found a dead binding: `rootFilter7` defaulted to `"comma"`,
+  which no key press produced.
+- `ShortcutGate` — the five modal gates (onboarding, the plugin-selection
+  dialog, a running focus session, the focus prompt) *and their precedence*,
+  which is the actual rule. 18 tests.
+- `ShortcutSequenceBuffer` — the two-key state machine. One character of state
+  that was read and written at nine scattered points; a buffer left standing
+  swallows the next key press with no visible cause. 17 tests.
+- `ShortcutResolver` — an ordered table of every binding and the conditions it
+  is live under. The router no longer states its guards; it asks the table, so
+  the two cannot drift.
 
-- ~~`TaskRepository.availableLists` has **no** `didSet` — UI consumes it (SettingsView, connection state) but stale state isn't invalidated.~~ (Phase 2: `didSet` added; fires bus.)
-- ~~`TaskRepository.isNetworkReachable` has no hook — offline→online transitions rely on explicit polling/sync calls.~~ (Phase 2: `didSet` added; fires bus.)
-- ~~`isUsingOfflineStore` is computed identically in `AppCoordinator+TaskScoping.swift:25` *and* `TaskRepository.swift:127`. `activeCredentials` similarly duplicated.~~ (Phase 1: renamed to `canSyncRemotely`, owned by `TaskRepository`; AppCoordinator forwards.)
+**That table found a real bug.** `shadowedRules()` asks whether any rule is
+covered everywhere by an earlier rule for the same action, and it was: the
+`moveTaskUp` / `moveTaskDown` branches ran unguarded *above* the Daily view's
+block, which binds the same gesture to reordering a daily. So in the Daily view
+Cmd+↑/↓ silently reordered a task in the list underneath, and the Daily handler
+was unreachable. Fixed by moving the general pair below the Daily block; the
+test asserts no rule is shadowed.
 
-### 4. Plugin abstraction leaks
+A second audit, `deadBindings()`, looks for a binding that wins in no context at
+all. There are none — and it corrected this document, which used to claim
+`moveTaskUp`'s `cmd+k` alias was simply unreachable. It is not, quite:
+`openCommandPalette` claims `cmd+k` first but only while nothing has keyboard
+focus, so the alias survives in exactly the situation nobody would use it —
+mid-typing, where it reorders the task behind the field. Both halves are
+long-standing behaviour and changing either is a user-facing call, so
+`testCmdKReachesTheCommandPaletteExceptWhileTyping` pins what is true instead.
 
-- ~~`isUsingOfflineStore` referenced in non-plugin code at: `AppCoordinator+TaskScoping.swift:25`, `AppCoordinator+TaskSync.swift:12`, `TaskRepository.swift:127,133`, `SettingsView.swift:633,644`.~~ (Phase 1: collapsed to `repository.canSyncRemotely`, with the Checkvist settings caption switched to `manager.listId.isEmpty` instead.)
-- ~~`NativeCheckvistSyncPlugin+Settings.swift:273` reaches *up* into `manager.isUsingOfflineStore` to decide a caption — settings UI shouldn't know whether a sibling plugin is active.~~ (Phase 1: replaced with `manager.listId.isEmpty`.)
+**Still open:** the dispatch bodies. `handle` is under the file-length limit now
+(the performing half moved to `KeyboardShortcutRouter+Support.swift`) but still
+carries `// swiftlint:disable ... cyclomatic_complexity` — measured complexity
+182 against a limit of 25. What remains is 60 branches each reaching a different
+manager. Turning those into an `AppAction` enum is the next step, and it is now
+a much safer one: the guards are already tested, so a mistake shows up as a
+resolver test failure rather than a silently dead key.
 
-### 5. Test coverage cliff
+### 2. Two shadow copies of the plugin model types
 
-- Tested: command parser, due-date parsing, timer policies, recurrence, individual plugin sync logic, user-plugin manifest loading.
-- **Untested**: AppCoordinator orchestration, `TaskRepository` state machine, sync flow (offline↔online), `TaskListViewModel` cache invalidation, undo/redo (`AppCoordinator+Undo.swift`), `TaskNavigationCoordinator`, all UI.
+**Route 2 has started, and the premise behind this whole finding is gone.**
 
-### 6. Other smells
+`PriorityCore`'s sources moved to `Sources/PriorityCore`, and the Xcode target
+now *links* the package product instead of compiling the same files. That was
+~46 files gaining an `import PriorityCore` and ~300 declarations gaining
+`public` — all compile-checked, and the target has no `@Observable` types, so
+the silent "stops updating" failure mode did not apply.
 
-- `KanbanManager.swift` (778 LOC) and `IntegrationCoordinator.swift` (556 LOC) are heavy and mix orchestration with state.
-- MCP server (`Plugins/MCP/MCPServer.swift`, ~1,500 LOC) lives in-process — fine for iteration, but couples app and protocol lifecycles.
-- `plugin-tests-support/PluginModelStubs.swift` exists because plugin code can't compile without app types — symptom of incomplete plugin/app separation.
+The consequence is larger than the move. **`PriorityAppLogic` and
+`PriorityPlugins` can now `import PriorityCore`.** That import used to break the
+app build, because the same sources are compiled straight into the app where no
+such module existed — the constraint this document called "the one-file-one-target
+rule" and treated as fixed. It is not fixed; it only held while the app compiled
+the sources. Three things followed immediately:
 
-## Phased Plan
+- `OfflineReplayPolicy.swift` moved into `Sources/PriorityCore`, ending the
+  exile this document used as its example of the rule.
+- The due-date parsing moved out of `CheckvistTask` into
+  `PriorityCore.DueDateParsing`, so the real model and the shadow now share it
+  rather than the shadow re-deriving forty lines of date formats.
+- `TaskListViewModel` became reachable — see finding 3.
 
-Order matters: each phase removes blockers for the next. Don't reorder without updating this section.
+**Still open:** `applogic-support/AppLogicSharedTypes.swift` and
+`plugin-tests-support/PluginModelStubs.swift` still exist. Deleting them needs
+`PriorityPlugins` to be linked by the app as well, and that is blocked on three
+plugin files that name app-only services (`CheckvistSession`,
+`CheckvistTaskRepository`, `ObsidianSyncService`, `GoogleOAuthLoopbackReceiver`
+— which is what `PluginModelStubs` fakes). Only `ObsidianSyncService` imports
+AppKit; the others are Foundation-only, so most of that is movable. Until then
+`SharedTypeDriftTests` keeps the two declarations honest, and the exclude lists
+are shorter but not gone.
+
+### 3. Managers with no tests
+
+The pattern is now established five times: take the pure decision out, make it
+generic or parameterised so it needs no app types, put it in `PriorityCore`, and
+leave the manager gathering inputs and applying results.
+
+**Done since the audit:**
+
+- `KanbanFilter` — membership and ordering. 23 tests.
+- `KanbanSelection` — the other half of `KanbanManager`: which card is selected
+  and which column has focus. Works on a grid of task ids per column, so it
+  knows nothing about `CheckvistTask` or how the board filtered itself. 26
+  tests. It also fixed a real inefficiency — `nextKanbanTask` used to re-filter
+  every column to resolve focus and then again to read the one it settled on.
+- `PendingSyncQueue` and `IntegrationLinkStore` — the Obsidian sync queue and
+  the calendar link map out of `IntegrationCoordinator`. 22 tests. (The MCP half
+  of that coordinator turned out to be already factored into
+  `CoreLogic/MCPClientConfig.swift` with tests, so it needed nothing.)
+- **`TaskListViewModel`** — the one this document called the highest-value and
+  hardest target. A `TaskListViewModelHost` seam in the shape of
+  `TaskMutationHost`/`SyncHost` replaced the five app-only managers it named
+  concretely; every member of that protocol is a read-only scalar, which is why
+  it was worth doing at all. 12 tests, including the two that matter:
+  `cacheVersion` is bumped on invalidation, and — the subtle one — reading a
+  *clean* cache still registers an observation dependency. That second test was
+  verified to fail when `_ = cacheVersion` is removed, which is the whole reason
+  the line exists and is invisible by eye.
+
+**Writing those tests found a crash.** `TimerStore.rolledUpElapsedByTaskId`
+recursed down the child tree with no cycle guard, and memoised only *after*
+returning — so a cycle in the parent chain never terminated. Not a wrong number:
+a stack overflow, `SIGSEGV`, from data that arrives over the network. Four
+ancestor walks had already been guarded during the audit; this one was missed
+because it walks *children* rather than parents. Fixed, with tests for the
+two-node cycle, a longer one, and a self-parented task.
+
+**Still zero coverage:** `IntegrationCoordinator`'s AppKit-bound half (the
+Obsidian and Google Calendar flows), the router's dispatch bodies, and every
+view.
+
+### 4. SwiftLint's standing warnings
+
+Down from thirteen to **nine**, without suppressing any: `MCPServer.swift` took
+two with it when it was deleted, and `KeyboardShortcutRouter.swift`'s
+file-length warning went when its performing half moved to
+`+Support.swift`. What remains is `CommandEngine` (884 lines, one 161-line
+function), `TaskVisibilityEngine.compute` (complexity 28), `AppCoordinator.init`
+(177 lines), `TaskMutationService` (type body 721),
+`PopoverView+TaskRow.taskRow` (165), `SettingsView` nesting, and two orphaned
+doc comments.
+
+CI runs `swiftlint lint` without `--strict`, so these are advisory and errors
+block. Don't add to the list; don't suppress it either — three warnings
+introduced while doing the work above were fixed rather than accepted.
+
+### 5. Day-log rotation
+
+The read amplification is fixed — `DailyLogService.reloadFromDisk()` now stats
+both files before decoding anything. What remains is that `daylog.jsonl` still
+grows without bound and is held entirely in memory. That is a deliberate
+trade (every projection needs the full history, since a reopen can cancel a
+completion from any earlier day), and a few thousand events a year is nothing.
+Revisit if someone's log reaches a size where the launch-time `loadAll` is
+noticeable.
+
+### 6. The in-process MCP server — done
+
+**Closed.** `Priority/Plugins/MCP/MCPServer.swift` (1,760 LOC) is deleted, along
+with `scripts/mcp_parity_check.py` (614 LOC), the `mcp-parity` CI job, and
+`CoreLogic/MCPMessageFraming.swift` (161 LOC plus its tests), which existed only
+to frame that server's stdio.
+
+The one thing keeping it alive was never a capability the CLI lacked — the
+parity check proved all nineteen tools agreed on answers, files written and HTTP
+requests made. It was that MCP client configurations already on users' disks name
+`/Applications/Priority.app/Contents/MacOS/Priority --mcp-server`.
+
+So the app ships the CLI instead. `scripts/bundle_cli.sh`, from an Xcode build
+phase, cargo-builds it and installs it at `Contents/Helpers/priority`, signed
+with the app. `PriorityEntryPoint.main()` checks for `--mcp-server` before
+`MainApp.main()` and hands the process to `MCPServerShim.run()`, which `execv`s
+the helper — so a process that only speaks JSON-RPC on stdio never initialises
+AppKit, and there is no supervision to get wrong.
+
+Existing configurations keep working untouched, and largely because the CLI was
+already built for it: `cli/src/main.rs` accepts the bare `--mcp-server` flag,
+and `cli/src/config.rs` puts the environment above its own config file — which
+is exactly where a client configuration puts credentials.
+
+Two costs, both deliberate:
+
+- **Building the app now needs cargo.** `PRIORITY_SKIP_CLI_BUNDLE=1` opts out
+  and produces an app with no MCP server; `scripts/build_dmg.sh` refuses to
+  package a bundle missing the helper. `ENABLE_USER_SCRIPT_SANDBOXING` had to go
+  to `NO`, because cargo writes outside any declarable output.
+- **`CLAUDE.md`'s rule changed.** "Nothing in `Priority/` may reference it"
+  became "…except the `--mcp-server` shim, which execs the bundled helper". The
+  app *runs* the CLI; it still shares no source with it.
+
+What replaced the parity harness is `scripts/mcp_smoke_check.py`, which is a
+different question: `cargo test` covers the server, and the smoke check covers
+the seam — that both spellings reach it and expose the same nineteen tools, and
+specifically that an old-style invocation with credentials in `env` still gets a
+working server. Plus `MCPHelperLocator` in `PriorityCore`, 12 tests, for the
+search order and its diagnostic.
+
+## History: the phased plan
+
+Phases 0–4 are complete; Phase 5 is partly done and partly deferred on purpose.
+Kept in full because the *reasoning* behind each move is the useful part — why a
+file sits where it does, and which constraint put it there. The open work is in
+"Open Findings" above, not here.
+
+Order mattered: each phase removed blockers for the next.
 
 ### Phase 0 — Safety net (prerequisite)
 
@@ -135,11 +311,12 @@ Internal callers in services also retargeted: `TaskMutationService` calls `coord
 - [x] `PopoverView.swift` (2,068 LOC) → **done.** Split into the main shell (1,273 LOC) plus two extension files: `PopoverView+TaskRow.swift` (451 LOC — `taskRow`, `dueSectionHeader`, and every badge: timer/priority/matrix/start/recurrence/due/metadata-token, plus `formatTaskContent` and the inline-tag formatter) and `PopoverView+QuickEntryBar.swift` (359 LOC — `quickEntryBar`, the icon/placeholder/font/sequence-hint helpers, and the submit/escape/tab/empty-list-composer actions). `MarqueeTextLine` and several helpers (`themeColor`, `isAddMode`, `activePromptText`, `activePromptTextBinding`, `clearPrompt`, `shouldShowEmptyListComposer`) dropped `private` so the extensions can see them. `breadcrumbPath(for:includeCurrentParent:)` stays in `PopoverView.swift` because both extensions need it. The full plan-vision split (`PopoverHeader`, dedicated `TaskListPane`, separate overlay file) wasn't necessary to clear the lint error limit — those further splits are available if `PopoverView.swift` grows again.
 - [x] `SettingsView.swift` (1,473 LOC) → **done.** Main file is now 517 LOC; the four panes live as extensions in their own files: `SettingsView+DebugPane.swift` (19 LOC), `SettingsView+ThemePane.swift` (189 LOC), `SettingsView+KeybindingsPane.swift` (457 LOC), `SettingsView+PreferencesPane.swift` (316 LOC). The pane bodies stay as `var <pane>Pane: some View` on `SettingsView` so `selectedPaneContent` dispatches normally — `@State` properties have to live on the original struct, so they were upgraded from `private` to internal. The plugins pane stays in the main file (it already enumerates plugins generically via `pluginCards` / `userPluginCards`).
 - [x] **Plugin status-label convention fix** (called out in `docs/plugins.md`): `SettingsView.pluginStatusLabel(for:)` had a switch on plugin identifier (`"native.checkvist.sync"` → `checkvistManager.checkvistIntegrationEnabled`, etc.). Replaced with a new `sidebarStatusLabel(manager:)` requirement on `PluginSettingsPageProviding` (default = `"Built-in plugin"`); each of the four native plugins overrides it in its `+Settings.swift` to report Enabled/Disabled against its own toggle state. `SettingsView` now calls `page.plugin.sidebarStatusLabel(manager: checkvistManager)` with no plugin-aware branching.
-- [ ] `KanbanManager.swift` (778 LOC) → separate column-state ownership from filter/sort logic. **Deferred.** Currently 30 LOC under the SwiftLint warning (`file_length: 800`); no lint pressure. The split is still desirable for testability — pure filter/sort helpers (`subtreeTasks`, `columnForTask`, `taskMatchesCondition`, `sortedForKanban`) want to live in a `KanbanFilter` namespace that takes its inputs as parameters instead of reaching through `dataSource`. Promote when filter logic grows or when adding column tests.
+- [x] `KanbanManager.swift` (was 794 LOC) → separate column-state ownership from filter/sort logic. **Done in the 2026-08-18 audit**, exactly as predicted here: `subtreeTasks`, `columnForTask`, `taskMatchesCondition` and `sortedForKanban` moved into a `KanbanFilter` namespace in `PriorityCore` that takes its inputs as parameters instead of reaching through `dataSource`, generic over `VisibilityTask` so it needs no app types. `KanbanColumn.swift` moved into `CoreLogic/` alongside it. `KanbanManager` is 702 LOC and now owns board *state*; the rules are covered by 23 tests. The prompt was testability rather than lint pressure — the note below was right that the file length was never the point.
 
 ### Phase 5 — MCP isolation (optional, lower priority)
 
-- [ ] Extract `MCPServer` into a separate executable target in `Package.swift`. App invokes it as a child process when `--mcp-server` is passed, or as an out-of-process server. Decouples MCP protocol churn from app release cycle. **Deferred.** The current in-process design works (1042-LOC `MCPServer.swift` with stdin/stdout JSON-RPC) and the change has real user-facing surface: MCP client configurations generated by `NativeMCPIntegrationPlugin.makeClientConfigurationJSON` currently point at `priority --mcp-server`; extraction would either move that target to a new binary (requiring all installed clients to update their configs) or keep the app as the entry point with a child-process indirection (limited cleanup benefit). Worth picking up when: (a) MCP protocol versions start churning faster than the app's release cadence, or (b) the in-process server starts blocking the main loop / leaking AppCoordinator state.
+- [x] **Done, differently.** The plan here was to extract `MCPServer` into a separate executable target and have the app invoke it. What happened instead is that the server was *deleted*: the Rust CLI already implemented every tool identically, so the app bundles that binary at `Contents/Helpers/priority` and `--mcp-server` `execv`s it. The concern recorded below — that extraction would either strand installed client configurations or add a child-process indirection for little benefit — was the right concern and is what the shim answers: configurations keep working, and there is no supervision because the process is replaced rather than spawned. See finding 6.
+
 - [x] **Done (step 5.2):** Promoted the canonical Checkvist data types (`CheckvistNote`, `CheckvistTask`, `CheckvistList`, plus the freshly-extracted `CheckvistTaskCachePayload`, `CheckvistSessionError`, `ObsidianOpenMode`) into `PriorityPlugins` sources by un-excluding `CheckvistModels.swift` and splitting `CheckvistTaskCachePayload` / `CheckvistSessionError` / `ObsidianOpenMode` into focused files under their plugin folders. Removed the six duplicate type definitions from `plugin-tests-support/PluginModelStubs.swift`; what remains there is the four genuine app-service fakes (`ObsidianSyncService`, `CheckvistSession`, `CheckvistTaskRepository`, `GoogleOAuthLoopbackReceiver`) the plugin code reaches into directly — the file header now describes that accurately.
 
   Also marked `CheckvistModels.swift`'s two static date-formatter arrays `nonisolated(unsafe)` (they were fine in the Xcode build but tripped SPM's strict concurrency check once the file landed in the plugin target).
@@ -147,6 +324,123 @@ Internal callers in services also retargeted: `TaskMutationService` calls `coord
   **Not done (separate concern):**
   - `applogic-support/AppLogicSharedTypes.swift` still re-declares the Checkvist types for `PriorityAppLogic`. Sharing them via `import PriorityPlugins` would require turning every imported type (`Plugin`, `CheckvistSyncPlugin`, `CheckvistTask` and friends) `public` — that meaningfully broadens the plugin library's API surface and is left as follow-on work.
   - The four service fakes in `PluginModelStubs.swift` still exist because the plugin code references the concrete service types (`ObsidianSyncService`, `CheckvistSession`, etc.) directly. Eliminating those requires introducing protocol seams for those services first — a structural refactor outside Phase 5.2's documented scope.
+
+### Post-Phase-4 audit (2026-08-18)
+
+An external audit of the whole tree. What it changed:
+
+- **Two data-loss bugs in the offline queue.** `applyOptimisticMoveAndSync` on
+  `AppCoordinator` wrote `repository.pendingTaskMutations` directly, bypassing
+  the write-through enqueue, so an offline task-move edit never reached disk.
+  And `SyncService.flushPendingTaskMutations` called `clearPendingOfflineWork()`
+  — which wipes the persisted payload — *before* issuing its first request, so
+  quitting mid-flush discarded every item that had not yet failed. The replay
+  now removes each item only once the server confirms it, re-files work behind a
+  succeeded create under the real id, and refuses to run twice concurrently.
+- **The derived cache is now observable.** `TaskListViewModel.cacheStorage` is
+  `@ObservationIgnored`, so a view reading the cache while it happened to be
+  clean registered no SwiftUI dependency and never updated again — and whether
+  that happened depended on whether a non-view reader (`KanbanManager`) had
+  cleared the dirty flag first. A hand-maintained list of `_ = repository.x`
+  touches in `visibleTasks` covered one of the fifteen accessors and had already
+  fallen behind its inputs (the priority queues drive row ordering and were
+  missing). Replaced by an observable `cacheVersion` read inside
+  `ensureVisibleTasksCacheValid()`, before its early return.
+- **The visibility layer moved into `PriorityCore`.** `TaskVisibilityEngine` and
+  `TaskFilterEngine` are pure `import Foundation` and decide what the user sees,
+  but belonged to no SPM target and so had no tests. They are now generic over a
+  new `VisibilityTask` protocol — stating the six properties the algorithms
+  actually read — with `CheckvistTask` conforming in a one-line app-side
+  extension. 36 new tests. Writing them found an unguarded ancestor walk that
+  spins forever on a parent cycle; four such walks were found and fixed
+  (`TaskFilterEngine.isDescendant`, `TaskVisibilityEngine`'s priority fold,
+  `TaskListViewModel.breadcrumbs` and `computePriorityPaths`,
+  `PopoverView.breadcrumbPath`).
+- **The kanban mutations left `AppCoordinator`.** `applyOptimisticUpdate` and
+  `addRootTask` now live on `TaskMutationService` (in
+  `TaskMutationService+Board.swift`) and go through `resolveMutationFailure`
+  like every other mutation. This is why the bugs above existed: they were the
+  last two paths hand-rolling the dance. The add path had *no* offline branch at
+  all — a card added while disconnected was discarded. `AppCoordinator` keeps
+  only the adapter that turns a `KanbanColumn` into content/due.
+- **The Python MCP server is gone.** `scripts/priority_mcp_server.py` (1,897
+  LOC) existed as a fallback for when the app binary could not be resolved,
+  which the Rust CLI already covers. It made every tool change a three-way edit.
+  `scripts/mcp_parity_check.py` now drives two implementations and *fails* on a
+  missing build of either, rather than skipping — with only two left, a skip
+  would leave it comparing Swift to itself.
+- **SwiftLint runs in CI.** It never had, so the file-length *error* limit this
+  document calls "the constraint" was never enforced. Non-strict, so errors
+  block and the 13 standing warnings don't. See Open Finding 4.
+- **The keybinding token format is tested.** `ShortcutKeyToken` moved into
+  `PriorityCore` next to `ConfigurableShortcutAction`, whose defaults have to
+  agree with it. That found `rootFilter7`'s dead `"comma"` binding. See Open
+  Finding 1.
+- **The shadow types are pinned.** `applogic-tests/SharedTypeDriftTests.swift`
+  compares the two declarations of `CheckvistTask` / `CheckvistList` /
+  `CheckvistNote` / `CheckvistTaskAction` directly. It immediately found that
+  `CheckvistNote` had already drifted — the shadow was missing `created_at` and
+  `updated_at`. See Open Finding 2.
+- **Four unbounded ancestor walks.** A parent cycle — impossible in server data,
+  reachable from a corrupt cache — would spin forever on the main actor during a
+  cache rebuild, freezing the app rather than showing wrong rows. All four now
+  carry a visited set.
+- **Day-log read amplification.** `DailyLogService.reloadFromDisk()` decoded the
+  whole append-only log and compared the entire array on every directory event,
+  including this process's own writes — so the cost of recording an event grew
+  with the length of the user's history. Two `stat` calls short-circuit it now.
+- **`KanbanFilter` extracted.** The board's membership and ordering rules came
+  out of `KanbanManager` into `PriorityCore`, closing the Phase 4 item that had
+  been deferred for want of lint pressure. 23 tests on card placement and the
+  five-way sort tie-break, which had none. See Open Finding 3.
+- **Finding 6 re-examined rather than re-deferred.** The reason given for
+  keeping the in-process MCP server — that only it can reach the app's
+  `UserDefaults` — is not true of the Rust CLI, which reads the same plist by
+  bundle id. The only remaining reason is installed client configs. See Open
+  Finding 6 for the migration that would follow from deciding that.
+- **`hasPendingOfflineWork` can drive UI.** It was computed entirely from
+  `@ObservationIgnored` storage, so it could never have. A revision counter
+  bumped by the two write-through points closes that without making the hot
+  queues observable.
+- Smaller: `AppCoordinator.statusMessage`'s auto-clear is generation-guarded so
+  overlapping messages stop cutting each other short; `OptimisticTaskID` reads
+  its cursor from the store it was passed rather than always
+  `UserDefaults.standard`.
+
+### Findings sweep (2026-08-18, second pass)
+
+Closing the audit's open list. In order:
+
+- **`KanbanSelection`** — the second half of `KanbanManager` into `PriorityCore`,
+  working on a grid of task ids so it needs no app types. 26 tests. Also removed
+  a per-column re-filter that ran on every arrow key.
+- **`PendingSyncQueue` / `IntegrationLinkStore`** — the pure rules out of
+  `IntegrationCoordinator`. 22 tests. The MCP half needed nothing; it was
+  already factored.
+- **`ShortcutGate`, `ShortcutSequenceBuffer`, `ShortcutResolver`** — the
+  router's modal gates, its two-key state machine, and an ordered table of every
+  binding's availability that the router now consults instead of restating.
+  **Found a live bug**: the Daily view's Cmd+↑/↓ reorder was unreachable behind
+  an unguarded general branch. Also corrected this document's claim about the
+  `cmd+k` alias, which is reachable — just only while typing.
+- **The in-process MCP server deleted** (finding 6), and the app now ships the
+  Rust CLI as a signed helper. ~2,500 lines of Swift and Python gone, plus a CI
+  job.
+- **`Sources/PriorityCore`, linked rather than compiled** (finding 2). The move
+  itself was mechanical; what it changed is that `PriorityAppLogic` and
+  `PriorityPlugins` can now import `PriorityCore`, which this document had
+  recorded as impossible. `OfflineReplayPolicy` came home and the due-date
+  parsing is shared rather than duplicated into the shadow type.
+- **`TaskListViewModel` reachable at last** (finding 3) via a
+  `TaskListViewModelHost` seam. 12 tests, including one that fails if the
+  `_ = cacheVersion` line is removed — the observation fix that is invisible by
+  eye.
+- **A crash found by those tests.** `TimerStore.rolledUpElapsedByTaskId`
+  recursed into a parent-chain cycle forever: `SIGSEGV`, from data that arrives
+  over the network. The audit had guarded four ancestor walks; this one walks
+  *children*, so it was missed.
+
+Tests 455 → **570**. SwiftLint warnings 13 → **9**, none suppressed.
 
 ## Out of Scope
 

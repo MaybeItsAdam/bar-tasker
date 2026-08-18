@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import PriorityCore
 
 /// Owns the network-facing surface of the coordinator: authentication, list
 /// management, fetching tasks, the offline-mutation flush, and the
@@ -18,6 +19,9 @@ import OSLog
 final class SyncService {
   private weak var host: (any SyncHost)?
   private let repository: TaskRepository
+  /// Guards `flushPendingTaskMutations` against overlapping runs — see the
+  /// comment at its top.
+  private var isFlushingOfflineWork = false
   private let logger = Logger(
     subsystem: "uk.co.maybeitsadam.priority", category: "sync")
 
@@ -37,15 +41,30 @@ final class SyncService {
     if repository.canSyncRemotely && repository.listId.isEmpty { return }
 
     repository.errorMessage = nil
+    let generation = repository.beginFetchGeneration()
 
     do {
       try await repository.withLoadingState {
-        let previousTasks = repository.tasks
-        let fetchedTasks = try await repository.activeSyncPlugin.fetchOpenTasks(
+        let response = try await repository.activeSyncPlugin.fetchOpenTasks(
           listId: repository.listId,
           credentials: repository.activeCredentials
         )
 
+        // Nothing serialises the fetch callers, so responses can land out of
+        // order. A newer fetch owns `tasks` from the moment it is issued;
+        // applying this one on top of it would show an older list.
+        guard repository.isLatestFetchGeneration(generation) else { return }
+
+        // Tasks the user completed while this response was on the wire aren't
+        // closed as far as it is concerned. Drop them, or completing a task
+        // just as the popover opened put it straight back on screen.
+        let fetchedTasks = repository.filteringLocallyCompletedTasks(
+          from: response, generation: generation)
+
+        // Read after the await: `tasks` is main-actor state, but a suspension
+        // lets other main-actor work reshape it, and the timer remap needs the
+        // shape we are actually replacing.
+        let previousTasks = repository.tasks
         repository.tasks = fetchedTasks
         repository.activeSyncPlugin.persistTaskCache(
           listId: repository.listId, tasks: fetchedTasks)
@@ -257,18 +276,31 @@ final class SyncService {
   /// Replays offline-queued creates, deletes, actions, and updates against
   /// the active sync plugin. Creates run first to build a `tempId → realId`
   /// map; later queues resolve negative ids through it so a delete or close
-  /// of an offline-created task hits the correct server task. Any individual
-  /// failure re-queues that item and suppresses the final `fetchTopTask` so
-  /// optimistic UI state survives until the next reconnect attempt.
+  /// of an offline-created task hits the correct server task.
+  ///
+  /// Each item leaves the queue — memory *and* disk — only once the server has
+  /// acknowledged it. A failure leaves it exactly where it was (re-filed under
+  /// the real id if its create succeeded this round) and suppresses the final
+  /// `fetchTopTask` so optimistic UI state survives until the next reconnect
+  /// attempt. This ordering is the point: the previous version cleared the
+  /// whole on-disk payload before issuing the first request, so quitting or
+  /// crashing part-way through discarded every item that had not yet failed.
+  /// The queue exists to survive exactly that, so it must outlive the replay.
   func flushPendingTaskMutations() async {
     let repo = repository
     guard repo.hasPendingOfflineWork else { return }
+    // The queue is only emptied item by item now, so a second call arriving
+    // while the first is still awaiting the network would replay the same
+    // snapshot again. The old up-front `clearPendingOfflineWork()` made that
+    // impossible by accident; this makes it impossible on purpose.
+    guard !isFlushingOfflineWork else { return }
+    isFlushingOfflineWork = true
+    defer { isFlushingOfflineWork = false }
 
     let creates = repo.pendingTaskCreates
     let deletes = repo.pendingTaskDeletes
     let actions = repo.pendingTaskActions
     let mutations = repo.pendingTaskMutations
-    repo.clearPendingOfflineWork()
 
     var tempIdToRealId: [Int: Int] = [:]
     /// Temp ids whose create failed this round and was put back on the queue.
@@ -280,10 +312,13 @@ final class SyncService {
     var anyFailure = false
 
     /// Returns the id to send to the server, or `nil` when the caller should
-    /// stop processing this item. `requeue` fires when the item still has a
-    /// pending create behind it and must be preserved for the next flush.
-    /// Decision logic lives in `OfflineReplayPolicy` so it can be unit-tested.
-    func resolveForReplay(_ id: Int, requeue: (Int) -> Void) -> Int? {
+    /// stop processing this item. `dropFromQueue` fires only for `.drop` — the
+    /// create the item depended on is gone for good, so the work is moot and
+    /// has to be taken off the queue explicitly. A `.requeue` needs no action:
+    /// the item is still sitting on the queue under its temp id, which is
+    /// exactly where the next flush expects to find it. Decision logic lives in
+    /// `OfflineReplayPolicy` so it can be unit-tested.
+    func resolveForReplay(_ id: Int, dropFromQueue: () -> Void) -> Int? {
       switch OfflineReplayPolicy.resolve(
         taskId: id,
         tempIdToRealId: tempIdToRealId,
@@ -291,11 +326,11 @@ final class SyncService {
       ) {
       case .send(let taskId):
         return taskId
-      case .requeue(let tempId):
-        requeue(tempId)
+      case .requeue:
         anyFailure = true
         return nil
       case .drop:
+        dropFromQueue()
         return nil
       }
     }
@@ -304,10 +339,9 @@ final class SyncService {
       let resolvedParentId: Int?
       if let parentId = pending.parentId, parentId < 0 {
         guard let realParentId = tempIdToRealId[parentId] else {
-          // Parent create failed earlier; can't create child without it.
-          // Re-queue the child so a future flush can try again once the
-          // parent eventually succeeds.
-          repo.enqueuePendingCreate(pending)
+          // Parent create failed earlier; can't create child without it. The
+          // child is still on the queue — leaving it there is what lets a
+          // future flush retry it once the parent eventually succeeds.
           requeuedCreateTempIds.insert(pending.tempId)
           anyFailure = true
           continue
@@ -325,17 +359,17 @@ final class SyncService {
           position: pending.position,
           credentials: repository.activeCredentials
         ) {
+          // Off the queue only now that the server has acknowledged it.
+          repo.removePendingCreate(tempId: pending.tempId)
           tempIdToRealId[pending.tempId] = newTask.id
           if let idx = repository.tasks.firstIndex(where: { $0.id == pending.tempId }) {
             repository.tasks[idx] = newTask
           }
         } else {
-          repo.enqueuePendingCreate(pending)
           requeuedCreateTempIds.insert(pending.tempId)
           anyFailure = true
         }
       } catch {
-        repo.enqueuePendingCreate(pending)
         requeuedCreateTempIds.insert(pending.tempId)
         anyFailure = true
         logger.error(
@@ -346,10 +380,11 @@ final class SyncService {
     for tempOrRealId in deletes {
       guard
         let realId = resolveForReplay(
-          tempOrRealId, requeue: { repo.enqueuePendingDelete($0) })
+          tempOrRealId, dropFromQueue: { repo.removePendingDelete(tempOrRealId) })
       else {
-        // Either the create is being retried (re-queued above) or it is gone
-        // for good, in which case the delete is moot.
+        // Either the create is being retried (so the delete stays queued behind
+        // it) or it is gone for good, in which case the delete was moot and has
+        // just been dropped.
         continue
       }
       do {
@@ -357,8 +392,9 @@ final class SyncService {
           listId: repository.listId,
           taskId: realId,
           credentials: repository.activeCredentials)
+        repo.removePendingDelete(tempOrRealId)
       } catch {
-        repo.enqueuePendingDelete(realId)
+        repo.retargetPendingDelete(from: tempOrRealId, to: realId)
         anyFailure = true
         logger.error(
           "Offline delete replay failed: \(error.localizedDescription, privacy: .public)")
@@ -369,9 +405,8 @@ final class SyncService {
       guard
         let realId = resolveForReplay(
           pending.taskId,
-          requeue: {
-            repo.enqueuePendingAction(
-              PendingTaskAction(taskId: $0, action: pending.action))
+          dropFromQueue: {
+            repo.removePendingAction(taskId: pending.taskId, action: pending.action)
           })
       else { continue }
       do {
@@ -380,9 +415,10 @@ final class SyncService {
           taskId: realId,
           action: pending.action,
           credentials: repository.activeCredentials)
+        repo.removePendingAction(taskId: pending.taskId, action: pending.action)
       } catch {
-        repo.enqueuePendingAction(
-          PendingTaskAction(taskId: realId, action: pending.action))
+        repo.retargetPendingAction(
+          from: pending.taskId, to: realId, action: pending.action)
         anyFailure = true
         logger.error(
           "Offline action replay failed: \(error.localizedDescription, privacy: .public)")
@@ -393,10 +429,7 @@ final class SyncService {
       guard
         let realId = resolveForReplay(
           tempOrRealId,
-          requeue: {
-            repo.enqueuePendingMutation(
-              taskId: $0, content: mutation.content, due: mutation.due)
-          })
+          dropFromQueue: { repo.removePendingMutation(taskId: tempOrRealId) })
       else { continue }
       do {
         _ = try await repo.activeSyncPlugin.updateTask(
@@ -405,9 +438,9 @@ final class SyncService {
           content: mutation.content,
           due: mutation.due,
           credentials: repository.activeCredentials)
+        repo.removePendingMutation(taskId: tempOrRealId)
       } catch {
-        repo.enqueuePendingMutation(
-          taskId: realId, content: mutation.content, due: mutation.due)
+        repo.retargetPendingMutation(from: tempOrRealId, to: realId)
         anyFailure = true
         logger.error(
           "Offline update replay failed: \(error.localizedDescription, privacy: .public)")
@@ -474,7 +507,7 @@ final class SyncService {
       if let idx = repository.tasks.firstIndex(where: { $0.id == task.id }) {
         repository.tasks[idx] = taskWithPosition(repository.tasks[idx], position: newPosition)
       }
-      host.applyOptimisticMoveAndSync(task: task, content: nil, due: neighbourDue)
+      host.applyOptimisticUpdate(task: task, content: nil, due: neighbourDue)
       enqueueReorderRequest(taskId: task.id, position: newPosition)
     } else if (task.parentId ?? 0) == (neighbour.parentId ?? 0) {
       swapWithSiblingNeighbour(task: task, direction: direction)

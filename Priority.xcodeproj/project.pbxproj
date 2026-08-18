@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		665C2D8C2F588A0A002ED852 /* PriorityCore in Frameworks */ = {isa = PBXBuildFile; productRef = 665C2D8B2F588A0A002ED852 /* PriorityCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		665C2D5D2F588A0A002ED852 /* Priority.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Priority.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -18,11 +22,30 @@
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		665C2D7A2F588A0A002ED852 /* Bundle the priority CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle the priority CLI";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/scripts/bundle_cli.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXFrameworksBuildPhase section */
 		665C2D5A2F588A0A002ED852 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				665C2D8C2F588A0A002ED852 /* PriorityCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -55,6 +78,7 @@
 				665C2D592F588A0A002ED852 /* Sources */,
 				665C2D5A2F588A0A002ED852 /* Frameworks */,
 				665C2D5B2F588A0A002ED852 /* Resources */,
+				665C2D7A2F588A0A002ED852 /* Bundle the priority CLI */,
 			);
 			buildRules = (
 			);
@@ -65,6 +89,7 @@
 			);
 			name = "Priority";
 			packageProductDependencies = (
+				665C2D8B2F588A0A002ED852 /* PriorityCore */,
 			);
 			productName = "Priority";
 			productReference = 665C2D5D2F588A0A002ED852 /* Priority.app */;
@@ -95,6 +120,9 @@
 			mainGroup = 665C2D542F588A0A002ED852;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
+			packageReferences = (
+				665C2D8A2F588A0A002ED852 /* XCLocalSwiftPackageReference "." */,
+			);
 			productRefGroup = 665C2D5E2F588A0A002ED852 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -162,7 +190,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -223,7 +251,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -357,6 +385,20 @@
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		665C2D8A2F588A0A002ED852 /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		665C2D8B2F588A0A002ED852 /* PriorityCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PriorityCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCConfigurationList section */
 		665C2D582F588A0A002ED852 /* Build configuration list for PBXProject "Priority" */ = {

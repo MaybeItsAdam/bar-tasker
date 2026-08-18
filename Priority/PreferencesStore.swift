@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 final class PreferencesStore {
   enum Key: String {
@@ -55,6 +56,14 @@ final class PreferencesStore {
     case panelHeightOverridesByRootView
     case popoverResizeHandleVisible
     case dailyChartVisible
+    /// Whether the Daily view shows the "done today" list of completed tasks.
+    /// Off by default — the Daily view is about dailies, and the task list is
+    /// reachable from the dock when you do want it.
+    case dailyCompletionsVisible
+    /// `pluginIdentifier` of the chosen completion celebration preset. Empty or
+    /// unrecognised falls back to whatever `PluginRegistry.nativeFirst()`
+    /// activated.
+    case completionCelebrationIdentifier
   }
 
   private let defaults: UserDefaults

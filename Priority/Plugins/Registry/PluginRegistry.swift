@@ -9,12 +9,17 @@ final class PluginRegistry {
       [:]
   private(set) var mcpIntegrationPluginsByIdentifier: [String: any MCPIntegrationPlugin] = [:]
   private(set) var dailyLogPluginsByIdentifier: [String: any DailyLogPlugin] = [:]
+  private(set) var celebrationPluginsByIdentifier: [String: any CompletionCelebrationPlugin] = [:]
+  /// Registration order, so the settings picker lists presets the way
+  /// `nativeFirst()` writes them rather than in dictionary order.
+  private(set) var celebrationPluginOrder: [String] = []
 
   private(set) var activeCheckvistSyncPluginIdentifier: String?
   private(set) var activeObsidianPluginIdentifier: String?
   private(set) var activeGoogleCalendarPluginIdentifier: String?
   private(set) var activeMCPIntegrationPluginIdentifier: String?
   private(set) var activeDailyLogPluginIdentifier: String?
+  private(set) var activeCelebrationPluginIdentifier: String?
 
   var activeCheckvistSyncPlugin: (any CheckvistSyncPlugin)? {
     guard let activeCheckvistSyncPluginIdentifier else { return nil }
@@ -39,6 +44,20 @@ final class PluginRegistry {
   var activeDailyLogPlugin: (any DailyLogPlugin)? {
     guard let activeDailyLogPluginIdentifier else { return nil }
     return dailyLogPluginsByIdentifier[activeDailyLogPluginIdentifier]
+  }
+
+  var activeCelebrationPlugin: (any CompletionCelebrationPlugin)? {
+    guard let activeCelebrationPluginIdentifier else { return nil }
+    return celebrationPluginsByIdentifier[activeCelebrationPluginIdentifier]
+  }
+
+  /// Every registered preset, in registration order.
+  ///
+  /// The only capability that needs a list-them-all accessor: the others resolve
+  /// to a single active plugin, whereas celebrations are presented to the user
+  /// as a choice.
+  var celebrationPlugins: [any CompletionCelebrationPlugin] {
+    celebrationPluginOrder.compactMap { celebrationPluginsByIdentifier[$0] }
   }
 
   func register(_ plugin: any CheckvistSyncPlugin, activate: Bool = false) {
@@ -73,6 +92,16 @@ final class PluginRegistry {
     dailyLogPluginsByIdentifier[plugin.pluginIdentifier] = plugin
     if activate || activeDailyLogPluginIdentifier == nil {
       activeDailyLogPluginIdentifier = plugin.pluginIdentifier
+    }
+  }
+
+  func register(_ plugin: any CompletionCelebrationPlugin, activate: Bool = false) {
+    if celebrationPluginsByIdentifier[plugin.pluginIdentifier] == nil {
+      celebrationPluginOrder.append(plugin.pluginIdentifier)
+    }
+    celebrationPluginsByIdentifier[plugin.pluginIdentifier] = plugin
+    if activate || activeCelebrationPluginIdentifier == nil {
+      activeCelebrationPluginIdentifier = plugin.pluginIdentifier
     }
   }
 
@@ -111,6 +140,13 @@ final class PluginRegistry {
     return true
   }
 
+  @discardableResult
+  func activateCelebrationPlugin(identifier: String) -> Bool {
+    guard celebrationPluginsByIdentifier[identifier] != nil else { return false }
+    activeCelebrationPluginIdentifier = identifier
+    return true
+  }
+
   static func nativeFirst() -> PluginRegistry {
     let registry = PluginRegistry()
     registry.register(NativeCheckvistSyncPlugin(), activate: true)
@@ -118,6 +154,13 @@ final class PluginRegistry {
     registry.register(NativeGoogleCalendarIntegrationPlugin(), activate: true)
     registry.register(NativeMCPIntegrationPlugin(), activate: true)
     registry.register(NativeDailyLogPlugin(), activate: true)
+    // Celebrations are a menu, not a single integration: all presets register,
+    // and the user's stored pick is applied afterwards by
+    // `CompletionCelebrationManager`. Order here is picker order.
+    registry.register(NoneCelebrationPlugin())
+    registry.register(StrikeCelebrationPlugin(), activate: true)
+    registry.register(FoldCelebrationPlugin())
+    registry.register(SparkCelebrationPlugin())
     return registry
   }
 }

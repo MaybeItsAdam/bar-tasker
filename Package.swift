@@ -6,8 +6,6 @@ let pluginTargetExcludes = [
   "ARCHITECTURE_IMPROVEMENT_PLAN.md",
   "Priority.xcodeproj",
   "CLAUDE.md",
-  "DerivedData",
-  "FocusCore",
   // The Rust CLI crate. No Swift sources, but `path: "."` would otherwise walk
   // all of `cli/target` on every build.
   "cli",
@@ -24,7 +22,6 @@ let pluginTargetExcludes = [
   "Priority/Assets.xcassets",
   "Priority/Priority.entitlements",
   "Priority/Priority.release.entitlements",
-  "Priority/CoreLogic",
   "Priority/FocusSessionView.swift",
 
   // App-level source folders not needed by the plugins library
@@ -43,7 +40,6 @@ let pluginTargetExcludes = [
   "Priority/EisenhowerMatrixView.swift",
   "Priority/IntegrationDataSourceAdapter.swift",
   "Priority/KanbanBoardView.swift",
-  "Priority/KanbanColumn.swift",
   "Priority/KanbanSettingsView.swift",
   "Priority/KanbanTaskDataSourceAdapter.swift",
   "Priority/KeyboardShortcutRouter.swift",
@@ -62,7 +58,6 @@ let pluginTargetExcludes = [
   // App-only: reads UserDefaults and Application Support directly at startup.
   "Priority/LegacyNameMigration.swift",
   "Priority/PreferencesStore.swift",
-  "Priority/OfflineReplayPolicy.swift",
   "Priority/OptimisticTaskID.swift",
   "Priority/RecurrenceRule.swift",
   "Priority/ReorderQueue.swift",
@@ -75,19 +70,19 @@ let pluginTargetExcludes = [
   "Priority/AppCoordinator+ServiceHosts.swift",
   "Priority/SyncService.swift",
   "Priority/TaskMutationService.swift",
+  "Priority/TaskMutationService+Board.swift",
+  "Priority/CheckvistTask+VisibilityTask.swift",
   "Priority/TaskServiceHosts.swift",
   "Priority/TaskNavigationCoordinator.swift",
   "Priority/TaskOutlineBuilder.swift",
   "Priority/TaskTreeFormatter.swift",
   "Priority/TaskNavigationService.swift",
-  "Priority/TaskVisibilityEngine.swift",
   "Priority/Typography.swift",
   "Priority/UndoService.swift",
 
   // Plugin subtrees / files that are app-only or conflict with PluginModelStubs
   "Priority/Plugins/MCP",
   "Priority/Plugins/Registry",
-  "Priority/Plugins/Settings",
   "Priority/Plugins/Native/OfflineTaskSyncPlugin.swift",
   "Priority/Plugins/Native/Checkvist/CheckvistAPIClient.swift",
   "Priority/Plugins/Native/Checkvist/CheckvistSession.swift",
@@ -109,6 +104,12 @@ let pluginTargetExcludes = [
   // worth testing lives in `CoreLogic/` and is covered by `corelogic-tests`.
   "Priority/Plugins/Native/DailyLog",
   "Priority/Plugins/Protocols/DailyLogPluginProtocol.swift",
+  // App-only for a third variant of the same reason: completion celebrations
+  // are motion, motion is SwiftUI, and SwiftUI can't be in this target. The
+  // decision logic they render lives in `CoreLogic/CompletionMilestonePolicy`
+  // and is covered by `corelogic-tests`.
+  "Priority/Plugins/Native/Celebration",
+  "Priority/Plugins/Protocols/CompletionCelebrationPluginProtocol.swift",
 ]
 
 // Anything that is *not* an AppLogic source. Mirrors `pluginTargetExcludes` but
@@ -120,8 +121,6 @@ let appLogicTargetExcludes = [
   "ARCHITECTURE_IMPROVEMENT_PLAN.md",
   "Priority.xcodeproj",
   "CLAUDE.md",
-  "DerivedData",
-  "FocusCore",
   // The Rust CLI crate. No Swift sources, but `path: "."` would otherwise walk
   // all of `cli/target` on every build.
   "cli",
@@ -138,11 +137,11 @@ let appLogicTargetExcludes = [
   "Priority/Assets.xcassets",
   "Priority/Priority.entitlements",
   "Priority/Priority.release.entitlements",
-  "Priority/CoreLogic",
   "Priority/FocusSessionView.swift",
 
   // Priority/Managers — AppLogic only wants TaskRepository.swift from here;
   // the rest of the directory pulls in AppKit/SwiftUI and is excluded file-by-file.
+  "Priority/Managers/CompletionCelebrationManager.swift",
   "Priority/Managers/DailyLogManager.swift",
   "Priority/Managers/FocusSessionManager.swift",
   "Priority/Managers/GlobalShortcutManager.swift",
@@ -155,28 +154,22 @@ let appLogicTargetExcludes = [
   "Priority/Managers/QuickEntryManager.swift",
   "Priority/Managers/RecurrenceManager.swift",
   "Priority/Managers/StartDateManager.swift",
-  "Priority/Managers/TaskFilterEngine.swift",
-  "Priority/Managers/TaskListViewModel.swift",
   "Priority/Managers/TimerManager.swift",
 
   // Models — AppLogic only wants UndoableAction.swift and CheckvistConnectionState.swift;
   // the rest are app-only enums.
   "Priority/Models/AppThemeModels.swift",
   "Priority/Models/CommandSuggestion.swift",
-  "Priority/Models/ConfigurableShortcutAction.swift",
   "Priority/Models/DailyChartRange.swift",
   "Priority/Models/OnboardingDialog.swift",
   "Priority/Models/QuickAddLocationMode.swift",
   "Priority/Models/QuickEntryMode.swift",
-  "Priority/Models/RootDueBucket.swift",
-  "Priority/Models/RootTaskView.swift",
 
   // App-level source files at Priority/ root that AppLogic does not need.
   "Priority/AppCoordinator.swift",
   "Priority/AppCoordinator+ServiceHosts.swift",
   "Priority/AppDelegate.swift",
   "Priority/AppThemeColorSupport.swift",
-  "Priority/CacheState.swift",
   "Priority/CommandExecutor.swift",
   "Priority/DailyLogDataSourceAdapter.swift",
   "Priority/DailyView.swift",
@@ -184,7 +177,6 @@ let appLogicTargetExcludes = [
   "Priority/FocusSessionView.swift",
   "Priority/IntegrationDataSourceAdapter.swift",
   "Priority/KanbanBoardView.swift",
-  "Priority/KanbanColumn.swift",
   "Priority/KanbanSettingsView.swift",
   "Priority/KanbanTaskDataSourceAdapter.swift",
   "Priority/KeyboardShortcutRouter.swift",
@@ -196,6 +188,8 @@ let appLogicTargetExcludes = [
   "Priority/PopoverView+Dock.swift",
   "Priority/PopoverView+QuickEntryBar.swift",
   "Priority/PopoverView+TaskRow.swift",
+  // The one place `CheckvistTask` meets `PriorityCore`'s `VisibilityTask`.
+  // App-only by construction: neither library may see both halves.
   // App-only: reads UserDefaults and Application Support directly at startup.
   "Priority/LegacyNameMigration.swift",
   "Priority/RecurrenceRule.swift",
@@ -207,7 +201,6 @@ let appLogicTargetExcludes = [
   "Priority/SettingsView+ThemePane.swift",
   "Priority/TaskNavigationService.swift",
   "Priority/TaskTreeFormatter.swift",
-  "Priority/TaskVisibilityEngine.swift",
   "Priority/Typography.swift",
 
   // Plugin subtrees (AppLogic pulls OfflineTaskSyncPlugin.swift and
@@ -215,10 +208,11 @@ let appLogicTargetExcludes = [
   // PriorityPlugins).
   "Priority/Plugins/MCP",
   "Priority/Plugins/Registry",
-  "Priority/Plugins/Settings",
   "Priority/Plugins/Protocols/PluginProtocols.swift",
   "Priority/Plugins/Protocols/PluginSettingsPageProviding.swift",
   "Priority/Plugins/Protocols/DailyLogPluginProtocol.swift",
+  "Priority/Plugins/Protocols/CompletionCelebrationPluginProtocol.swift",
+  "Priority/Plugins/Native/Celebration",
   "Priority/Plugins/Native/Checkvist",
   "Priority/Plugins/Native/DailyLog",
   "Priority/Plugins/Native/GoogleCalendar",
@@ -238,10 +232,14 @@ let package = Package(
   targets: [
     .target(
       name: "PriorityCore",
-      path: "Priority/CoreLogic"
+      path: "Sources/PriorityCore"
     ),
     .target(
       name: "PriorityPlugins",
+      // Same unlock as `PriorityAppLogic`: these sources compile into the Xcode
+      // app as well, and the app now links `PriorityCore` rather than compiling
+      // it, so the module resolves on both sides.
+      dependencies: ["PriorityCore"],
       path: ".",
       exclude: pluginTargetExcludes,
       sources: [
@@ -271,10 +269,25 @@ let package = Package(
     // `public` — see the Phase 5.2 note in ARCHITECTURE_IMPROVEMENT_PLAN.md.
     .target(
       name: "PriorityAppLogic",
+      // Legal at last. `PriorityAppLogic`'s sources are still compiled into the
+      // Xcode app as well as into this target, and an `import PriorityCore`
+      // line used to break the app build because no such module existed there.
+      // Now the app *links* PriorityCore rather than compiling its sources, so
+      // the module exists on both sides and the import resolves either way.
+      dependencies: ["PriorityCore"],
       path: ".",
       exclude: appLogicTargetExcludes,
       sources: [
         "Priority/Managers/TaskRepository.swift",
+        // Reachable at last: it needs `PriorityCore`'s visibility engines, and
+        // this target could not import them until the app started linking the
+        // package rather than compiling its sources.
+        "Priority/Managers/TaskListViewModel.swift",
+        "Priority/CacheState.swift",
+        // Conforms the Checkvist model to `PriorityCore`'s `VisibilityTask`.
+        // Compiled into both this target and the app, so each side's
+        // declaration of `CheckvistTask` picks up the conformance.
+        "Priority/CheckvistTask+VisibilityTask.swift",
         "Priority/CacheInvalidationBus.swift",
         "Priority/UndoService.swift",
         "Priority/LocalTaskStore.swift",
@@ -282,11 +295,8 @@ let package = Package(
         "Priority/ReorderQueue.swift",
         "Priority/SyncService.swift",
         "Priority/TaskMutationService.swift",
+        "Priority/TaskMutationService+Board.swift",
         "Priority/TaskServiceHosts.swift",
-        // Lives here rather than in `CoreLogic` because SPM forbids one file
-        // belonging to two targets, and its only consumer — `SyncService` — is
-        // an AppLogic source. Still pure, still headless, still unit-tested.
-        "Priority/OfflineReplayPolicy.swift",
         "Priority/TaskNavigationCoordinator.swift",
         // The outline flattening `TaskNavigationCoordinator` decides against.
         // Pure, and covered by `TaskOutlineBuilderTests`.

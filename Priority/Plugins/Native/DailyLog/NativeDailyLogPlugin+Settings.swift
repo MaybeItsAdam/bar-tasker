@@ -1,3 +1,4 @@
+import PriorityCore
 import SwiftUI
 
 @MainActor
@@ -19,6 +20,18 @@ private struct DailyLogPluginSettingsView: View {
   @State private var fileNameFormat: String = ""
   @State private var folderFormat: String = ""
   @State private var previewDate = Date()
+  /// Draft titles, keyed by daily id, for the rows currently being renamed.
+  ///
+  /// Not bound straight through to the store. Doing that meant `renameDaily`
+  /// ran on every keystroke, and the store trims what it is given and ignores
+  /// an empty result — correct rules for a finished title, fatal for a draft.
+  /// Typing a space at the end of a word stored the trimmed version, the field
+  /// re-read it, and the space disappeared as it was typed; multi-word names
+  /// could not be entered at all, and clearing the field to retype snapped the
+  /// old name straight back. See `DailyTitleEdit`.
+  @State private var titleDrafts: [String: String] = [:]
+  /// Which title field has focus, so leaving one commits it. `nil` is "none".
+  @FocusState private var focusedTitleField: String?
 
   var body: some View {
     let dailyLog = manager.dailyLog
@@ -143,6 +156,8 @@ private struct DailyLogPluginSettingsView: View {
   @ViewBuilder
   private var dailiesEditor: some View {
     let dailyLog = manager.dailyLog
+    // `let _ =`, not `_ =`: inside a ViewBuilder the latter is parsed as a
+    // view expression and fails to compile. swiftlint:disable:next redundant_discardable_let
     let _ = dailyLog.revision
 
     VStack(alignment: .leading, spacing: 8) {
@@ -160,11 +175,19 @@ private struct DailyLogPluginSettingsView: View {
             TextField(
               "Title",
               text: Binding(
-                get: { daily.title },
-                set: { dailyLog.renameDaily(daily, to: $0) }
+                get: { titleDrafts[daily.id] ?? daily.title },
+                set: { titleDrafts[daily.id] = $0 }
               )
             )
             .textFieldStyle(.roundedBorder)
+            // Return commits; so does clicking away, because abandoning what
+            // someone just typed for reaching at the mouse is the wrong
+            // default. An empty or unchanged draft commits to nothing.
+            .onSubmit { commitTitleDraft(for: daily) }
+            .onChange(of: focusedTitleField) { previous, _ in
+              if let previous, previous == daily.id { commitTitleDraft(for: daily) }
+            }
+            .focused($focusedTitleField, equals: daily.id)
 
             // Which *kind* of schedule. The days or the interval themselves are
             // edited below rather than hidden behind a "Custom…" item, because
@@ -179,12 +202,12 @@ private struct DailyLogPluginSettingsView: View {
             .frame(width: 130)
 
             Button {
-              dailyLog.archiveDaily(daily)
+              dailyLog.deleteDaily(daily)
             } label: {
               Image(systemName: "trash")
             }
             .buttonStyle(.borderless)
-            .help("Archive. Past days keep their record of this daily.")
+            .help("Delete. Past days keep their record of this daily, and it can be restored below.")
           }
 
           switch daily.schedule {
@@ -198,12 +221,50 @@ private struct DailyLogPluginSettingsView: View {
       }
 
       if dailyLog.allDailies.isEmpty {
-        Text("None yet — add them from the Daily view (Shift+T, then Return).")
+        Text("None yet — add them from the Daily view (u, then Return).")
           .font(.caption)
           .foregroundColor(.secondary)
       }
+
+      archivedDailiesEditor
     }
     .padding(.top, 4)
+  }
+
+  /// Where a deleted daily goes, and how it comes back.
+  ///
+  /// Deleting archives rather than removes, because the day log references
+  /// dailies by id and a real deletion would leave every past day that ticked
+  /// this one rendering a raw identifier. That trade is only defensible if the
+  /// archive is somewhere you can actually see, so: here.
+  @ViewBuilder
+  private var archivedDailiesEditor: some View {
+    let archived = manager.dailyLog.archivedDailies
+    if !archived.isEmpty {
+      Divider()
+        .padding(.vertical, 4)
+      Text("Deleted")
+        .font(.caption)
+        .foregroundColor(.secondary)
+      ForEach(archived) { daily in
+        HStack(spacing: 8) {
+          Text(daily.title)
+            .foregroundColor(.secondary)
+          Spacer(minLength: 0)
+          Button("Restore") { manager.dailyLog.restoreDaily(daily) }
+            .buttonStyle(.link)
+            .font(.caption)
+        }
+      }
+    }
+  }
+
+  /// Writes a finished draft through and drops it, so the row goes back to
+  /// reading the stored title.
+  private func commitTitleDraft(for daily: Daily) {
+    guard let draft = titleDrafts.removeValue(forKey: daily.id) else { return }
+    guard let title = DailyTitleEdit.committed(draft: draft, original: daily.title) else { return }
+    manager.dailyLog.renameDaily(daily, to: title)
   }
 
   private func scheduleKindBinding(for daily: Daily) -> Binding<Int> {

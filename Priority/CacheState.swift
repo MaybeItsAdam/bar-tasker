@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 /// Holds the pre-computed caches that drive visible-task filtering,
 /// tag lookups, due-date bucketing, and timer roll-ups.

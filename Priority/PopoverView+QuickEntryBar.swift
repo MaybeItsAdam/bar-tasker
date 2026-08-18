@@ -1,4 +1,5 @@
 import AppKit
+import PriorityCore
 import SwiftUI
 
 /// Quick-entry bar (the inline prompt + command palette + autocomplete) and
@@ -148,6 +149,7 @@ extension PopoverView {
       return manager.quickEntry.searchText.isEmpty
         ? "magnifyingglass" : "line.3.horizontal.decrease.circle.fill"
     case .addSibling: return "plus.square"
+    case .addSiblingAbove: return "arrow.up.square"
     case .addChild: return "arrow.turn.down.right"
     case .editTask: return "pencil"
     case .command: return "terminal"
@@ -160,6 +162,7 @@ extension PopoverView {
     switch manager.quickEntry.quickEntryMode {
     case .search: return "Search tasks…"
     case .addSibling: return "Add task"
+    case .addSiblingAbove: return "Add task above"
     case .addChild: return "Add task"
     case .editTask: return "Edit task..."
     case .command:
@@ -177,7 +180,8 @@ extension PopoverView {
 
   var quickEntryNSFont: NSFont {
     switch manager.quickEntry.quickEntryMode {
-    case .addSibling, .addChild, .editTask, .quickAddDefault, .quickAddSpecific:
+    case .addSibling, .addSiblingAbove, .addChild, .editTask, .quickAddDefault,
+      .quickAddSpecific:
       return Typography.taskNSFont(ofSize: 13, name: manager.preferences.appFontName)
     case .search, .command:
       return Typography.interfaceNSFont(ofSize: 13)
@@ -228,6 +232,7 @@ extension PopoverView {
     case .search:
       manager.quickEntry.isQuickEntryFocused = false
     case .addSibling: submitSibling()
+    case .addSiblingAbove: submitSibling(above: true)
     case .addChild: submitChild()
     case .editTask:
       guard !manager.quickEntry.quickEntryText.isEmpty else { return }
@@ -250,7 +255,7 @@ extension PopoverView {
 
   func tabAction() {
     switch manager.quickEntry.quickEntryMode {
-    case .addSibling, .addChild:
+    case .addSibling, .addSiblingAbove, .addChild:
       if manager.quickEntry.quickEntryText.isEmpty {
         manager.quickEntry.quickEntryMode = .addChild
         manager.quickEntry.isQuickEntryFocused = true
@@ -267,7 +272,8 @@ extension PopoverView {
     switch manager.quickEntry.quickEntryMode {
     case .search:
       manager.quickEntry.searchText = ""
-    case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
+    case .addSibling, .addSiblingAbove, .addChild, .editTask, .command, .quickAddDefault,
+      .quickAddSpecific:
       manager.quickEntry.quickEntryMode = .search
       manager.quickEntry.quickEntryText = ""
       manager.quickEntry.commandSuggestionIndex = 0
@@ -303,7 +309,7 @@ extension PopoverView {
     manager.quickEntry.isQuickEntryFocused = false
   }
 
-  func submitSibling() {
+  func submitSibling(above: Bool = false) {
     guard !manager.quickEntry.quickEntryText.isEmpty else {
       manager.quickEntry.quickEntryText = ""
       manager.quickEntry.quickEntryMode = .search
@@ -316,7 +322,10 @@ extension PopoverView {
     manager.quickEntry.quickEntryMode = .search
     manager.quickEntry.isQuickEntryFocused = false
     repository.errorMessage = nil
-    Task { await manager.taskMutationService.addTask(content: content, insertAfterTask: targetTask) }
+    Task {
+      await manager.taskMutationService.addTask(
+        content: content, insertAfterTask: targetTask, insertsAbove: above)
+    }
   }
 
   func submitTopLevelAdd() {

@@ -1,3 +1,4 @@
+import PriorityCore
 import SwiftUI
 
 // MARK: - KanbanSettingsView

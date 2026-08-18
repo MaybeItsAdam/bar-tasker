@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import OSLog
 import Observation
+import PriorityCore
 import SwiftUI
 
 @MainActor
@@ -40,11 +41,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // server, which reads both and would otherwise answer from an empty store
     // for any client that launched it before the app had ever been opened.
     LegacyNameMigration.runIfNeeded()
-
-    if MCPServer.isLaunchMode(arguments: ProcessInfo.processInfo.arguments) {
-      launchMCPServerMode()
-      return
-    }
 
     NSApp.setActivationPolicy(.accessory)
     applyAppTheme()
@@ -104,21 +100,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
   }
 
-  private func launchMCPServerMode() {
-    NSApp.setActivationPolicy(.prohibited)
-    Task.detached(priority: .userInitiated) {
-      await MCPServer().run()
-      await MainActor.run {
-        // `applicationShouldTerminate` vetoes any termination that didn't come
-        // from an explicit Quit — right for a menu bar app, fatal here: stdin
-        // closing would leave this process running forever, one orphan per
-        // client restart.
-        self.explicitQuitRequested = true
-        NSApp.terminate(nil)
-      }
-    }
-  }
-
   private func applyAppTheme() {
     switch checkvistManager.preferences.appTheme {
     case .system:
@@ -161,7 +142,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 820, height: 660),
-      styleMask: [.titled, .closable],
+      styleMask: [.titled, .closable, .resizable],
       backing: .buffered,
       defer: false
     )
@@ -180,13 +161,54 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     window.isReleasedWhenClosed = false
     window.isRestorable = false
     window.tabbingMode = .disallowed
-    window.minSize = NSSize(width: 720, height: 560)
-    window.maxSize = NSSize(width: 1200, height: 900)
     window.delegate = self
     window.contentViewController = hostingController
     window.setFrameAutosaveName("PriorityPreferencesWindowV2")
+    Self.enforceMinimumContentSize(of: window)
     preferencesWindow = window
     return window
+  }
+
+  /// Minimum *content* size the settings root asks for, matching the
+  /// `.frame(minWidth:minHeight:)` on `SettingsView` above.
+  private static let preferencesMinContentSize = NSSize(width: 720, height: 560)
+  private static let preferencesMaxContentSize = NSSize(width: 1200, height: 900)
+
+  /// Converts the SwiftUI root's minimum *content* size into the window's
+  /// `minSize`, which is a *frame* measurement, and grows the window if the
+  /// autosaved frame came back smaller than that.
+  ///
+  /// These are two different quantities and the old code conflated them: it set
+  /// `minSize` to 720x560 — the content minimum — while the frame also carries a
+  /// 28pt titlebar and a 52pt preference-style toolbar. Worse, `minSize` does
+  /// nothing on a window without `.resizable` in its mask, so nothing enforced
+  /// it at all. A restored frame of 720x612 left only 532pt of content for a
+  /// view that cannot shrink below 560, and SwiftUI simply overflowed and
+  /// clipped — which is what cut the plugin sidebar's button bar off the bottom.
+  private static func enforceMinimumContentSize(of window: NSWindow) {
+    // Measured rather than hardcoded: the toolbar style, and therefore the
+    // chrome height, is not ours to predict across OS versions.
+    let chrome = window.frame.height - window.contentLayoutRect.height
+    guard chrome >= 0 else { return }
+
+    window.minSize = NSSize(
+      width: preferencesMinContentSize.width,
+      height: preferencesMinContentSize.height + chrome
+    )
+    window.maxSize = NSSize(
+      width: preferencesMaxContentSize.width,
+      height: preferencesMaxContentSize.height + chrome
+    )
+
+    var frame = window.frame
+    frame.size.width = max(frame.width, window.minSize.width)
+    frame.size.height = max(frame.height, window.minSize.height)
+    if frame.size != window.frame.size {
+      // Keep the top-left pin so the window grows downward rather than
+      // appearing to jump when a stale small frame is corrected.
+      frame.origin.y = window.frame.maxY - frame.height
+      window.setFrame(frame, display: false)
+    }
   }
 
   func windowWillClose(_ notification: Notification) {
@@ -236,9 +258,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    // MCP server mode returns from `applicationDidFinishLaunching` before any UI
-    // is built, so there is no shortcut manager to tear down — reaching through
-    // the implicitly-unwrapped optional here crashed the server on shutdown.
+    // Optional because termination can arrive before the manager is built —
+    // reaching through an implicitly-unwrapped optional here used to crash the
+    // MCP server on shutdown, back when `--mcp-server` ran inside this app.
     shortcutManager?.unregisterGlobalHotkeys()
   }
 

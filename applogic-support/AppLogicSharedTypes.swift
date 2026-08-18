@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 // Plugin protocols and stub models needed by `PriorityAppLogic`
 // (`TaskRepository`, `OfflineTaskSyncPlugin`, `LocalTaskStore`).
@@ -46,6 +47,18 @@ enum CheckvistTaskAction: String, Sendable, Codable {
 struct CheckvistNote: Codable, Equatable, Identifiable {
   let id: Int?
   let content: String
+  /// Present on the real model and previously missing here — the exact drift
+  /// `applogic-tests/SharedTypeDriftTests.swift` now exists to catch. Any
+  /// `applogic-tests` case round-tripping a note was exercising a narrower type
+  /// than the one that ships.
+  let createdAt: String?
+  let updatedAt: String?
+
+  enum CodingKeys: String, CodingKey {
+    case id, content
+    case createdAt = "created_at"
+    case updatedAt = "updated_at"
+  }
 }
 
 struct CheckvistTask: Codable, Equatable, Identifiable {
@@ -70,6 +83,11 @@ struct CheckvistTask: Codable, Equatable, Identifiable {
     case notes
     case updatedAt = "updated_at"
   }
+
+  /// Shared with the real model rather than re-derived: forty lines of date
+  /// formats copied into a shadow type is the drift
+  /// `applogic-tests/SharedTypeDriftTests.swift` exists to catch.
+  var dueDate: Date? { DueDateParsing.date(from: due) }
 
   init(
     id: Int,

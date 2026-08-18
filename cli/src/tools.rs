@@ -6,8 +6,9 @@
 //! command line with the same arguments and the same answer, by construction
 //! rather than by discipline.
 //!
-//! Parity with the *other two* implementations is a different problem, and is
-//! asserted from outside by `scripts/mcp_parity_check.py`.
+//! These are also the app's tools. Priority ships this binary as its MCP
+//! server, so there is no second implementation to keep in step any more —
+//! which is what retired `scripts/mcp_parity_check.py`. See `cli/src/mcp.rs`.
 
 use crate::checkvist::CheckvistClient;
 use crate::error::{Result, ToolError};

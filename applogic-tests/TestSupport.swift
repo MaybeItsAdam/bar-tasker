@@ -76,6 +76,11 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
   // Failure injection. Defaults keep every call succeeding, so tests that
   // don't care about failure paths are unaffected.
   var createTaskError: Error?
+  /// Fires inside `createTask`, before it succeeds or throws — i.e. at the
+  /// moment a real flush would be waiting on the network. Lets a test inspect
+  /// what is on disk *during* the replay, which is the window a quit or crash
+  /// falls into.
+  var onCreateTask: (() -> Void)?
   /// Makes `createTask` report "no task created" without throwing — the
   /// server-said-no branch, which is distinct from the transport-failed one.
   var createTaskReturnsNil = false
@@ -88,6 +93,12 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
   /// Runs on the main actor immediately before `updateTask` returns or throws,
   /// so a test can shuffle the task list underneath an in-flight mutation.
   var beforeUpdateTaskReturns: (@MainActor () -> Void)?
+  /// Same idea for `performTaskAction` — the window a refetch can land in while
+  /// a close is on the wire.
+  var beforePerformTaskActionReturns: (@MainActor () -> Void)?
+  /// Same idea for `fetchOpenTasks`, and `async` so a test can drive a whole
+  /// second fetch to completion while the first is still suspended.
+  var beforeFetchOpenTasksReturns: (@MainActor () async -> Void)?
 
   // Recorded calls
   private(set) var loginCallCount = 0
@@ -112,7 +123,11 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
     -> [CheckvistTask]
   {
     fetchOpenTasksCalls.append(listId)
-    return openTasksByListId[listId] ?? []
+    // Read before the hook runs: a real response is assembled server-side
+    // before whatever the hook simulates happening mid-flight.
+    let response = openTasksByListId[listId] ?? []
+    await beforeFetchOpenTasksReturns?()
+    return response
   }
 
   func fetchLists(credentials: CheckvistCredentials) async throws -> [CheckvistList] {
@@ -131,6 +146,7 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
     credentials: CheckvistCredentials
   ) async throws -> Bool {
     performTaskActionCalls.append((listId, taskId, action))
+    beforePerformTaskActionReturns?()
     if let performTaskActionError { throw performTaskActionError }
     return performTaskActionResult
   }
@@ -156,6 +172,11 @@ final class FakeCheckvistSyncPlugin: CheckvistSyncPlugin {
     credentials: CheckvistCredentials
   ) async throws -> CheckvistTask? {
     createTaskCalls.append((listId, content, parentId, position))
+    onCreateTask?()
+    // A real create is a network round trip, so the replay genuinely suspends
+    // here and anything else queued on the main actor gets to run. Yielding
+    // reproduces that, which is what lets a test drive two overlapping flushes.
+    await Task.yield()
     if let createTaskError { throw createTaskError }
     if createTaskReturnsNil { return nil }
     let id = nextCreatedTaskId

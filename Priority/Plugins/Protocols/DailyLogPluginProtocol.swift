@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 /// Contract for the daily-log capability: record what happened, project it, and
 /// mirror a finished day into an Obsidian daily note.
@@ -67,8 +68,15 @@ protocol DailyLogPlugin: Plugin, AnyObject {
   func addDaily(title: String, schedule: Daily.Schedule) -> Daily?
   func updateDaily(id: String, title: String?, schedule: Daily.Schedule?)
   /// Archives rather than deletes, so days that recorded a tick against this id
-  /// still render with a title instead of an orphan.
+  /// still render with a title instead of an orphan. This is what the UI calls
+  /// "delete" — see `DailyLogManager.deleteDaily`.
   func archiveDaily(id: String)
+  /// Puts an archived daily back where it was. The inverse of `archiveDaily`,
+  /// and what makes deleting reversible.
+  func restoreDaily(id: String)
+  /// Archived ones included, for the restore list. Every other reader wants
+  /// `dailies`, which is active-only.
+  var allDailiesIncludingArchived: [Daily] { get }
   func moveDaily(id: String, by offset: Int)
 
   /// Ticks or un-ticks a daily for the logical day containing `now`. Returns the

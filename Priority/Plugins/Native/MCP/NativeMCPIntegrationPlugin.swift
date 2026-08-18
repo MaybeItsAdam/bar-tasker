@@ -23,8 +23,14 @@ final class NativeMCPIntegrationPlugin: MCPIntegrationPlugin {
   let pluginDescription = "Expose Priority as a local MCP server for AI assistants and tools."
 
   private let guideRelativePath = "docs/mcp-server.md"
-  private let scriptRelativePath = "scripts/priority_mcp_server.py"
-  private let defaultCommandPlaceholder = "/Applications/Priority.app/Contents/MacOS/Priority"
+  /// The MCP server is the `priority` CLI, shipped inside the bundle by
+  /// `scripts/bundle_cli.sh`. Configurations point straight at it rather than
+  /// at `Priority --mcp-server`, which now only exists to keep configurations
+  /// written before that change working. See `MCPServerShim`.
+  private let helperRelativePath = "Contents/Helpers/priority"
+  private let defaultCommandPlaceholder =
+    "/Applications/Priority.app/Contents/Helpers/priority"
+  private let serverArguments = ["mcp"]
 
   func serverCommandURL() -> URL? {
     resolvedMCPCommand().displayURL
@@ -122,74 +128,52 @@ final class NativeMCPIntegrationPlugin: MCPIntegrationPlugin {
       if fileManager.fileExists(atPath: overrideURL.path) {
         return ResolvedMCPCommand(
           command: overrideURL.path,
-          args: ["--mcp-server"],
+          args: serverArguments,
           displayURL: overrideURL
         )
       }
     }
 
-    let scriptURL = scriptCandidates().first(where: { fileManager.fileExists(atPath: $0.path) })
-    if shouldPreferScriptFallback(), let scriptURL {
-      return ResolvedMCPCommand(
-        command: "/usr/bin/env",
-        args: ["python3", scriptURL.path],
-        displayURL: scriptURL.standardizedFileURL
-      )
-    }
-
     for candidate in commandCandidates() where fileManager.fileExists(atPath: candidate.path) {
       return ResolvedMCPCommand(
         command: candidate.path,
-        args: ["--mcp-server"],
+        args: serverArguments,
         displayURL: candidate.standardizedFileURL
-      )
-    }
-
-    if let scriptURL {
-      return ResolvedMCPCommand(
-        command: "/usr/bin/env",
-        args: ["python3", scriptURL.path],
-        displayURL: scriptURL.standardizedFileURL
       )
     }
 
     return ResolvedMCPCommand(
       command: defaultCommandPlaceholder,
-      args: ["--mcp-server"],
+      args: serverArguments,
       displayURL: nil
     )
-  }
-
-  private func shouldPreferScriptFallback() -> Bool {
-    let env = ProcessInfo.processInfo.environment
-    if env["PRIORITY_MCP_PREFER_APP"] == "1" {
-      return false
-    }
-    if env["PRIORITY_MCP_PREFER_SCRIPT"] == "1" {
-      return true
-    }
-    #if DEBUG
-      return true
-    #else
-      return false
-    #endif
   }
 
   private func commandCandidates() -> [URL] {
     let fileManager = FileManager.default
     var candidates: [URL] = []
 
-    let installedAppCommand = URL(
-      fileURLWithPath: "/Applications/Priority.app/Contents/MacOS/Priority")
-    candidates.append(installedAppCommand)
+    // The installed app first, so a configuration written from a development
+    // build still names the path the user will actually have.
+    candidates.append(
+      URL(fileURLWithPath: "/Applications/Priority.app").appendingPathComponent(
+        helperRelativePath))
 
     let bundleParent = Bundle.main.bundleURL.deletingLastPathComponent()
     candidates.append(
-      bundleParent.appendingPathComponent("Priority.app/Contents/MacOS/Priority"))
+      bundleParent.appendingPathComponent("Priority.app").appendingPathComponent(
+        helperRelativePath))
+    candidates.append(Bundle.main.bundleURL.appendingPathComponent(helperRelativePath))
 
-    if let executableURL = Bundle.main.executableURL {
-      candidates.append(executableURL.standardizedFileURL)
-    }
+    // A separately installed CLI, for a bundle built with
+    // PRIORITY_SKIP_CLI_BUNDLE=1.
+    let home = NSHomeDirectory()
+    candidates.append(contentsOf: [
+      "\(home)/.local/bin/priority",
+      "\(home)/bin/priority",
+      "/usr/local/bin/priority",
+      "/opt/homebrew/bin/priority",
+    ].map(URL.init(fileURLWithPath:)))
 
     var deduplicated: [URL] = []
     var seenPaths = Set<String>()
@@ -201,10 +185,6 @@ final class NativeMCPIntegrationPlugin: MCPIntegrationPlugin {
       }
     }
     return deduplicated
-  }
-
-  private func scriptCandidates() -> [URL] {
-    candidateURLs(forRelativePath: scriptRelativePath, envOverrideKey: "PRIORITY_MCP_SCRIPT_PATH")
   }
 
   private func guideCandidates() -> [URL] {

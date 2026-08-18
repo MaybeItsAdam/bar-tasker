@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 /// One rendered line of the task outline: the task, and how far it is indented
 /// below the row that revealed it.

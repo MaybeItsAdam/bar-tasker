@@ -3,12 +3,11 @@
 //! Priorities, recurrence rules, start dates, focus history and dailies have no
 //! Checkvist representation, so anything limited to the API cannot see them.
 //!
-//! This is the third implementation of this logic. The Swift one
-//! (`Priority/CoreLogic/`) is the tested original, the Python one
-//! (`scripts/priority_mcp_server.py`) is the fallback server's port, and
-//! `scripts/mcp_parity_check.py` drives all three against a fixture and diffs
-//! both the answers and the files they leave behind. Change any rule in here
-//! and that check is what tells you whether the other two agreed.
+//! This is a second reading of the same files the app writes — the Swift side
+//! (`Priority/CoreLogic/`) is the original. The two are not held together by a
+//! shared type but by the serialised format, which `docs/mcp-server.md`
+//! describes and `DailyDefinitionsStoreFormatTests` pins on the Swift side.
+//! Change a rule here and that format is the contract to check it against.
 
 use crate::config::Config;
 use crate::error::{Result, ToolError};
@@ -32,10 +31,10 @@ pub struct LocalState {
 impl LocalState {
     /// Environment, then the CLI's config file, then the app's own locations.
     ///
-    /// The env vars are the ones the other two servers use, and they redirect
-    /// both sources at fixture data for `scripts/mcp_parity_check.py`. The
-    /// config keys exist so a machine without the app — or with it installed
-    /// somewhere unusual — can still be pointed at a store.
+    /// The env vars redirect both sources at fixture data, which is how the
+    /// tests reach this without touching a real store. The config keys exist so
+    /// a machine without the app — or with it installed somewhere unusual — can
+    /// still be pointed at one.
     pub fn resolve(config: &Config) -> Self {
         LocalState {
             store_directory: config
@@ -492,8 +491,8 @@ impl LocalState {
             })?;
         }
         // Two-space indent with sorted keys, matching Swift's
-        // `[.sortedKeys, .prettyPrinted]` and the Python server — this file is
-        // small and a human opening it to fix a typo is reasonable.
+        // `[.sortedKeys, .prettyPrinted]` — this file is small and a human
+        // opening it to fix a typo is reasonable.
         // `serde_json::Map` is a `BTreeMap`, so keys come out sorted already.
         let encoded = serde_json::to_string_pretty(collection)
             .map_err(|err| ToolError::new(format!("Could not encode dailies: {err}")))?;

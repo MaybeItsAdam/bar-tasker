@@ -1,4 +1,5 @@
 import AppKit
+import PriorityCore
 import SwiftUI
 
 // swiftlint:disable file_length
@@ -139,9 +140,19 @@ enum PopoverLayout {
     DailyChecklistLayout.reservedHeight(
       showsChart: manager.popoverChrome.showsDailyChart,
       hasFullChartHistory: manager.dailyLog.hasFullChartHistory,
-      hasCompletions: !manager.dailyLog.summary().completed.isEmpty,
+      showsCompletions: dailyShowsCompletions(for: manager),
       isAddingDaily: manager.dailyLog.isAddingDaily
     )
+  }
+
+  /// Whether the Daily view is actually drawing its completed-tasks list: the
+  /// dock toggle is on *and* the day has something in it. Both halves have to
+  /// agree with `DailyView`, so the condition lives here rather than being
+  /// written out at each site.
+  @MainActor
+  static func dailyShowsCompletions(for manager: AppCoordinator) -> Bool {
+    manager.popoverChrome.showsDailyCompletions
+      && !manager.dailyLog.summary().completed.isEmpty
   }
 
   /// The chart and its range row — what a dragged Daily height has added to it
@@ -156,13 +167,25 @@ enum PopoverLayout {
     )
   }
 
+  /// Every Daily block the dock can switch on and off. A dragged height is
+  /// stored without these, so toggling one grows or shrinks the panel by its
+  /// own height rather than eating into the checklist.
+  @MainActor
+  static func dailyToggleableBlockHeight(for manager: AppCoordinator) -> CGFloat {
+    DailyChecklistLayout.toggleableBlockHeight(
+      showsChart: manager.popoverChrome.showsDailyChart,
+      hasFullChartHistory: manager.dailyLog.hasFullChartHistory,
+      showsCompletions: dailyShowsCompletions(for: manager)
+    )
+  }
+
   /// Converts a height the user has just dragged the panel to into the value
-  /// that gets stored. The Daily view keeps its height chart-free, so that
-  /// toggling the graph moves the panel rather than the checklist.
+  /// that gets stored. The Daily view keeps its height free of the dock's
+  /// optional blocks, so toggling one moves the panel rather than the checklist.
   @MainActor
   static func storedHeight(forDisplayed height: CGFloat, in manager: AppCoordinator) -> CGFloat {
     guard manager.taskListViewModel.rootTaskView == .daily else { return height }
-    return height - dailyChartBlockHeight(for: manager)
+    return height - dailyToggleableBlockHeight(for: manager)
   }
 
   @MainActor
@@ -176,10 +199,10 @@ enum PopoverLayout {
     // sizing is a good default and a bad argument once the user has said what
     // they want.
     if let override = manager.popoverChrome.height(for: manager.taskListViewModel.rootTaskView) {
-      // The Daily view's height is stored *without* the chart, so switching the
-      // graph on grows the panel by exactly the chart's height instead of
-      // taking the room out of the checklist underneath it.
-      return override + dailyChartBlockHeight(for: manager)
+      // The Daily view's height is stored *without* its toggleable blocks, so
+      // switching the graph or the done-today list on grows the panel by exactly
+      // that block's height instead of taking the room out of the checklist.
+      return override + dailyToggleableBlockHeight(for: manager)
     }
 
     let fixedHeight = fixedChromeHeight(for: manager)
@@ -555,6 +578,8 @@ struct PopoverView: View {
     .tint(manager.preferences.themeAccentColor)
     .clipShape(RoundedRectangle(cornerRadius: PopoverLayout.cornerRadius))
     .overlay(focusOverlay)
+    .overlay(celebrationOverlay)
+    .overlay(shortcutReferenceOverlay)
     .onAppear {
       manager.onboardingService.presentOnboardingDialogIfNeeded()
     }
@@ -571,8 +596,21 @@ struct PopoverView: View {
     }
   }
 
+  /// The keyboard reference, on `?`. Covers the whole panel rather than sitting
+  /// beside the list: it is something you stop to read, and half a panel is not
+  /// enough room to read it in.
+  @ViewBuilder
+  private var shortcutReferenceOverlay: some View {
+    if manager.popoverChrome.showsShortcutReference {
+      ShortcutReferenceOverlay()
+        .transition(.opacity)
+    }
+  }
+
   var isAddMode: Bool {
-    manager.quickEntry.quickEntryMode == .addSibling || manager.quickEntry.quickEntryMode == .addChild
+    manager.quickEntry.quickEntryMode == .addSibling
+      || manager.quickEntry.quickEntryMode == .addSiblingAbove
+      || manager.quickEntry.quickEntryMode == .addChild
   }
 
   @ViewBuilder
@@ -593,6 +631,25 @@ struct PopoverView: View {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(themeColor(.panelBackground).opacity(0.92))
+    }
+  }
+
+  /// The milestone half of a completion celebration.
+  ///
+  /// Panel-spanning rather than row-anchored because by the time it runs the row
+  /// is gone — `applyOptimisticCompletion` has already removed the subtree — and
+  /// in the `listCleared` case there is no row left at all. Never hit-testable:
+  /// it is decoration over a list the user is still driving with the keyboard.
+  ///
+  /// Keyed on the flourish id so two milestones in a row each get their own
+  /// `onAppear` instead of SwiftUI reusing the first one's view.
+  @ViewBuilder
+  private var celebrationOverlay: some View {
+    if let flourish = manager.celebration.activeFlourish {
+      flourish.view
+        .id(flourish.id)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
     }
   }
 
@@ -712,7 +769,8 @@ struct PopoverView: View {
     switch manager.quickEntry.quickEntryMode {
     case .search:
       return Bindable(manager).quickEntry.searchText
-    case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
+    case .addSibling, .addSiblingAbove, .addChild, .editTask, .command, .quickAddDefault,
+      .quickAddSpecific:
       return Bindable(manager).quickEntry.quickEntryText
     }
   }
@@ -721,7 +779,8 @@ struct PopoverView: View {
     switch manager.quickEntry.quickEntryMode {
     case .search:
       return manager.quickEntry.searchText
-    case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
+    case .addSibling, .addSiblingAbove, .addChild, .editTask, .command, .quickAddDefault,
+      .quickAddSpecific:
       return manager.quickEntry.quickEntryText
     }
   }
@@ -731,7 +790,8 @@ struct PopoverView: View {
     switch manager.quickEntry.quickEntryMode {
     case .search:
       manager.quickEntry.searchText = ""
-    case .addSibling, .addChild, .editTask, .command, .quickAddDefault, .quickAddSpecific:
+    case .addSibling, .addSiblingAbove, .addChild, .editTask, .command, .quickAddDefault,
+      .quickAddSpecific:
       manager.quickEntry.quickEntryText = ""
       manager.quickEntry.quickEntryMode = .search
       manager.quickEntry.commandSuggestionIndex = 0
@@ -1399,7 +1459,9 @@ struct PopoverView: View {
   func breadcrumbPath(for task: CheckvistTask, includeCurrentParent: Bool = false) -> String {
     var parts: [String] = []
     var pid = task.parentId ?? 0
-    while pid != 0 {
+    // See `TaskFilterEngine.isDescendant` for why the visited set is here.
+    var seen: Set<Int> = []
+    while pid != 0, seen.insert(pid).inserted {
       if !includeCurrentParent && pid == navigationState.currentParentId {
         break
       }

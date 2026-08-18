@@ -175,6 +175,83 @@ final class TaskMutationServiceTests: XCTestCase {
     XCTAssertEqual(repository.errorMessage, "Failed to close task.")
   }
 
+  /// Mark-done spends the completion animation with the row still selected, so
+  /// a second press of the key lands before the close has even gone out. It used
+  /// to fire a second close: two day-log entries for one completion, and two
+  /// next occurrences for a recurring task.
+  func testASecondMarkDoneInsideTheFeedbackWindowIsIgnored() async {
+    repository.tasks = [makeTask(id: 1, content: "water plants")]
+    host.currentTask = repository.tasks[0]
+    host.recurrenceRules = [1: "every day"]
+    host.nextOccurrenceDueDateString = "2026-08-18"
+    host.duringCompletionFeedback = { [weak self] in
+      guard let self else { return }
+      self.host.duringCompletionFeedback = nil
+      await self.service.markCurrentTaskDone()
+    }
+
+    await service.markCurrentTaskDone()
+
+    XCTAssertEqual(host.completionFeedbackTaskIds, [1], "no second animation")
+    XCTAssertEqual(
+      plugin.performTaskActionCalls.filter { $0.action == .close }.count, 1,
+      "the task is closed once")
+    XCTAssertEqual(host.dayLogTaskActions.count, 1, "one entry in the day log")
+    XCTAssertEqual(plugin.createTaskCalls.count, 1, "one next occurrence, not two")
+  }
+
+  /// The rollback used to assign the whole pre-removal array back over `tasks`,
+  /// which also reverted anything that had landed while the close was in flight.
+  func testCloseRollbackReinsertsTheSubtreeWithoutRevertingWhatLandedMeanwhile() async {
+    repository.tasks = [
+      makeTask(id: 1, content: "parent"),
+      makeTask(id: 2, content: "child", parentId: 1),
+      makeTask(id: 3, content: "unrelated"),
+    ]
+    plugin.performTaskActionResult = false
+    plugin.beforePerformTaskActionReturns = { [weak self] in
+      self?.repository.tasks.append(makeTask(id: 4, content: "arrived mid-flight"))
+    }
+
+    await service.taskAction(repository.tasks[0], endpoint: "close")
+
+    XCTAssertEqual(
+      repository.tasks.map(\.id), [1, 2, 3, 4],
+      "the subtree goes back in place and the new arrival survives")
+  }
+
+  /// Rolling a close back means the task is open after all, so the filter that
+  /// keeps an in-flight fetch from resurrecting it has to be lifted too — or the
+  /// task stays invisible until the app is relaunched.
+  func testARolledBackCloseStopsHidingTheTaskFromLaterFetches() async {
+    repository.tasks = [makeTask(id: 1, content: "alpha")]
+    plugin.openTasksByListId["42"] = [makeTask(id: 1, content: "alpha")]
+    plugin.performTaskActionResult = false
+    let syncService = SyncService(host: host, repository: repository)
+
+    await service.taskAction(repository.tasks[0], endpoint: "close")
+    await syncService.fetchTopTask()
+
+    XCTAssertEqual(repository.tasks.map(\.id), [1])
+  }
+
+  /// Undo of a mark-done reopens a task the fetch filter is still hiding. Same
+  /// requirement as the rollback above, reached through the undo path.
+  func testUndoingACloseLetsTheTaskComeBackOnTheNextFetch() async {
+    repository.tasks = [makeTask(id: 1, content: "alpha")]
+    plugin.openTasksByListId["42"] = [makeTask(id: 1, content: "alpha")]
+    let syncService = SyncService(host: host, repository: repository)
+
+    await service.taskAction(repository.tasks[0], endpoint: "close")
+    XCTAssertTrue(repository.tasks.isEmpty, "closed optimistically")
+
+    await service.taskAction(
+      makeTask(id: 1, content: "", status: 1), endpoint: "reopen", isUndo: true)
+    await syncService.fetchTopTask()
+
+    XCTAssertEqual(repository.tasks.map(\.id), [1])
+  }
+
   func testCloseWhileOfflineQueuesTheActionAndAnAncestorReopen() async {
     repository.tasks = [
       makeTask(id: 1, content: "parent"),
@@ -322,6 +399,107 @@ final class TaskMutationServiceTests: XCTestCase {
     XCTAssertEqual(repository.tasks.first?.content, "inbox item")
     XCTAssertEqual(repository.pendingTaskCreates.count, 1)
     XCTAssertEqual(host.finishQuickAddCallCount, 1)
+  }
+
+  // MARK: - Board mutations
+  //
+  // These two arrived from `AppCoordinator`, where they were untestable and had
+  // quietly drifted from the shared failure handling. That drift is what the
+  // offline cases below pin down.
+
+  func testAnOptimisticUpdateLandsLocallyBeforeTheServerIsAsked() {
+    let task = makeTask(id: 1, content: "todo", due: "today")
+    repository.tasks = [task]
+
+    service.applyOptimisticUpdate(task: task, content: "doing", due: "tomorrow")
+
+    XCTAssertEqual(repository.tasks.first?.content, "doing")
+    XCTAssertEqual(repository.tasks.first?.due, "tomorrow")
+    guard case .update(let undoId, let oldContent, let oldDue) = host.lastUndoableAction else {
+      return XCTFail("expected an update to be undoable")
+    }
+    XCTAssertEqual(undoId, 1)
+    XCTAssertEqual(oldContent, "todo")
+    XCTAssertEqual(oldDue, "today")
+  }
+
+  /// The bug this method was moved to fix: the coordinator's copy wrote
+  /// `pendingTaskMutations` directly, so the edit lived in memory only and was
+  /// gone at the next launch.
+  func testAnOptimisticUpdateThatFailsOfflineIsQueuedToDisk() async {
+    let task = makeTask(id: 1, content: "todo", due: "today")
+    repository.tasks = [task]
+    repository.isNetworkReachable = false
+    plugin.updateTaskError = CheckvistSessionError.requestFailed
+
+    await service.applyOptimisticUpdate(task: task, content: "doing", due: "tomorrow")?.value
+
+    XCTAssertEqual(repository.tasks.first?.content, "doing", "optimistic state survives")
+    XCTAssertEqual(repository.pendingTaskMutations[1]?.due, "tomorrow")
+    XCTAssertEqual(
+      repository.pendingOfflineWorkStore.load().mutations[1]?.due, "tomorrow",
+      "and it reaches disk, which is the whole point of the queue")
+  }
+
+  func testAnOptimisticUpdateThatFailsOnlineRollsBack() async {
+    let task = makeTask(id: 1, content: "todo", due: "today")
+    repository.tasks = [task]
+    plugin.updateTaskError = CheckvistSessionError.requestFailed
+
+    await service.applyOptimisticUpdate(task: task, content: "doing", due: "tomorrow")?.value
+
+    XCTAssertEqual(repository.tasks.first?.content, "todo")
+    XCTAssertEqual(repository.tasks.first?.due, "today")
+    XCTAssertNotNil(repository.errorMessage)
+    XCTAssertTrue(repository.pendingTaskMutations.isEmpty)
+  }
+
+  func testAddingARootTaskClaimsTheKanbanSelectionThenHandsItToTheRealId() async {
+    plugin.nextCreatedTaskId = 500
+
+    let work = service.addRootTask(content: "new card", due: "today")
+    XCTAssertEqual(repository.tasks.count, 1)
+    let optimisticId = try? XCTUnwrap(repository.tasks.first?.id)
+    XCTAssertEqual(host.kanbanSelectedTaskId, optimisticId)
+    XCTAssertLessThan(optimisticId ?? 0, 0, "placeholder ids are negative")
+
+    await work?.value
+
+    XCTAssertEqual(repository.tasks.map(\.id), [500])
+    XCTAssertEqual(host.kanbanSelectedTaskId, 500)
+    XCTAssertEqual(repository.tasks.first?.due, "today")
+    guard case .add(let undoId) = host.lastUndoableAction else {
+      return XCTFail("expected the add to be undoable")
+    }
+    XCTAssertEqual(undoId, 500)
+  }
+
+  /// The coordinator's copy had no offline branch at all — a card added while
+  /// disconnected was removed again the moment the request failed.
+  func testARootTaskAddedOfflineIsQueuedRatherThanDiscarded() async {
+    repository.isNetworkReachable = false
+    plugin.createTaskError = CheckvistSessionError.requestFailed
+
+    await service.addRootTask(content: "new card", due: "today")?.value
+
+    XCTAssertEqual(repository.tasks.count, 1, "the card stays on the board")
+    let tempId = try? XCTUnwrap(repository.tasks.first?.id)
+    XCTAssertEqual(repository.pendingTaskCreates.map(\.content), ["new card"])
+    XCTAssertEqual(
+      repository.pendingTaskMutations[tempId ?? 0]?.due, "today",
+      "the due date is queued separately — create does not carry one")
+
+    let persisted = repository.pendingOfflineWorkStore.load()
+    XCTAssertEqual(persisted.creates.map(\.content), ["new card"])
+  }
+
+  func testAddingARootTaskWithoutAListFailsLoudlyAndAddsNothing() {
+    repository.listId = ""
+
+    service.addRootTask(content: "new card", due: nil)
+
+    XCTAssertTrue(repository.tasks.isEmpty)
+    XCTAssertNotNil(repository.errorMessage)
   }
 
   // MARK: - Helpers

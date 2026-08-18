@@ -61,6 +61,17 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
+# The MCP server is the bundled `priority` CLI (scripts/bundle_cli.sh, run from
+# a build phase). Shipping without it would produce a DMG whose --mcp-server
+# does nothing, breaking every MCP client configuration on the user's machine —
+# worth failing the release for rather than discovering later.
+if [[ ! -x "$APP_PATH/Contents/Helpers/priority" ]]; then
+  echo "Build succeeded but the bundled MCP server is missing:" >&2
+  echo "  $APP_PATH/Contents/Helpers/priority" >&2
+  echo "Was PRIORITY_SKIP_CLI_BUNDLE=1 set?" >&2
+  exit 1
+fi
+
 cp -R "$APP_PATH" "$STAGE_DIR/"
 ln -s /Applications "$STAGE_DIR/Applications"
 

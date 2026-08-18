@@ -43,6 +43,11 @@ extension SettingsView {
       Divider()
         .padding(.vertical, 6)
 
+      completionCelebrationPicker
+
+      Divider()
+        .padding(.vertical, 6)
+
       VStack(alignment: .leading, spacing: 8) {
         Text("Accent color")
         Picker("", selection: preferenceBinding(\.themeAccentPreset)) {
@@ -199,6 +204,41 @@ extension SettingsView {
             .foregroundColor(themeJSONStatusIsError ? themeColor(.danger) : themeColor(.success))
         }
       }
+    }
+  }
+
+  /// Preset picker for what completing something looks like.
+  ///
+  /// Lives in the theme pane rather than as plugin cards in the plugin sidebar:
+  /// celebrations are a set of alternatives to choose between, and registering
+  /// each as `PluginSettingsPageProviding` would spray one sidebar entry per
+  /// preset for what is really a single setting.
+  @ViewBuilder
+  var completionCelebrationPicker: some View {
+    let celebration = checkvistManager.celebration
+    VStack(alignment: .leading, spacing: 6) {
+      Text("Completing a task")
+      Picker(
+        "",
+        selection: Binding(
+          get: { celebration.activeCelebrationIdentifier },
+          set: { celebration.activeCelebrationIdentifier = $0 }
+        )
+      ) {
+        ForEach(celebration.availableCelebrations, id: \.pluginIdentifier) { preset in
+          Label(preset.displayName, systemImage: preset.celebrationIconSystemName)
+            .tag(preset.pluginIdentifier)
+        }
+      }
+      .labelsHidden()
+      .pickerStyle(.menu)
+
+      Text(
+        celebration.activeCelebration.pluginDescription
+          + " Haptics are separate and always on."
+      )
+      .font(.caption)
+      .foregroundColor(themeColor(.textSecondary))
     }
   }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 import ServiceManagement
 
 /// Owns the wiring that has to happen exactly once during `AppCoordinator`

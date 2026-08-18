@@ -42,6 +42,10 @@ final class StubTaskServiceHost: TaskMutationHost, SyncHost {
   /// Runs when the service asks for a refetch, so a test can simulate the
   /// server's view of the list replacing the optimistic one.
   var onFetchTopTask: (() -> Void)?
+  /// Runs inside `runTaskCompletionFeedback` — the window where production is
+  /// mid-animation and the close has not gone out yet, which is where a second
+  /// press of the mark-done key lands.
+  var duringCompletionFeedback: (@MainActor () async -> Void)?
   /// Recurrence rules keyed by task id, mirroring `RecurrenceManager`.
   var recurrenceRules: [Int: String] = [:]
   /// The due date `nextOccurrence` should hand back for a task that has a rule.
@@ -101,6 +105,7 @@ final class StubTaskServiceHost: TaskMutationHost, SyncHost {
   }
 
   var lastUndoableAction: UndoableAction?
+  var kanbanSelectedTaskId: Int?
 
   func fetchTopTask() async {
     fetchTopTaskCallCount += 1
@@ -166,6 +171,7 @@ final class StubTaskServiceHost: TaskMutationHost, SyncHost {
 
   func runTaskCompletionFeedback(taskId: Int) async -> Bool {
     completionFeedbackTaskIds.append(taskId)
+    await duringCompletionFeedback?()
     return completionFeedbackSucceeds
   }
 
@@ -199,7 +205,7 @@ final class StubTaskServiceHost: TaskMutationHost, SyncHost {
     onboardingCompletedCallCount += 1
   }
 
-  func applyOptimisticMoveAndSync(task: CheckvistTask, content: String?, due: String?) {
+  func applyOptimisticUpdate(task: CheckvistTask, content: String?, due: String?) {
     optimisticMoveCalls.append((task.id, content, due))
   }
 }

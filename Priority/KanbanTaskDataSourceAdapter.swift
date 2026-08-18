@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 /// Satisfies `KanbanManager`'s `KanbanTaskDataSource` requirement by reading
 /// from the concrete state owners — `TaskRepository` (tasks),

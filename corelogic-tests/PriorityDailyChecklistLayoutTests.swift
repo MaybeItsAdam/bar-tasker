@@ -14,7 +14,7 @@ final class DailyChecklistLayoutTests: XCTestCase {
 
   private let bareReserved = DailyChecklistLayout.reservedHeight(
     showsChart: false, hasFullChartHistory: true,
-    hasCompletions: false, isAddingDaily: false)
+    showsCompletions: false, isAddingDaily: false)
 
   func testAPanelSizedFromItsContentFitsEveryRow() {
     let panel = DailyChecklistLayout.contentHeight(reserved: bareReserved, count: 5)
@@ -35,7 +35,7 @@ final class DailyChecklistLayoutTests: XCTestCase {
     XCTAssertEqual(
       DailyChecklistLayout.reservedHeight(
         showsChart: true, hasFullChartHistory: false,
-        hasCompletions: false, isAddingDaily: false),
+        showsCompletions: false, isAddingDaily: false),
       242
     )
   }
@@ -62,7 +62,7 @@ final class DailyChecklistLayoutTests: XCTestCase {
   func testTheChartIsSeparableFromEverythingElse() {
     let charted = DailyChecklistLayout.reservedHeight(
       showsChart: true, hasFullChartHistory: true,
-      hasCompletions: false, isAddingDaily: false)
+      showsCompletions: false, isAddingDaily: false)
     XCTAssertEqual(
       charted - bareReserved,
       DailyChecklistLayout.chartBlockHeight(showsChart: true, hasFullChartHistory: true)
@@ -85,10 +85,10 @@ final class DailyChecklistLayoutTests: XCTestCase {
   func testEveryOptionalBlockCostsHeight() {
     let withCompletions = DailyChecklistLayout.reservedHeight(
       showsChart: false, hasFullChartHistory: true,
-      hasCompletions: true, isAddingDaily: false)
+      showsCompletions: true, isAddingDaily: false)
     let withAddField = DailyChecklistLayout.reservedHeight(
       showsChart: false, hasFullChartHistory: true,
-      hasCompletions: false, isAddingDaily: true)
+      showsCompletions: false, isAddingDaily: true)
 
     // The completions list arrives with a divider above it, and a divider is a
     // stack child — so it costs the 10pt spacing on both sides too.
@@ -96,5 +96,61 @@ final class DailyChecklistLayoutTests: XCTestCase {
       withCompletions - bareReserved,
       DailyChecklistLayout.dividerBlockHeight + DailyChecklistLayout.completionsHeight)
     XCTAssertEqual(withAddField - bareReserved, DailyChecklistLayout.addFieldHeight)
+  }
+
+  // MARK: - Dock-toggleable blocks
+
+  /// A dragged Daily height is stored with these subtracted and restored with
+  /// them added back, so the sum has to cover *every* block the dock can
+  /// switch. Miss one and toggling it takes its height out of the checklist
+  /// instead of out of the panel.
+  func testToggleableHeightCoversBothDockToggles() {
+    let none = DailyChecklistLayout.toggleableBlockHeight(
+      showsChart: false, hasFullChartHistory: true, showsCompletions: false)
+    let chartOnly = DailyChecklistLayout.toggleableBlockHeight(
+      showsChart: true, hasFullChartHistory: true, showsCompletions: false)
+    let completionsOnly = DailyChecklistLayout.toggleableBlockHeight(
+      showsChart: false, hasFullChartHistory: true, showsCompletions: true)
+    let both = DailyChecklistLayout.toggleableBlockHeight(
+      showsChart: true, hasFullChartHistory: true, showsCompletions: true)
+
+    XCTAssertEqual(none, 0)
+    XCTAssertEqual(
+      chartOnly,
+      DailyChecklistLayout.chartBlockHeight(showsChart: true, hasFullChartHistory: true))
+    XCTAssertEqual(
+      completionsOnly,
+      DailyChecklistLayout.completionsBlockHeight(showsCompletions: true))
+    // Additive, so toggling one never changes what the other costs.
+    XCTAssertEqual(both, chartOnly + completionsOnly)
+  }
+
+  /// The completions block is exactly what `reservedHeight` adds for it — the
+  /// two are used on opposite sides of the stored-height round trip.
+  func testCompletionsBlockMatchesWhatReservedHeightAddsForIt() {
+    let shown = DailyChecklistLayout.reservedHeight(
+      showsChart: false, hasFullChartHistory: true,
+      showsCompletions: true, isAddingDaily: false)
+    XCTAssertEqual(
+      shown - bareReserved,
+      DailyChecklistLayout.completionsBlockHeight(showsCompletions: true))
+    XCTAssertEqual(DailyChecklistLayout.completionsBlockHeight(showsCompletions: false), 0)
+  }
+
+  /// Hiding the list has to give the room back to the checklist, which is the
+  /// whole point of it being a toggle rather than a permanent section.
+  func testHidingCompletionsGivesTheRoomToTheChecklist() {
+    let reservedShown = DailyChecklistLayout.reservedHeight(
+      showsChart: true, hasFullChartHistory: true,
+      showsCompletions: true, isAddingDaily: false)
+    let reservedHidden = DailyChecklistLayout.reservedHeight(
+      showsChart: true, hasFullChartHistory: true,
+      showsCompletions: false, isAddingDaily: false)
+
+    let budget: CGFloat = 600
+    XCTAssertGreaterThan(budget - reservedHidden, budget - reservedShown)
+    XCTAssertEqual(
+      (budget - reservedHidden) - (budget - reservedShown),
+      DailyChecklistLayout.completionsBlockHeight(showsCompletions: true))
   }
 }

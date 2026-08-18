@@ -1,4 +1,5 @@
 import AppKit
+import PriorityCore
 import SwiftUI
 
 /// The Daily root view: what today looks like, and what the recent run of days
@@ -19,6 +20,10 @@ struct DailyView: View {
   /// Owned by the view rather than the manager: the router only needs to say
   /// "open the field", and where the caret goes after that is a view concern.
   @FocusState private var addFieldFocused: Bool
+  /// Separate from `addFieldFocused` because the two fields can never be open
+  /// at once but *can* hand over to each other, and one shared flag would leave
+  /// the incoming field fighting the outgoing one for first responder.
+  @FocusState private var editFieldFocused: Bool
 
   private func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
@@ -29,6 +34,8 @@ struct DailyView: View {
   var body: some View {
     // Read `revision` so recording an event re-renders the projections. The
     // log itself lives in the plugin and isn't observable — see DailyLogManager.
+    // `let _ =`, not `_ =`: inside a ViewBuilder the latter is parsed as a
+    // view expression and fails to compile. swiftlint:disable:next redundant_discardable_let
     let _ = dailyLog.revision
     let summary = dailyLog.summary()
 
@@ -49,7 +56,11 @@ struct DailyView: View {
         chartSection
           .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
       }
-      if !summary.completed.isEmpty {
+      // Off unless the dock's list button is on. This view answers "what do I
+      // do every day"; what you happened to close in the All list is a
+      // different question, and having it always stacked underneath made the
+      // checklist look like a footnote to it.
+      if PopoverLayout.dailyShowsCompletions(for: manager) {
         Divider()
         completionsList(summary)
           .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
@@ -179,7 +190,11 @@ struct DailyView: View {
           .foregroundColor(themeColor(.textSecondary))
       }
       .buttonStyle(.plain)
-      .help(dailyLog.isAddingDaily ? "Stop adding (Esc)" : "Add a daily (Return)")
+      .help(
+        dailyLog.isAddingDaily
+          ? "Stop adding (Esc)"
+          : "Add a daily (Return). Rename with a, delete with Delete."
+      )
       .accessibilityLabel(dailyLog.isAddingDaily ? "Stop adding a daily" : "Add a daily")
     }
     .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
@@ -190,25 +205,66 @@ struct DailyView: View {
 
   @ViewBuilder
   private func dailyRow(_ daily: Daily, isDone: Bool, isSelected: Bool) -> some View {
+    let isCompleting = manager.celebration.completingDailyId == daily.id
+    let isEditing = dailyLog.editingDailyId == daily.id
+    // The tint/scale/strike half of the active preset only. A ticked daily
+    // *stays* in the list, unlike a completed task, so the collapse-and-fade
+    // half would fold the row shut and then spring it straight back.
+    let treatment = manager.celebration.rowTreatment
+    let reduceMotion = manager.celebration.prefersReducedMotion
+
     HStack(alignment: .center, spacing: PopoverLayout.rowContentSpacing) {
       // Fixed-width icon slot, so titles line up with each other and with the
       // task rows in the other views rather than shifting with the glyph.
       Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
         .font(.system(size: 14))
         .foregroundColor(isDone ? themeColor(.success) : themeColor(.textMuted))
+        // The glyph swap is the moment a tick is actually felt, so it gets a
+        // transition rather than a cut — and a pop on top of it while the
+        // celebration runs. See `CelebrationRowTreatment.iconPop` for why the
+        // emphasis lives here rather than on the row.
+        .contentTransition(.symbolEffect(.replace))
+        .scaleEffect(isCompleting ? treatment.iconPop : 1.0)
+        .animation(CelebrationMotion.icon(reduceMotion: reduceMotion), value: isCompleting)
         .frame(width: PopoverLayout.rowIconWidth)
 
-      Text(daily.title)
-        .font(Typography.taskFont(size: 13, name: manager.preferences.appFontName))
-        // Struck through *and* muted, so doneness never rests on colour alone.
-        .strikethrough(isDone, color: themeColor(.textMuted))
-        .foregroundColor(isDone ? themeColor(.textMuted) : themeColor(.textPrimary))
-        .lineLimit(1)
-        .truncationMode(.tail)
+      if isEditing {
+        editDailyField
+      } else {
+        Text(daily.title)
+          .font(Typography.taskFont(size: 13, name: manager.preferences.appFontName))
+          // Struck through *and* muted, so doneness never rests on colour alone.
+          //
+          // Suppressed while the celebration runs, so the drawn rule below can
+          // perform it as a motion. This is the fix for the Daily view's
+          // completion looking broken: `toggleDaily` records the tick and bumps
+          // the revision *before* `onDailyTicked` fires, so the row was already
+          // wearing its final strikethrough by the time the strike animation
+          // started, and the animation had nothing left to say.
+          .strikethrough(isDone && !isCompleting, color: themeColor(.textMuted))
+          .foregroundColor(isDone ? themeColor(.textMuted) : themeColor(.textPrimary))
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .overlay(alignment: .center) {
+            // The same drawn rule the task rows use, rather than the boolean
+            // `.strikethrough` — a modifier SwiftUI cannot interpolate, and so
+            // cannot animate. Presets that say removal is the effect opt out.
+            if treatment.drawsStrikethrough {
+              Rectangle()
+                .fill(themeColor(.success).opacity(0.65))
+                .frame(height: 1.5)
+                .scaleEffect(x: isCompleting ? 1.0 : 0.001, y: 1, anchor: .leading)
+                .animation(
+                  CelebrationMotion.strike(reduceMotion: reduceMotion), value: isCompleting)
+            }
+          }
+      }
 
       Spacer(minLength: 0)
 
-      if !daily.isEveryDay {
+      // Hidden while renaming: the field wants the width, and a schedule badge
+      // is not something you can act on from the keyboard mid-edit anyway.
+      if !daily.isEveryDay && !isEditing {
         Text(daily.scheduleLabel)
           .font(.system(size: 10, weight: .medium))
           .foregroundColor(themeColor(.textSecondary))
@@ -226,22 +282,82 @@ struct DailyView: View {
     // and the list stops landing on a clean grid.
     .frame(height: Layout.rowHeight)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(isSelected ? themeColor(.selectionBackground).opacity(0.7) : Color.clear)
+    .scaleEffect(isCompleting ? treatment.scale : 1.0)
+    .background {
+      // Layered, not swapped. The tint used to *replace* the selection
+      // highlight for the length of the celebration, so ticking the row you
+      // were sitting on made the cursor appear to leave and come back.
+      ZStack {
+        if isSelected { themeColor(.selectionBackground).opacity(0.7) }
+        if isCompleting && treatment.tintOpacity > 0 {
+          themeColor(.success).opacity(treatment.tintOpacity)
+        }
+      }
+    }
     .overlay(alignment: .leading) {
       Rectangle()
-        .fill(isSelected ? themeColor(.selectionForeground) : Color.clear)
+        .fill(
+          isCompleting && treatment != .none
+            ? themeColor(.success)
+            : isSelected ? themeColor(.selectionForeground) : Color.clear
+        )
         .frame(width: 3)
+    }
+    // Below the background and the leading bar, deliberately: `.animation`
+    // only covers what is already applied above it. Attached where it used to
+    // be — directly under `scaleEffect` — it left the tint and the bar outside
+    // its scope, so those snapped on and off while the row sprang, which is
+    // most of why the effect read as a twitch.
+    .animation(CelebrationMotion.row(reduceMotion: reduceMotion), value: isCompleting)
+    .overlay {
+      if isCompleting, let accent = manager.celebration.rowAccent(for: .daily(id: daily.id)) {
+        accent
+          .id(daily.id)
+          .allowsHitTesting(false)
+      }
     }
     .contentShape(Rectangle())
     // Click selects *and* ticks, because a daily has nothing else you'd click
     // it for — unlike a task row, where selection and completion are distinct.
+    // Not while renaming, though: a click into the field would tick the thing
+    // you are in the middle of naming.
     .onTapGesture {
+      guard !isEditing else { return }
       dailyLog.selectDaily(daily)
       dailyLog.toggleDaily(daily)
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(daily.title), \(isDone ? "done" : "not done")")
     .accessibilityAddTraits(.isButton)
+  }
+
+  /// Renaming a daily in place.
+  ///
+  /// A draft in the manager rather than a binding straight through to the
+  /// store. Writing every keystroke through was how the settings editor did it,
+  /// and it could not be typed in: the store trims what it is handed and
+  /// rejects an empty result, so a trailing space was swallowed the moment it
+  /// was typed and clearing the field snapped the old name back. See
+  /// `DailyTitleEdit`.
+  @ViewBuilder
+  private var editDailyField: some View {
+    @Bindable var log = manager.dailyLog
+    TextField("Daily name", text: $log.editingDailyTitle)
+      .textFieldStyle(.plain)
+      .font(Typography.taskFont(size: 13, name: manager.preferences.appFontName))
+      .foregroundColor(themeColor(.textPrimary))
+      .focused($editFieldFocused)
+      .onSubmit { log.commitDailyEdit() }
+      // The fallback, not the mechanism — the popover's key router sees Escape
+      // first. Same arrangement as the add field above.
+      .onExitCommand { log.cancelDailyEdit() }
+      .onAppear { editFieldFocused = true }
+      // Clicking away commits rather than discarding. Abandoning what someone
+      // just typed because they reached for the mouse is the wrong default;
+      // Escape is there for when discarding is what they meant.
+      .onChange(of: editFieldFocused) { _, focused in
+        if !focused { log.commitDailyEdit() }
+      }
   }
 
   @ViewBuilder

@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 extension KeyedDecodingContainer {
   fileprivate func decodeLossyString(forKey key: Key) -> String? {
@@ -208,76 +209,10 @@ struct CheckvistTask: Codable, Identifiable, Sendable, Equatable {
     )
   }
 
-  private static let dueDateFormatters: [DateFormatter] = {
-    let locale = Locale(identifier: "en_US_POSIX")
-
-    let dateOnly = DateFormatter()
-    dateOnly.locale = locale
-    dateOnly.dateFormat = "yyyy-MM-dd"
-
-    let dateOnlyNoPadding = DateFormatter()
-    dateOnlyNoPadding.locale = locale
-    dateOnlyNoPadding.dateFormat = "yyyy-M-d"
-
-    let dateTime = DateFormatter()
-    dateTime.locale = locale
-    dateTime.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
-
-    let slashDateOnly = DateFormatter()
-    slashDateOnly.locale = locale
-    slashDateOnly.dateFormat = "yyyy/MM/dd"
-
-    let slashDateTime = DateFormatter()
-    slashDateTime.locale = locale
-    slashDateTime.dateFormat = "yyyy/MM/dd HH:mm:ss Z"
-
-    return [dateOnly, dateOnlyNoPadding, dateTime, slashDateOnly, slashDateTime]
-  }()
-
-  nonisolated(unsafe) private static let iso8601Parsers: [ISO8601DateFormatter] = {
-    let internet = ISO8601DateFormatter()
-    internet.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate]
-
-    let internetFractional = ISO8601DateFormatter()
-    internetFractional.formatOptions = [
-      .withInternetDateTime, .withFractionalSeconds, .withDashSeparatorInDate,
-    ]
-
-    let fullDate = ISO8601DateFormatter()
-    fullDate.formatOptions = [.withFullDate, .withDashSeparatorInDate]
-
-    return [internet, internetFractional, fullDate]
-  }()
-
-  var dueDate: Date? {
-    guard let dueRaw = due?.trimmingCharacters(in: .whitespacesAndNewlines), !dueRaw.isEmpty else {
-      return nil
-    }
-
-    for parser in Self.iso8601Parsers {
-      if let parsed = parser.date(from: dueRaw) {
-        return parsed
-      }
-    }
-
-    for formatter in Self.dueDateFormatters {
-      if let parsed = formatter.date(from: dueRaw) {
-        return parsed
-      }
-    }
-
-    // Common fallback for strings like "yyyy-MM-ddTHH:mm:ssZ"
-    if dueRaw.count >= 10 {
-      let dayPrefix = String(dueRaw.prefix(10))
-      for formatter in Self.dueDateFormatters {
-        if let parsed = formatter.date(from: dayPrefix) {
-          return parsed
-        }
-      }
-    }
-
-    return nil
-  }
+  /// Parsing lives in `PriorityCore.DueDateParsing`, so every declaration of
+  /// this model — including the re-declared one `PriorityAppLogic` compiles —
+  /// resolves a due string the same way.
+  var dueDate: Date? { DueDateParsing.date(from: due) }
 
   var isOverdue: Bool {
     guard let resolvedDueDate = dueDate else { return false }

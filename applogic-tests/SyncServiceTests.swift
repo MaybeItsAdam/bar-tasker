@@ -105,6 +105,96 @@ final class SyncServiceTests: XCTestCase {
       "the child is never attempted without a real parent id")
   }
 
+  // MARK: - Replay durability
+  //
+  // The queue's whole purpose is to outlive the process. These pin the
+  // ordering that gives it that property: nothing leaves the on-disk payload
+  // until the server has confirmed it.
+
+  /// The regression these exist for: the replay used to wipe the persisted
+  /// payload before issuing its first request, so quitting part-way through
+  /// discarded every item that had not yet had a chance to fail.
+  func testQueuedWorkStaysOnDiskUntilTheServerConfirmsIt() async {
+    plugin.nextCreatedTaskId = 500
+    repository.enqueuePendingCreate(
+      PendingTaskCreate(tempId: -1, content: "offline task", parentId: nil, position: 1))
+    repository.enqueuePendingDelete(77)
+
+    var payloadDuringFlush: PendingOfflineWorkPayload?
+    plugin.onCreateTask = { [weak self] in
+      payloadDuringFlush = self?.repository.pendingOfflineWorkStore.load()
+    }
+
+    await service.flushPendingTaskMutations()
+
+    let midFlight = try? XCTUnwrap(payloadDuringFlush)
+    XCTAssertEqual(
+      midFlight?.creates.map(\.tempId), [-1],
+      "the create is still on disk while its own request is in flight")
+    XCTAssertEqual(
+      midFlight?.deletes, [77],
+      "work queued behind it is still on disk too")
+
+    XCTAssertTrue(
+      repository.pendingOfflineWorkStore.load().isEmpty,
+      "and the payload is empty once everything has been acknowledged")
+  }
+
+  func testAnItemThatFailsMidFlushSurvivesOnDisk() async {
+    plugin.deleteTaskError = CheckvistSessionError.requestFailed
+    repository.enqueuePendingDelete(77)
+
+    await service.flushPendingTaskMutations()
+
+    XCTAssertEqual(repository.pendingTaskDeletes, [77])
+    XCTAssertEqual(
+      repository.pendingOfflineWorkStore.load().deletes, [77],
+      "a failure leaves the item persisted, not just in memory")
+  }
+
+  /// A create can succeed and the work behind it still fail. That work was
+  /// filed under the placeholder id, which means nothing after this flush — so
+  /// it has to be re-filed under the real one before it is persisted again.
+  func testWorkBehindASucceededCreateIsRefiledUnderTheRealIdWhenItFails() async {
+    plugin.nextCreatedTaskId = 500
+    plugin.deleteTaskError = CheckvistSessionError.requestFailed
+    repository.enqueuePendingCreate(
+      PendingTaskCreate(tempId: -1, content: "offline task", parentId: nil, position: 1))
+    repository.enqueuePendingDelete(-1)
+
+    await service.flushPendingTaskMutations()
+
+    XCTAssertEqual(repository.pendingTaskDeletes, [500])
+    XCTAssertEqual(repository.pendingOfflineWorkStore.load().deletes, [500])
+    XCTAssertTrue(
+      repository.pendingTaskCreates.isEmpty,
+      "the create itself succeeded and is gone")
+  }
+
+  /// Reconnect and a manual refresh can both fire a flush. Overlapping runs
+  /// would replay the same snapshot twice — a duplicate create for every
+  /// queued one.
+  func testAnOverlappingFlushIsIgnoredRatherThanReplayingTheSameSnapshot() async {
+    plugin.nextCreatedTaskId = 500
+    repository.enqueuePendingCreate(
+      PendingTaskCreate(tempId: -1, content: "offline task", parentId: nil, position: 1))
+
+    // Fires while the first flush is suspended on the create, so the second
+    // one starts with the queue still fully populated.
+    var overlapping: Task<Void, Never>?
+    plugin.onCreateTask = { [weak self] in
+      guard let self, overlapping == nil else { return }
+      overlapping = Task { await self.service.flushPendingTaskMutations() }
+    }
+
+    await service.flushPendingTaskMutations()
+    await overlapping?.value
+
+    XCTAssertEqual(
+      plugin.createTaskCalls.count, 1,
+      "the second flush must not re-send work the first is still replaying")
+  }
+
   func testReplayIsANoOpWhenNothingIsQueued() async {
     await service.flushPendingTaskMutations()
 
@@ -149,6 +239,87 @@ final class SyncServiceTests: XCTestCase {
 
     XCTAssertNil(host.kanbanFilterParentId)
     XCTAssertEqual(host.currentParentId, 0, "scope falls back to the root")
+  }
+
+  // MARK: - Fetch races
+
+  /// Nothing serialises the fetch callers — the become-active auto-refresh, the
+  /// refresh button, and every mutation's own refetch all land on `tasks`. When
+  /// their answers arrived out of order the older list won, so the app showed
+  /// state it had already moved past.
+  func testAStaleFetchResponseIsDiscardedOnceANewerFetchHasLanded() async {
+    plugin.openTasksByListId["42"] = [makeTask(id: 1, content: "stale")]
+    plugin.beforeFetchOpenTasksReturns = { [weak self] in
+      guard let self, self.plugin.fetchOpenTasksCalls.count == 1 else { return }
+      // A second fetch is issued and completes while the first is still on the
+      // wire.
+      self.plugin.openTasksByListId["42"] = [makeTask(id: 2, content: "fresh")]
+      await self.service.fetchTopTask()
+    }
+
+    await service.fetchTopTask()
+
+    XCTAssertEqual(plugin.fetchOpenTasksCalls.count, 2)
+    XCTAssertEqual(repository.tasks.map(\.id), [2], "the newer answer stands")
+  }
+
+  /// The one that made completing a task look unreliable: open the popover (which
+  /// fires the auto-refresh), hit done before the GET comes back, and the
+  /// response — assembled before the close — put the row straight back.
+  func testAFetchInFlightWhenATaskIsCompletedCannotBringItBack() async {
+    plugin.openTasksByListId["42"] = [
+      makeTask(id: 1, content: "alpha"), makeTask(id: 2, content: "bravo"),
+    ]
+    plugin.beforeFetchOpenTasksReturns = { [weak self] in
+      guard let self else { return }
+      self.repository.suppressLocallyCompletedTasks([1])
+      self.repository.tasks.removeAll { $0.id == 1 }
+    }
+
+    await service.fetchTopTask()
+
+    XCTAssertEqual(repository.tasks.map(\.id), [2], "the completed task stays gone")
+  }
+
+  /// A close queued while offline hasn't reached the server, so every fetch
+  /// until it replays still lists the task as open. Applying that verbatim
+  /// resurrected work the user had completed — including across a relaunch,
+  /// where the queue is restored from disk but `tasks` comes from the server.
+  func testAFetchCannotResurrectATaskWhoseCloseIsStillQueuedOffline() async {
+    plugin.openTasksByListId["42"] = [
+      makeTask(id: 1, content: "alpha"), makeTask(id: 2, content: "bravo"),
+    ]
+    repository.enqueuePendingAction(PendingTaskAction(taskId: 1, action: .close))
+
+    await service.fetchTopTask()
+
+    XCTAssertEqual(repository.tasks.map(\.id), [2])
+  }
+
+  /// The ancestor reopens that defeat Checkvist's complete-the-parent cascade
+  /// are queued *behind* the child's close, so the queue has to be read in
+  /// order — otherwise the parent counts as closed and disappears.
+  func testAQueuedAncestorReopenIsNotTreatedAsACompletion() async {
+    plugin.openTasksByListId["42"] = [
+      makeTask(id: 1, content: "parent"), makeTask(id: 2, content: "child", parentId: 1),
+    ]
+    repository.enqueuePendingAction(PendingTaskAction(taskId: 2, action: .close))
+    repository.enqueuePendingAction(PendingTaskAction(taskId: 1, action: .reopen))
+
+    await service.fetchTopTask()
+
+    XCTAssertEqual(repository.tasks.map(\.id), [1], "only the child was completed")
+  }
+
+  /// Suppression is per list id. Carrying it across a switch would hide
+  /// whichever task in the new list happened to share the id.
+  func testSwitchingListsForgetsTheCompletionSuppression() async {
+    plugin.openTasksByListId["77"] = [makeTask(id: 1, content: "alpha")]
+    repository.suppressLocallyCompletedTasks([1])
+
+    await service.switchCheckvistList(to: "77")
+
+    XCTAssertEqual(repository.tasks.map(\.id), [1])
   }
 
   // MARK: - List management

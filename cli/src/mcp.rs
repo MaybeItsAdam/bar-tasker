@@ -1,12 +1,18 @@
-//! An MCP stdio server, speaking the same protocol as the other two.
+//! Priority's MCP stdio server.
 //!
-//! Priority already ships two implementations — the Swift one embedded in the
-//! app (`Priority --mcp-server`) and the Python fallback script. This is the
-//! third, and it exists because the CLI needs every tool anyway: exposing them
-//! over MCP as well is a dispatch table, not a second implementation, since
-//! both front ends go through [`crate::tools::Tools::call`].
+//! This is now the only one. There were three — a Swift server embedded in the
+//! app and a Python fallback script alongside this — and holding them equal
+//! from the outside cost more than it bought, since none could import another.
+//! The app ships this binary instead (`Priority.app/Contents/Helpers/priority`)
+//! and `Priority --mcp-server` hands the process over to it, which is why the
+//! bare flag is accepted in `main.rs` and why the environment outranks the
+//! config file in `config.rs`: configurations written for the old server keep
+//! working untouched.
 //!
-//! `scripts/mcp_parity_check.py` drives all three and diffs the results.
+//! Exposing the tools here is a dispatch table rather than an implementation —
+//! this and `cli.rs` both go through [`crate::tools::Tools::call`].
+//! `scripts/mcp_smoke_check.py` checks the handover; `cargo test` checks the
+//! behaviour.
 
 use crate::tools::Tools;
 use serde_json::{Map, Value, json};
@@ -293,10 +299,11 @@ pub fn tool_result_text(title: &str, payload: &Value) -> String {
     format!("{title}\n\n{body}")
 }
 
-/// The tool surface, matching the Swift and Python servers name for name and
-/// schema for schema. `scripts/mcp_parity_check.py` compares the name list; the
-/// descriptions are what an assistant reads to decide whether to call one, so
-/// they are kept in step by hand.
+/// The tool surface. The descriptions are what an assistant reads to decide
+/// whether to call one, so they carry as much weight as the schemas.
+///
+/// `scripts/mcp_smoke_check.py` pins the count, which is the cheap half of
+/// noticing an accidental removal; `docs/mcp-server.md` lists them.
 pub fn tool_definitions() -> Vec<Value> {
     let list_id = || json!({ "type": "string" });
     let with_task_id = json!({

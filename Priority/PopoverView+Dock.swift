@@ -1,4 +1,5 @@
 import AppKit
+import PriorityCore
 import SwiftUI
 
 /// The dock row along the bottom of the popover, and the drag strip it reveals.
@@ -43,6 +44,21 @@ struct PopoverDockRow: View {
           accessibilityLabel: "Toggle the graph"
         ) {
           chrome.showsDailyChart.toggle()
+        }
+
+        // The tasks closed today, which used to be stacked under the checklist
+        // unconditionally. Same shape as the graph button: this view is about
+        // dailies, and what you finished in the All list is available when you
+        // ask for it rather than always in the way.
+        DockButton(
+          systemName: "checklist",
+          isActive: chrome.showsDailyCompletions,
+          help: chrome.showsDailyCompletions
+            ? "Hide tasks completed today"
+            : "Show tasks completed today",
+          accessibilityLabel: "Toggle tasks completed today"
+        ) {
+          chrome.showsDailyCompletions.toggle()
         }
       }
 

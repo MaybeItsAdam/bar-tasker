@@ -14,8 +14,11 @@ import OSLog
 /// production host; the reference is `weak` because it owns this service.
 @MainActor
 final class TaskMutationService {
-  private weak var host: (any TaskMutationHost)?
-  private let repository: TaskRepository
+  // Internal rather than private only because `TaskMutationService+Board.swift`
+  // is a second file of the same type, and Swift's `private` is file-scoped.
+  // Nothing outside this service should touch either.
+  weak var host: (any TaskMutationHost)?
+  let repository: TaskRepository
 
   init(host: any TaskMutationHost, repository: TaskRepository) {
     self.host = host
@@ -30,7 +33,7 @@ final class TaskMutationService {
   /// failure (`whenOnline`) — typically roll back the optimistic change and set
   /// an error message. Each caller supplies its own offline/online specifics;
   /// this only owns the reachability branch so it isn't re-derived per site.
-  private func resolveMutationFailure(
+  func resolveMutationFailure(
     whenOffline: () -> Void,
     whenOnline: () -> Void
   ) {
@@ -43,26 +46,51 @@ final class TaskMutationService {
 
   // MARK: - Mark Done / Reopen / Invalidate
 
+  /// Tasks with a status change already running, animation included.
+  ///
+  /// Mark-done spends ~200ms on the completion feedback before the request even
+  /// goes out, and the row stays selected throughout, so a second press of a
+  /// key as quick as Space landed inside that window and closed the same task
+  /// twice: two day-log entries for one completion, and — worse — two next
+  /// occurrences for a recurring task. Key-repeat was already filtered in the
+  /// router; two deliberate presses were not.
+  private var taskIdsWithStatusChangeInFlight: Set<Int> = []
+
+  /// Runs `body` unless a status change is already in flight for `taskId`.
+  /// Shared across mark-done/reopen/invalidate so they can't overlap on one
+  /// task either.
+  private func withStatusChangeClaim(on taskId: Int, _ body: () async -> Void) async {
+    guard taskIdsWithStatusChangeInFlight.insert(taskId).inserted else { return }
+    defer { taskIdsWithStatusChangeInFlight.remove(taskId) }
+    await body()
+  }
+
   func markCurrentTaskDone() async {
     guard let host, let task = host.currentTask else { return }
 
-    // The host runs the haptic/strikethrough sequence. It returns false when
-    // the user navigated away or switched tasks mid-animation, which must
-    // cancel the close rather than fire it late.
-    guard await host.runTaskCompletionFeedback(taskId: task.id) else { return }
+    await withStatusChangeClaim(on: task.id) {
+      // The host runs the haptic/strikethrough sequence. It returns false when
+      // the user navigated away or switched tasks mid-animation, which must
+      // cancel the close rather than fire it late.
+      guard await host.runTaskCompletionFeedback(taskId: task.id) else { return }
 
-    await taskAction(task, endpoint: "close")
-    await createNextOccurrence(for: task)
+      await self.taskAction(task, endpoint: "close")
+      await self.createNextOccurrence(for: task)
+    }
   }
 
   func reopenCurrentTask() async {
     guard let host, let task = host.currentTask else { return }
-    await taskAction(task, endpoint: "reopen")
+    await withStatusChangeClaim(on: task.id) {
+      await self.taskAction(task, endpoint: "reopen")
+    }
   }
 
   func invalidateCurrentTask() async {
     guard let host, let task = host.currentTask else { return }
-    await taskAction(task, endpoint: "invalidate")
+    await withStatusChangeClaim(on: task.id) {
+      await self.taskAction(task, endpoint: "invalidate")
+    }
   }
 
   /// POST to a Checkvist task action endpoint (close, reopen, invalidate).
@@ -78,6 +106,14 @@ final class TaskMutationService {
     }
 
     guard let action = CheckvistTaskAction(rawValue: endpoint) else { return }
+
+    // Undoing a close reopens a task whose id we are still hiding from fetch
+    // responses. Lift that first, or the refetch below would filter the task
+    // the user just asked for straight back out.
+    if action == .reopen {
+      repository.unsuppressLocallyCompletedTasks([task.id])
+    }
+
     let ancestorTaskIDsToKeepOpen =
       (!isUndo && endpoint == "close") ? ancestorTaskIDs(for: task, in: repository.tasks) : []
 
@@ -211,7 +247,8 @@ final class TaskMutationService {
   func addTask(
     content: String,
     insertAfterTask: CheckvistTask? = nil,
-    insertAtTopOfCurrentLevel: Bool = false
+    insertAtTopOfCurrentLevel: Bool = false,
+    insertsAbove: Bool = false
   ) async {
     guard let host else { return }
 
@@ -230,7 +267,8 @@ final class TaskMutationService {
     let optimisticTask = insertOptimisticSiblingTask(
       content: trimmedContent,
       afterTask: insertAfterTask,
-      insertAtTopOfCurrentLevel: insertAtTopOfCurrentLevel
+      insertAtTopOfCurrentLevel: insertAtTopOfCurrentLevel,
+      insertsAbove: insertsAbove
     )
     let optimisticTaskId = optimisticTask.id
 
@@ -244,13 +282,17 @@ final class TaskMutationService {
     if insertAtTopOfCurrentLevel {
       apiPosition = 1
     } else if let current = target {
+      // Checkvist positions are 1-based, so inserting *at* the target's
+      // position pushes it down and takes its place — which is what "above"
+      // means. Below is the same number plus one.
+      let offset = insertsAbove ? 0 : 1
       if let targetPos = current.position {
-        apiPosition = targetPos + 1
+        apiPosition = targetPos + offset
       } else {
         let siblings =
           repository.tasks.filter { ($0.parentId ?? 0) == host.currentParentId }
         if let idx = siblings.firstIndex(where: { $0.id == current.id }) {
-          apiPosition = idx + 2
+          apiPosition = idx + 1 + offset
         }
       }
     } else {
@@ -299,7 +341,7 @@ final class TaskMutationService {
   /// Keeps the optimistic task in `tasks` and queues a create to fire on
   /// reconnect. Undo points at the temp id so a subsequent undo can either
   /// cancel the queued create or, after replay, delete the real task.
-  private func queueOfflineCreate(
+  func queueOfflineCreate(
     tempId: Int, content: String, parentId: Int?, position: Int?
   ) {
     repository.enqueuePendingCreate(
@@ -588,7 +630,8 @@ final class TaskMutationService {
   private func insertOptimisticSiblingTask(
     content: String,
     afterTask: CheckvistTask?,
-    insertAtTopOfCurrentLevel: Bool = false
+    insertAtTopOfCurrentLevel: Bool = false,
+    insertsAbove: Bool = false
   ) -> CheckvistTask {
     guard let host else {
       return CheckvistTask(
@@ -620,13 +663,21 @@ final class TaskMutationService {
     } else if let target = afterTask,
       let rawIndex = repository.tasks.firstIndex(where: { $0.id == target.id })
     {
-      var endIndex = rawIndex + 1
-      while endIndex < repository.tasks.count
-        && host.isDescendant(repository.tasks[endIndex], of: target.id)
-      {
-        endIndex += 1
+      if insertsAbove {
+        // The target's own slot. No subtree walk: we are landing in front of
+        // the target, and whatever hangs off it stays behind it.
+        insertIndex = rawIndex
+      } else {
+        // Past the target *and* everything nested under it, or the new sibling
+        // lands between a parent and its children.
+        var endIndex = rawIndex + 1
+        while endIndex < repository.tasks.count
+          && host.isDescendant(repository.tasks[endIndex], of: target.id)
+        {
+          endIndex += 1
+        }
+        insertIndex = endIndex
       }
-      insertIndex = endIndex
     }
 
     if insertIndex <= repository.tasks.endIndex {
@@ -669,13 +720,13 @@ final class TaskMutationService {
   /// `fetchTopTask` replaces the array wholesale and `applyOptimisticCompletion`
   /// removes a whole subtree, so by the time a rollback runs the old index can
   /// point at a different task or past the end of the array.
-  private func restoreTask(_ originalTask: CheckvistTask) {
+  func restoreTask(_ originalTask: CheckvistTask) {
     guard let index = repository.tasks.firstIndex(where: { $0.id == originalTask.id })
     else { return }
     repository.tasks[index] = originalTask
   }
 
-  private func removeOptimisticTask(id: Int) {
+  func removeOptimisticTask(id: Int) {
     guard let index = repository.tasks.firstIndex(where: { $0.id == id })
     else { return }
     repository.tasks.remove(at: index)
@@ -683,40 +734,78 @@ final class TaskMutationService {
   }
 
   fileprivate struct OptimisticCompletionSnapshot {
-    let tasks: [CheckvistTask]
+    /// The subtree that was lifted out of `tasks`, in order.
+    let removedTasks: [CheckvistTask]
+    /// Id of the row that sat immediately above the removed block, or `nil` if
+    /// the block was at the top. Re-found by id on restore, so the subtree goes
+    /// back where it belongs even if the list moved underneath.
+    let precedingTaskId: Int?
     let priorityTaskIdsByParentId: [Int: [Int]]
     let absolutePriorityTaskIds: [Int]
     let timerByTaskId: [Int: TimeInterval]
     let pendingObsidianSyncTaskIds: [Int]
+
+    var removedTaskIds: Set<Int> { Set(removedTasks.map(\.id)) }
   }
 
   private func applyOptimisticCompletion(for taskId: Int) -> OptimisticCompletionSnapshot? {
     guard let host else { return nil }
     guard let removingRange = host.subtreeBlockRange(for: taskId, in: repository.tasks)
     else { return nil }
-    let removedTaskIds = Set(repository.tasks[removingRange].map(\.id))
+    let removedTasks = Array(repository.tasks[removingRange])
     let snapshot = OptimisticCompletionSnapshot(
-      tasks: repository.tasks,
+      removedTasks: removedTasks,
+      precedingTaskId: removingRange.lowerBound > 0
+        ? repository.tasks[removingRange.lowerBound - 1].id : nil,
       priorityTaskIdsByParentId: repository.priorityTaskIdsByParentId,
       absolutePriorityTaskIds: repository.absolutePriorityTaskIds,
       timerByTaskId: host.timerElapsedByTaskId,
       pendingObsidianSyncTaskIds: host.pendingObsidianSyncTaskIds
     )
     repository.tasks.removeSubrange(removingRange)
-    repository.removeTasksFromPriorityQueue(removedTaskIds)
+    repository.removeTasksFromPriorityQueue(snapshot.removedTaskIds)
+    // A fetch issued before this point answers with the task still open, so
+    // hide it from any such response until a newer fetch confirms the close.
+    repository.suppressLocallyCompletedTasks(snapshot.removedTaskIds)
     host.clampSelectionToVisibleRange()
     return snapshot
   }
 
   private func restoreTasksSnapshot(_ snapshot: OptimisticCompletionSnapshot) {
     guard let host else { return }
-    repository.tasks = snapshot.tasks
+    reinsertRemovedTasks(snapshot)
+    // The task is open after all, so stop filtering it out of fetch responses.
+    repository.unsuppressLocallyCompletedTasks(snapshot.removedTaskIds)
     repository.savePriorityQueue(snapshot.priorityTaskIdsByParentId)
     repository.saveAbsolutePriorityQueue(snapshot.absolutePriorityTaskIds)
     host.timerElapsedByTaskId = snapshot.timerByTaskId
     host.savePendingObsidianSyncQueue(
       snapshot.pendingObsidianSyncTaskIds, listId: repository.listId)
     host.clampSelectionToVisibleRange()
+  }
+
+  /// Puts an optimistically-removed subtree back in place.
+  ///
+  /// Deliberately *not* a wholesale `tasks = snapshot` assignment: the request
+  /// that failed was in flight across a suspension, and anything that landed
+  /// meanwhile — a refetch, a sibling's completion — would be reverted with it.
+  /// Same reasoning as `restoreTask`, one level up. Rows that came back on
+  /// their own are left alone rather than duplicated.
+  private func reinsertRemovedTasks(_ snapshot: OptimisticCompletionSnapshot) {
+    let presentTaskIds = Set(repository.tasks.map(\.id))
+    let block = snapshot.removedTasks.filter { !presentTaskIds.contains($0.id) }
+    guard !block.isEmpty else { return }
+
+    let insertIndex: Int
+    switch snapshot.precedingTaskId {
+    case nil:
+      insertIndex = 0
+    case let precedingTaskId?:
+      insertIndex =
+        repository.tasks.firstIndex(where: { $0.id == precedingTaskId }).map { $0 + 1 }
+        ?? repository.tasks.endIndex
+    }
+    repository.tasks.insert(contentsOf: block, at: insertIndex)
   }
 
   private func nextOptimisticTaskId() -> Int {

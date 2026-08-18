@@ -49,6 +49,29 @@ jobs:
             echo "::warning::No xctest bundle found — code coverage report skipped."
           fi
 
+  # `.swiftlint.yml` has existed since the start but nothing ever ran it, so
+  # the limits it sets — notably the 1,500-line file-length *error* that
+  # `ARCHITECTURE_IMPROVEMENT_PLAN.md` calls "the constraint" — were never
+  # enforced, and `PopoverView.swift` grew back past 1,400 lines with no signal.
+  #
+  # Deliberately not `--strict`: the config's warning thresholds flag a handful
+  # of genuinely large functions that are tracked in the plan rather than fixed
+  # in passing. Failing on warnings would mean either churn or a suppression
+  # spree. SwiftLint exits non-zero on *errors* only, which is exactly the line
+  # the config draws.
+  lint:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Lint
+        run: swiftlint lint --reporter github-actions-logging
+
   macos-build:
     runs-on: macos-15
     steps:
@@ -62,6 +85,17 @@ jobs:
 
       - name: Show Xcode version
         run: xcodebuild -version
+
+      # The app build now cargo-builds the `priority` CLI and bundles it as the
+      # MCP server (scripts/bundle_cli.sh), so an xcodebuild here needs Rust.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cli/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('cli/Cargo.lock') }}
 
       # Both configurations now sign with a real "Apple Development" identity so
       # local rebuilds keep a stable designated requirement (and stop
@@ -141,8 +175,9 @@ jobs:
           echo "Release entitlements OK"
 
   # The CLI is a separate cargo crate sharing no code with the Swift targets, so
-  # it gets its own job. `mcp-parity` below is what actually holds it to the
-  # same behaviour as the other two MCP servers.
+  # it gets its own job. It is also now the *only* MCP server — the app bundles
+  # it and `--mcp-server` hands over to it — so these tests are what hold the
+  # server itself correct. `mcp-smoke` below checks the handover.
   cli:
     runs-on: macos-15
     timeout-minutes: 15
@@ -168,12 +203,13 @@ jobs:
       - name: Test
         run: cargo test --manifest-path cli/Cargo.toml
 
-  # Priority ships three implementations of the same MCP server and a client
-  # may be pointed at any of them, so a tool that answers differently in one is
-  # a capability the assistant appears to lose depending on how it was wired up.
-  # Needs a Debug build and the CLI binary; reads no real data and needs no
-  # credentials.
-  mcp-parity:
+  # The app no longer implements MCP itself: it bundles the `priority` CLI at
+  # Contents/Helpers/priority and `--mcp-server` execs it. This checks the seam,
+  # and specifically that a client configuration written *before* that change —
+  # naming `Priority --mcp-server`, with credentials in `env` — still reaches a
+  # working server. Nothing else covers that promise. Reads no real data and
+  # needs no credentials.
+  mcp-smoke:
     runs-on: macos-15
     timeout-minutes: 25
     steps:
@@ -194,6 +230,8 @@ jobs:
             cli/target
           key: cargo-${{ runner.os }}-${{ hashFiles('cli/Cargo.lock') }}
 
+      # The build phase runs scripts/bundle_cli.sh, which cargo-builds the CLI
+      # and installs it into the bundle, so this covers the bundling too.
       - name: Build app (Debug)
         run: |
           xcodebuild -project 'Priority.xcodeproj' \
@@ -203,8 +241,5 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Build the CLI
-        run: cargo build --release --manifest-path cli/Cargo.toml
-
-      - name: Compare all three MCP servers
-        run: python3 scripts/mcp_parity_check.py
+      - name: Check the --mcp-server handover
+        run: python3 scripts/mcp_smoke_check.py

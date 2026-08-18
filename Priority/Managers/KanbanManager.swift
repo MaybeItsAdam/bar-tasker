@@ -1,6 +1,7 @@
 import Foundation
-import Observation
 import OSLog
+import Observation
+import PriorityCore
 
 /// Provides read-only access to task data that KanbanManager needs for filtering and sorting.
 /// The coordinator conforms to this; KanbanManager never references the coordinator directly.
@@ -213,16 +214,18 @@ enum KanbanMoveOutcome {
   private func subtreeTasks(in tasks: [CheckvistTask], rootId: Int, taskById: [Int: CheckvistTask])
     -> [CheckvistTask]
   {
-    tasks.filter { task in
-      task.id != rootId && TaskFilterEngine.isDescendant(task, of: rootId, taskById: taskById)
-    }
+    KanbanFilter.subtreeTasks(in: tasks, rootId: rootId, taskById: taskById)
   }
 
   /// Returns the first column (in order) that a task matches.
+  /// Only a *specific* condition (tag or due bucket) claims a task; `.catchAll`
+  /// answers false, so it collects what no earlier column took.
   func columnForTask(_ task: CheckvistTask, in columns: [KanbanColumn]) -> KanbanColumn? {
-    // Only return a column if the task matches a SPECIFIC requirement (Tag or Due Bucket).
-    // The .catchAll condition is effectively disabled by taskMatchesCondition returning false.
-    columns.first { taskMatchesKanbanColumn(task, column: $0) }
+    guard let ds = dataSource else { return nil }
+    return KanbanFilter.column(
+      for: task, in: columns,
+      tagsByTaskId: ds.cache.tagsByTaskId,
+      dueBucket: { ds.rootDueBucket(for: $0) })
   }
 
   private func taskMatchesKanbanColumn(
@@ -230,36 +233,19 @@ enum KanbanMoveOutcome {
     column: KanbanColumn,
     includeCatchAll: Bool = true
   ) -> Bool {
-    for condition in column.conditions {
-      if !includeCatchAll, condition == .catchAll { continue }
-      if taskMatchesCondition(task, condition: condition) {
-        return true
-      }
-    }
-    return false
+    guard let ds = dataSource else { return false }
+    return KanbanFilter.matchesColumn(
+      task, column: column, includeCatchAll: includeCatchAll,
+      tagsByTaskId: ds.cache.tagsByTaskId,
+      dueBucket: { ds.rootDueBucket(for: $0) })
   }
 
   func taskMatchesCondition(_ task: CheckvistTask, condition: KanbanColumnCondition) -> Bool {
     guard let ds = dataSource else { return false }
-    switch condition {
-    case .tag(let name):
-      return hasTag(task, tag: name)
-    case .dueBucket(let raw):
-      guard let bucket = RootDueBucket(rawValue: raw) else { return false }
-      return ds.rootDueBucket(for: task) == bucket
-    case .catchAll:
-      return false
-    }
-  }
-
-  private func hasTag(_ task: CheckvistTask, tag: String) -> Bool {
-    guard let ds = dataSource else { return false }
-    guard let tags = ds.cache.tagsByTaskId[task.id] else { return false }
-    let normalized =
-      tag.hasPrefix("#") || tag.hasPrefix("@")
-      ? tag.lowercased()
-      : "#\(tag.lowercased())"
-    return tags.contains(normalized)
+    return KanbanFilter.matches(
+      task, condition: condition,
+      tagsByTaskId: ds.cache.tagsByTaskId,
+      dueBucket: { ds.rootDueBucket(for: $0) })
   }
 
   // Note: sortedForKanban implementation moved to extension at the bottom of this file.
@@ -268,24 +254,40 @@ enum KanbanMoveOutcome {
 
   /// The currently selected task in the focused kanban column.
   var currentKanbanTask: CheckvistTask? {
-    guard let ds = dataSource else { return nil }
+    let board = boardTasks()
+    let placement = KanbanSelection.clamp(currentPlacement, in: board.grid)
+    guard let selectedId = placement.selectedTaskId,
+      let found = KanbanSelection.locate(selectedId, in: board.grid)
+    else { return nil }
+    return board.tasks[found.column][found.row]
+  }
+
+  // MARK: - Selection plumbing
+
+  /// The board as `KanbanSelection` wants it: one row of task ids per column,
+  /// in display order, alongside the tasks themselves.
+  ///
+  /// Built once per operation. The selection code used to re-filter and re-sort
+  /// every column inside every lookup — `nextKanbanTask` alone called
+  /// `tasksForKanbanColumn` once per column to resolve focus and then again to
+  /// read the column it settled on.
+  private func boardTasks() -> (tasks: [[CheckvistTask]], grid: [[Int]]) {
     let columns = kanbanColumns
-    // Try to find the selected task in any visible kanban column.
-    if let selectedId = kanbanSelectedTaskId {
-      for col in columns {
-        let colTasks = tasksForKanbanColumn(col, allColumns: columns)
-        if let task = colTasks.first(where: { $0.id == selectedId }) {
-          return task
-        }
-      }
-    }
-    // Fallback: pick from the focused column by index.
-    guard columns.indices.contains(kanbanFocusedColumnIndex) else { return nil }
-    let col = columns[kanbanFocusedColumnIndex]
-    let colTasks = tasksForKanbanColumn(col, allColumns: columns)
-    guard !colTasks.isEmpty else { return nil }
-    let idx = min(max(ds.currentSiblingIndex, 0), colTasks.count - 1)
-    return colTasks[idx]
+    let tasks = columns.map { tasksForKanbanColumn($0, allColumns: columns) }
+    return (tasks, tasks.map { $0.map(\.id) })
+  }
+
+  private var currentPlacement: KanbanSelection.Placement {
+    KanbanSelection.Placement(
+      focusedColumnIndex: kanbanFocusedColumnIndex,
+      selectedTaskId: kanbanSelectedTaskId,
+      siblingIndex: dataSource?.currentSiblingIndex ?? 0)
+  }
+
+  private func apply(_ placement: KanbanSelection.Placement) {
+    kanbanFocusedColumnIndex = placement.focusedColumnIndex
+    kanbanSelectedTaskId = placement.selectedTaskId
+    dataSource?.currentSiblingIndex = placement.siblingIndex
   }
 
   // MARK: - Moving tasks between columns
@@ -453,69 +455,23 @@ enum KanbanMoveOutcome {
 
   @MainActor func focusKanbanColumn(direction: Int) {
     guard let ds = dataSource, ds.rootTaskView == .kanban else { return }
-    let columns = kanbanColumns
-    // Display is reversed, so visual right = lower array index.
-    let next = kanbanFocusedColumnIndex - direction
-    guard columns.indices.contains(next) else { return }
-    kanbanFocusedColumnIndex = next
-    ds.currentSiblingIndex = 0
-    let colTasks = tasksForKanbanColumn(columns[next], allColumns: columns)
-    kanbanSelectedTaskId = colTasks.first?.id
+    guard
+      let placement = KanbanSelection.focusColumn(
+        from: kanbanFocusedColumnIndex, direction: direction, in: boardTasks().grid)
+    else { return }
+    apply(placement)
   }
 
   @MainActor func nextKanbanTask() {
-    guard let ds = dataSource else { return }
-    let columns = kanbanColumns
-    let effectiveFocusedIndex = resolvedFocusedColumnIndex(for: columns)
-    guard columns.indices.contains(effectiveFocusedIndex) else { return }
-    let colTasks = tasksForKanbanColumn(columns[effectiveFocusedIndex], allColumns: columns)
-    guard !colTasks.isEmpty else { return }
-    let currentIdx: Int
-    if let selectedId = kanbanSelectedTaskId,
-      let idx = colTasks.firstIndex(where: { $0.id == selectedId })
-    {
-      currentIdx = idx
-    } else {
-      currentIdx = -1
-    }
-    let newIdx = min(currentIdx + 1, colTasks.count - 1)
-    kanbanFocusedColumnIndex = effectiveFocusedIndex
-    ds.currentSiblingIndex = newIdx
-    kanbanSelectedTaskId = colTasks[newIdx].id
+    guard let placement = KanbanSelection.next(from: currentPlacement, in: boardTasks().grid)
+    else { return }
+    apply(placement)
   }
 
   @MainActor func previousKanbanTask() {
-    guard let ds = dataSource else { return }
-    let columns = kanbanColumns
-    let effectiveFocusedIndex = resolvedFocusedColumnIndex(for: columns)
-    guard columns.indices.contains(effectiveFocusedIndex) else { return }
-    let colTasks = tasksForKanbanColumn(columns[effectiveFocusedIndex], allColumns: columns)
-    guard !colTasks.isEmpty else { return }
-    let currentIdx: Int
-    if let selectedId = kanbanSelectedTaskId,
-      let idx = colTasks.firstIndex(where: { $0.id == selectedId })
-    {
-      currentIdx = idx
-    } else {
-      currentIdx = colTasks.count
-    }
-    let newIdx = max(currentIdx - 1, 0)
-    kanbanFocusedColumnIndex = effectiveFocusedIndex
-    ds.currentSiblingIndex = newIdx
-    kanbanSelectedTaskId = colTasks[newIdx].id
-  }
-
-  /// Returns the column index that actually contains `kanbanSelectedTaskId`, falling back to
-  /// `kanbanFocusedColumnIndex` if the selected task is not found elsewhere.
-  private func resolvedFocusedColumnIndex(for columns: [KanbanColumn]) -> Int {
-    guard let selectedId = kanbanSelectedTaskId else { return kanbanFocusedColumnIndex }
-    for (idx, col) in columns.enumerated() {
-      let colTasks = tasksForKanbanColumn(col, allColumns: columns)
-      if colTasks.contains(where: { $0.id == selectedId }) {
-        return idx
-      }
-    }
-    return kanbanFocusedColumnIndex
+    guard let placement = KanbanSelection.previous(from: currentPlacement, in: boardTasks().grid)
+    else { return }
+    apply(placement)
   }
 
   // MARK: - Scope drill in/out
@@ -524,22 +480,12 @@ enum KanbanMoveOutcome {
   /// the new sibling-pool. Selection moves to the first child if any.
   @MainActor func enterSelectedTaskAsScope() {
     guard let task = currentKanbanTask else { return }
-    let columns = kanbanColumns
     kanbanFilterParentId = task.id
     dataSource?.currentParentId = task.id
-    // Pick the first task in the first non-empty column for the new scope.
-    for (idx, col) in columns.enumerated() {
-      let colTasks = tasksForKanbanColumn(col, allColumns: columns)
-      if let first = colTasks.first {
-        kanbanFocusedColumnIndex = idx
-        kanbanSelectedTaskId = first.id
-        dataSource?.currentSiblingIndex = 0
-        return
-      }
-    }
-    // No children — clear selection but keep the drilled scope so user sees an empty board.
-    kanbanSelectedTaskId = nil
-    dataSource?.currentSiblingIndex = 0
+    // The board is re-read *after* the scope changes, so this is the new
+    // subtree. No children leaves the scope drilled with nothing selected, so
+    // the user sees an empty board rather than being silently bounced back.
+    apply(KanbanSelection.firstAvailable(in: boardTasks().grid))
   }
 
   /// Pops the kanban scope up one level. If we're at root, restores selection to
@@ -556,29 +502,14 @@ enum KanbanMoveOutcome {
     kanbanFilterParentId = newParentId == 0 ? nil : newParentId
     ds.currentParentId = newParentId
 
-    let columns = kanbanColumns
-    // Re-select the task we just popped out of so the user has context.
-    if let parentTask {
-      for (idx, col) in columns.enumerated() {
-        let colTasks = tasksForKanbanColumn(col, allColumns: columns)
-        if colTasks.contains(where: { $0.id == parentTask.id }) {
-          kanbanFocusedColumnIndex = idx
-          kanbanSelectedTaskId = parentTask.id
-          ds.currentSiblingIndex = colTasks.firstIndex(where: { $0.id == parentTask.id }) ?? 0
-          return
-        }
-      }
-    }
-    // Fallback: pick first task in first non-empty column.
-    for (idx, col) in columns.enumerated() {
-      let colTasks = tasksForKanbanColumn(col, allColumns: columns)
-      if let first = colTasks.first {
-        kanbanFocusedColumnIndex = idx
-        kanbanSelectedTaskId = first.id
-        ds.currentSiblingIndex = 0
-        return
-      }
-    }
+    // Re-select the task we just popped out of so the user has context,
+    // falling back to the first card on the board.
+    let placement = KanbanSelection.select(
+      parentTask?.id, in: boardTasks().grid, fallbackColumnIndex: kanbanFocusedColumnIndex)
+    // An empty board leaves the selection alone rather than clearing it, as it
+    // always has — `clampKanbanSelection` is what tidies a stale one.
+    guard placement.selectedTaskId != nil else { return }
+    apply(placement)
   }
 
   // MARK: - Scope navigation helpers
@@ -587,12 +518,7 @@ enum KanbanMoveOutcome {
   /// no tasks at all). Used by the keyboard router to decide whether UP arrow should enter
   /// the scope row instead of navigating within the column.
   var isAtTopOfFocusedColumn: Bool {
-    let columns = kanbanColumns
-    let effectiveIdx = resolvedFocusedColumnIndex(for: columns)
-    guard columns.indices.contains(effectiveIdx) else { return true }
-    let colTasks = tasksForKanbanColumn(columns[effectiveIdx], allColumns: columns)
-    guard let first = colTasks.first else { return true }
-    return kanbanSelectedTaskId == nil || kanbanSelectedTaskId == first.id
+    KanbanSelection.isAtTopOfFocusedColumn(currentPlacement, in: boardTasks().grid)
   }
 
   // MARK: - Selection clamping
@@ -601,31 +527,13 @@ enum KanbanMoveOutcome {
   /// If the selected task no longer exists in any column, pick the nearest task in the
   /// focused column so the selection doesn't jump to an unrelated task.
   @MainActor func clampKanbanSelection() {
-    guard let ds = dataSource else { return }
-    let columns = kanbanColumns
-    // Check whether the current selection is still valid.
-    if let selectedId = kanbanSelectedTaskId {
-      let stillExists = columns.contains { col in
-        tasksForKanbanColumn(col, allColumns: columns).contains { $0.id == selectedId }
-      }
-      if stillExists { return }
-    }
-    // Selection is stale — pick the nearest task in the focused column.
-    guard columns.indices.contains(kanbanFocusedColumnIndex) else {
-      kanbanSelectedTaskId = nil
-      ds.currentSiblingIndex = 0
-      return
-    }
-    let colTasks = tasksForKanbanColumn(
-      columns[kanbanFocusedColumnIndex], allColumns: columns)
-    if colTasks.isEmpty {
-      kanbanSelectedTaskId = nil
-      ds.currentSiblingIndex = 0
-    } else {
-      let idx = min(max(ds.currentSiblingIndex, 0), colTasks.count - 1)
-      kanbanSelectedTaskId = colTasks[idx].id
-      ds.currentSiblingIndex = idx
-    }
+    guard dataSource != nil else { return }
+    let placement = currentPlacement
+    let clamped = KanbanSelection.clamp(placement, in: boardTasks().grid)
+    // A still-valid selection comes back untouched; writing it anyway would
+    // fire the observation bus on every mutation for no change.
+    guard clamped != placement else { return }
+    apply(clamped)
   }
 
   // MARK: - Kanban column persistence
@@ -694,101 +602,24 @@ enum KanbanMoveOutcome {
 // MARK: - Kanban Sorting Extension
 
 extension KanbanManager {
-  private func comparePositionThenContent(_ lhs: CheckvistTask, _ rhs: CheckvistTask) -> Bool {
-    switch (lhs.position, rhs.position) {
-    case (.some(let l), .some(let r)) where l != r: return l < r
-    case (.some, .none): return true
-    case (.none, .some): return false
-    default:
-      return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
-    }
-  }
-
-  private func sortByDue(
-    _ tasks: [CheckvistTask],
-    ascending: Bool
-  ) -> [CheckvistTask] {
-    tasks.sorted { lhs, rhs in
-      switch (lhs.dueDate, rhs.dueDate) {
-      case (.some(let l), .some(let r)) where l != r: return ascending ? l < r : l > r
-      case (.some, .none): return true
-      case (.none, .some): return false
-      default: break
-      }
-      return comparePositionThenContent(lhs, rhs)
-    }
-  }
-
-  private func sortByPriority(
-    _ tasks: [CheckvistTask],
-    ds: any KanbanTaskDataSource
-  ) -> [CheckvistTask] {
-    tasks.sorted { lhs, rhs in
-      let la = ds.absolutePriorityRank(for: lhs)
-      let ra = ds.absolutePriorityRank(for: rhs)
-      if let la, let ra, la != ra { return la < ra }
-      if la != nil && ra == nil { return true }
-      if la == nil && ra != nil { return false }
-      let lp = ds.priorityRank(for: lhs)
-      let rp = ds.priorityRank(for: rhs)
-      if let lp, let rp, lp != rp { return lp < rp }
-      if lp != nil && rp == nil { return true }
-      if lp == nil && rp != nil { return false }
-      return comparePositionThenContent(lhs, rhs)
-    }
-  }
-
-  private func sortByPriorityThenDue(
-    _ tasks: [CheckvistTask],
-    ds: any KanbanTaskDataSource
-  ) -> [CheckvistTask] {
-    tasks.sorted { lhs, rhs in
-      let la = ds.absolutePriorityRank(for: lhs)
-      let ra = ds.absolutePriorityRank(for: rhs)
-      if let la, let ra, la != ra { return la < ra }
-      if la != nil && ra == nil { return true }
-      if la == nil && ra != nil { return false }
-      let lp = ds.priorityRank(for: lhs)
-      let rp = ds.priorityRank(for: rhs)
-      if let lp, let rp, lp != rp { return lp < rp }
-      if lp != nil && rp == nil { return true }
-      if lp == nil && rp != nil { return false }
-      switch (lhs.dueDate, rhs.dueDate) {
-      case (.some(let l), .some(let r)) where l != r: return l < r
-      case (.some, .none): return true
-      case (.none, .some): return false
-      default: break
-      }
-      let lt = ds.cache.tagsByTaskId[lhs.id] != nil
-      let rt = ds.cache.tagsByTaskId[rhs.id] != nil
-      if lt != rt { return lt }
-      return comparePositionThenContent(lhs, rhs)
-    }
-  }
-
+  /// The board's orderings live in `KanbanFilter` (pure, in `PriorityCore`, and
+  /// covered by `corelogic-tests/KanbanFilterTests.swift`). This gathers the
+  /// ranks and tags they need from the data source once, rather than letting a
+  /// comparator reach through it O(n log n) times.
   func sortedForKanban(
     _ tasks: [CheckvistTask],
     sortOrder: KanbanSortOrder
   ) -> [CheckvistTask] {
     guard let ds = dataSource else { return tasks }
-    switch sortOrder {
-    case .position:
-      return tasks.sorted(by: comparePositionThenContent)
-    case .dueAscending:
-      return sortByDue(tasks, ascending: true)
-    case .dueDescending:
-      return sortByDue(tasks, ascending: false)
-    case .priorityAscending:
-      return sortByPriority(tasks, ds: ds)
-    case .priorityThenDueAscending:
-      return sortByPriorityThenDue(tasks, ds: ds)
-    case .alphabetical:
-      return tasks.sorted { lhs, rhs in
-        let cmp = lhs.content.localizedCaseInsensitiveCompare(rhs.content)
-        if cmp != .orderedSame { return cmp == .orderedAscending }
-        return comparePositionThenContent(lhs, rhs)
-      }
-    }
+    let cache = ds.cache
+    return KanbanFilter.sorted(
+      tasks,
+      sortOrder: sortOrder,
+      inputs: .init(
+        absolutePriorityRank: cache.absolutePriorityRank,
+        priorityRank: cache.priorityRank,
+        tagsByTaskId: cache.tagsByTaskId
+      )
+    )
   }
 }
-

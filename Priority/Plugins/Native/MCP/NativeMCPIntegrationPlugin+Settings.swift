@@ -1,3 +1,4 @@
+import PriorityCore
 import SwiftUI
 
 @MainActor
@@ -106,6 +107,15 @@ private struct MCPIntegrationPluginSettingsView: View {
         .font(.caption)
         .foregroundColor(.secondary)
       } else {
+        // Re-running this on a client that is already set up rewrites its
+        // entry, which is how a configuration written before the MCP server
+        // moved into `Contents/Helpers/priority` gets updated. Those keep
+        // working either way — `Priority --mcp-server` hands over to the same
+        // binary — so this is an offer rather than a repair.
+        Text("Already set up? Adding again updates the entry to the current command.")
+          .font(.caption2)
+          .foregroundColor(.secondary)
+
         ForEach(integrations.detectedMCPClients) { client in
           HStack(alignment: .firstTextBaseline, spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {

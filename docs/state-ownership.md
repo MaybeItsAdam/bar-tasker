@@ -57,6 +57,7 @@ Raw state (each cache-relevant `var` fires the bus from `didSet`):
 | `username` / `remoteKey` / `listId` | — | persist to prefs + fire `onUsernameChanged`/`onRemoteKeyChanged`/`onListIdChanged`; `listId` also reloads priority/eisenhower queues |
 | `isLoading` / `errorMessage` | — | UI status, not cache-relevant |
 | `pendingTaskMutations/Creates/Actions/Deletes` | — | `@ObservationIgnored` offline replay queues; write-through to `PendingOfflineWorkStore` via the `enqueuePending*` helpers |
+| `fetchGeneration` / `completionSuppressionByTaskId` | — | `@ObservationIgnored`; the in-flight fetch coordination described below |
 
 Derived (don't re-derive these elsewhere — Finding 3/4 in the plan):
 `hasCredentials`, `canAttemptLogin`, `hasListSelection`, **`canSyncRemotely`** (the single
@@ -70,6 +71,20 @@ here rather than on `NavigationState` because it is list-scoped and persisted
 (`ListScopedTaskIDStore`, key `expandedTaskIdsByListId`), so switching lists has to swap it
 the way it swaps the priority queues. `reconcilePriorityQueueWithOpenTasks()` prunes ids whose
 tasks are gone.
+
+**In-flight fetch coordination.** Fetches are issued from several places at once — the
+become-active auto-refresh, the refresh button, every mutation's own refetch, the reorder
+resync, the offline flush — and nothing serialises them, so the repository arbitrates between
+their answers. `beginFetchGeneration()` stamps each fetch; `isLatestFetchGeneration(_:)` lets
+`SyncService` drop a response that a newer fetch has already superseded, so answers can't land
+out of order. `suppressLocallyCompletedTasks(_:)` / `unsuppressLocallyCompletedTasks(_:)` /
+`filteringLocallyCompletedTasks(from:generation:)` cover the other half: a fetch already on the
+wire when the user completes a task answers with the task still open, and applying that
+verbatim put the completed row back on screen. Optimistic completions register here (see
+`TaskMutationService.applyOptimisticCompletion`) and are lifted when the completion is undone —
+a rolled-back close, or a reopen. The offline `pendingTaskActions`/`pendingTaskDeletes` queues
+feed the same filter without a generation, because a close that hasn't gone out stays true for
+as long as it is queued — including across a relaunch.
 
 ### `NavigationState` — where the user is in the tree
 | State | Fires bus |
@@ -153,11 +168,17 @@ directly, because the VM *is* the thing the bus ultimately notifies.
 ## How a mutation flows (worked example: mark current task done)
 
 1. View / keybind → `AppCoordinator.markCurrentTaskDone()` (forwarder) → `TaskMutationService`.
+   The service claims the task id for the duration, animation included, so a second press
+   inside the ~200ms completion feedback can't close the same task twice.
 2. Service mutates `repository.tasks` optimistically → `didSet` fires the bus → cache rebuilds → UI updates immediately.
+   It also registers the removed ids with the repository's completion suppression, so a fetch
+   that was already in flight can't answer the task back into existence.
 3. Service calls `repository.activeSyncPlugin.performTaskAction(...)` async.
    - Online success: done.
-   - Offline / failure: roll back the local mutation **or** stash it in `repository.pendingTask*`
-     (write-through to disk). On reconnect, `SyncService.flushPendingTaskMutations()` replays.
+   - Offline / failure: roll back the local mutation (re-inserting just the removed subtree, not
+     the whole pre-removal array, so anything that landed meanwhile survives) and lift the
+     suppression, **or** stash the work in `repository.pendingTask*` (write-through to disk). On
+     reconnect, `SyncService.flushPendingTaskMutations()` replays.
 
 This optimistic-then-sync-then-rollback-or-enqueue shape recurs across mutations; see
 `AppCoordinator.applyOptimisticMoveAndSync` and the `TaskMutationService` mutation methods.

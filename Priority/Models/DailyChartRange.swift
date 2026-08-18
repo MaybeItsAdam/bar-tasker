@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 /// Time span shown by the Daily view's completion chart.
 ///

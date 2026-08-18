@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PriorityCore
 
 /// State for the popover's own chrome — the bits of the window that aren't any
 /// one view's content.
@@ -41,11 +42,27 @@ import Observation
     didSet { preferencesStore.set(showsDailyChart, for: .dailyChartVisible) }
   }
 
+  /// Whether the Daily view lists the tasks closed today underneath its
+  /// checklist. Off by default: the Daily view answers "what do I do every
+  /// day", and what you happened to finish in the All list is a different
+  /// question that was crowding the answer.
+  var showsDailyCompletions: Bool {
+    didSet { preferencesStore.set(showsDailyCompletions, for: .dailyCompletionsVisible) }
+  }
+
+  /// Whether the keyboard reference sheet is up. Deliberately *not* persisted:
+  /// it is something you consult, not a mode you work in, and a popover that
+  /// reopened showing its own help would be one you had to dismiss every
+  /// morning.
+  var showsShortcutReference: Bool = false
+
   init(preferencesStore: PreferencesStore) {
     self.preferencesStore = preferencesStore
     self.isResizeHandleVisible = preferencesStore.bool(
       .popoverResizeHandleVisible, default: false)
     self.showsDailyChart = preferencesStore.bool(.dailyChartVisible, default: true)
+    self.showsDailyCompletions = preferencesStore.bool(
+      .dailyCompletionsVisible, default: false)
 
     let stored = preferencesStore.doubleDictionary(.panelHeightOverridesByRootView)
     var overrides: [RootTaskView: CGFloat] = [:]

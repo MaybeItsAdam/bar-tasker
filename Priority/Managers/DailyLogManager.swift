@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import Observation
+import PriorityCore
 
 /// Read-only access to the task data the daily log needs.
 ///
@@ -50,6 +51,15 @@ protocol DailyLogDataSource: AnyObject {
   /// Called with an error message (or nil to clear) when a note write fails.
   @ObservationIgnored var onError: ((String?) -> Void)?
 
+  /// Fired when a daily is ticked *on*, so the coordinator can celebrate it the
+  /// way it celebrates a task close. Un-ticking deliberately doesn't fire:
+  /// correcting a mis-click isn't an achievement.
+  ///
+  /// A callback rather than a direct call into the celebration manager, for the
+  /// same reason `onError` is one — this manager shouldn't grow a dependency on
+  /// the UI layer to report something that happened in the log.
+  @ObservationIgnored var onDailyTicked: ((Daily) -> Void)?
+
   var dailyLogEnabled: Bool {
     didSet { preferencesStore.set(dailyLogEnabled, for: .dailyLogIntegrationEnabled) }
   }
@@ -59,7 +69,6 @@ protocol DailyLogDataSource: AnyObject {
   var chartRange: DailyChartRange {
     didSet { preferencesStore.set(chartRange.rawValue, for: .dailyLogChartRangeRawValue) }
   }
-
 
   /// Bumped whenever an event is recorded, purely so SwiftUI re-reads the
   /// projections. The event array itself is deliberately not `@Observable`
@@ -174,6 +183,9 @@ protocol DailyLogDataSource: AnyObject {
     let isDone = completedDailyIds(on: now).contains(daily.id)
     plugin.setDaily(id: daily.id, completed: !isDone, now: now)
     revision &+= 1
+    // After the revision bump, so anything the handler reads back — the day's
+    // count, in particular — already includes this tick.
+    if !isDone { onDailyTicked?(daily) }
   }
 
   @discardableResult
@@ -186,6 +198,90 @@ protocol DailyLogDataSource: AnyObject {
   func renameDaily(_ daily: Daily, to title: String) {
     plugin.updateDaily(id: daily.id, title: title, schedule: nil)
     revision &+= 1
+  }
+
+  // MARK: Renaming
+  //
+  // A draft, not a live binding. See `DailyTitleEdit` for the bug that
+  // distinction fixes — briefly: the store trims and rejects empties, which are
+  // the right rules for a finished title and the wrong ones for a half-typed
+  // word.
+
+  /// Which daily is open for renaming, if any. Owned here rather than as view
+  /// `@State` for the same reason `isAddingDaily` is: the keyboard router opens
+  /// and closes it, and it has to survive the popover being redrawn.
+  private(set) var editingDailyId: String?
+  /// The draft title. Written on every keystroke, read by nobody but the field.
+  var editingDailyTitle: String = ""
+
+  func beginEditingDaily(_ daily: Daily) {
+    // Adding and renaming are the same screen real estate and would fight over
+    // focus, so opening one closes the other.
+    cancelAddingDaily()
+    editingDailyId = daily.id
+    editingDailyTitle = daily.title
+    selectDaily(daily)
+  }
+
+  @discardableResult
+  func beginEditingSelectedDaily() -> Bool {
+    guard let daily = selectedDaily else { return false }
+    beginEditingDaily(daily)
+    return true
+  }
+
+  /// Commits the draft and closes the editor. Committing an empty or unchanged
+  /// draft is a no-op rather than an error — the editor still closes, because
+  /// from the user's side pressing Return means "I'm done here" either way.
+  func commitDailyEdit() {
+    defer { cancelDailyEdit() }
+    guard let id = editingDailyId,
+      let daily = allDailies.first(where: { $0.id == id }),
+      let title = DailyTitleEdit.committed(draft: editingDailyTitle, original: daily.title)
+    else { return }
+    renameDaily(daily, to: title)
+  }
+
+  func cancelDailyEdit() {
+    editingDailyId = nil
+    editingDailyTitle = ""
+  }
+
+  // MARK: Deleting
+
+  /// Archives rather than removes, which is what makes this safe to call
+  /// "delete" in the UI. The day log references dailies by id, so a real
+  /// deletion would leave every past day that ticked this one rendering an
+  /// orphaned identifier instead of a title. Archiving takes it out of every
+  /// list you can see today and leaves history intact — see
+  /// `DailyCollection.archive`.
+  func deleteDaily(_ daily: Daily) {
+    // An open editor pointing at a row that is about to vanish would leave the
+    // field on screen with nothing behind it.
+    if editingDailyId == daily.id { cancelDailyEdit() }
+    archiveDaily(daily)
+  }
+
+  @discardableResult
+  func deleteSelectedDaily() -> Daily? {
+    guard let daily = selectedDaily else { return nil }
+    deleteDaily(daily)
+    return daily
+  }
+
+  /// Puts an archived daily back. The counterpart to `deleteDaily`, and the
+  /// reason deleting is safe to do without a confirmation.
+  func restoreDaily(_ daily: Daily) {
+    plugin.restoreDaily(id: daily.id)
+    revision &+= 1
+  }
+
+  /// Every archived daily, most recently archived first — what the settings
+  /// pane offers to restore.
+  var archivedDailies: [Daily] {
+    plugin.allDailiesIncludingArchived
+      .filter(\.isArchived)
+      .sorted { ($0.archivedAt ?? .distantPast) > ($1.archivedAt ?? .distantPast) }
   }
 
   func setDailySchedule(_ daily: Daily, to schedule: Daily.Schedule) {
@@ -332,6 +428,16 @@ protocol DailyLogDataSource: AnyObject {
     let value = plugin.summary(on: date)
     cachedSummary = (key, value)
     return value
+  }
+
+  /// Everything finished today — task closes *and* daily ticks — which is the
+  /// same pairing the chart counts, so the celebration tally can't disagree with
+  /// the bar the user is looking at.
+  ///
+  /// Both halves are memoised already, so this is cheap enough to call on the
+  /// completion path.
+  func completedTodayCount(on date: Date = Date()) -> Int {
+    summary(on: date).completedCount + completedDailyIds(on: date).count
   }
 
   func chartBuckets(now: Date = Date()) -> [DayLogAggregator.Bucket] {

@@ -1,3 +1,4 @@
+import PriorityCore
 import SwiftUI
 
 /// Keybindings pane for `SettingsView` plus every helper used exclusively by
@@ -5,19 +6,6 @@ import SwiftUI
 /// hotkey-card builder, shortcut-binding editor, and search filters). Pulled
 /// out of the main file as part of the Phase-4 settings split.
 extension SettingsView {
-  struct ShortcutReferenceItem: Identifiable {
-    let keys: String
-    let action: String
-    let note: String?
-    var id: String { "\(keys)|\(action)" }
-  }
-
-  struct ShortcutReferenceGroup: Identifiable {
-    let title: String
-    let items: [ShortcutReferenceItem]
-    var id: String { title }
-  }
-
   struct ShortcutCategoryDescriptor: Identifiable {
     let title: String
     let actions: [ConfigurableShortcutAction]
@@ -176,7 +164,7 @@ extension SettingsView {
               Text(group.title)
                 .font(.caption)
                 .foregroundColor(themeColor(.textSecondary))
-              ForEach(group.items) { item in
+              ForEach(group.entries) { item in
                 shortcutReferenceRow(item)
               }
             }
@@ -226,16 +214,26 @@ extension SettingsView {
     }
   }
 
-  fileprivate var filteredShortcutReferenceGroups: [ShortcutReferenceGroup] {
-    let query = shortcutSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !query.isEmpty else { return Self.shortcutReferenceGroups }
+  /// Derived from the bindings in force, not from a hand-written list.
+  ///
+  /// The list it replaces had drifted three entries out of date — it named `u`
+  /// as undo, `t` as the timer and `m` as a filter slot, all of which had moved
+  /// — and, being static text, could never have shown a customised binding at
+  /// all. See `ShortcutReference`.
+  fileprivate var shortcutReferenceSections: [ShortcutReference.Section] {
+    ShortcutReference.sections { preferences.shortcutBinding(for: $0) }
+  }
 
-    return Self.shortcutReferenceGroups.compactMap { group in
-      let matchingItems = group.items.filter {
+  fileprivate var filteredShortcutReferenceGroups: [ShortcutReference.Section] {
+    let query = shortcutSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty else { return shortcutReferenceSections }
+
+    return shortcutReferenceSections.compactMap { group in
+      let matchingItems = group.entries.filter {
         shortcutReferenceItemMatchesSearch($0, query: query)
       }
       guard !matchingItems.isEmpty else { return nil }
-      return ShortcutReferenceGroup(title: group.title, items: matchingItems)
+      return ShortcutReference.Section(title: group.title, entries: matchingItems)
     }
   }
 
@@ -335,16 +333,16 @@ extension SettingsView {
     .clipShape(RoundedRectangle(cornerRadius: 10))
   }
 
-  fileprivate func shortcutReferenceRow(_ item: ShortcutReferenceItem) -> some View {
+  fileprivate func shortcutReferenceRow(_ item: ShortcutReference.Entry) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Text(item.keys)
+        Text(item.keys.joined(separator: " / "))
           .font(.system(size: 11, weight: .medium, design: .monospaced))
           .padding(.horizontal, 8)
           .padding(.vertical, 4)
           .background(themeColor(.panelSurfaceElevated))
           .clipShape(Capsule())
-        Text(item.action)
+        Text(item.title)
           .font(.system(size: 12))
         Spacer(minLength: 0)
       }
@@ -388,78 +386,11 @@ extension SettingsView {
   }
 
   fileprivate func shortcutReferenceItemMatchesSearch(
-    _ item: ShortcutReferenceItem, query: String
+    _ item: ShortcutReference.Entry, query: String
   ) -> Bool {
     let normalizedQuery = query.lowercased()
-    return item.keys.lowercased().contains(normalizedQuery)
-      || item.action.lowercased().contains(normalizedQuery)
+    return item.keys.contains { $0.lowercased().contains(normalizedQuery) }
+      || item.title.lowercased().contains(normalizedQuery)
       || (item.note?.lowercased().contains(normalizedQuery) ?? false)
   }
-
-  fileprivate static let shortcutReferenceGroups: [ShortcutReferenceGroup] = [
-    ShortcutReferenceGroup(
-      title: "Navigation",
-      items: [
-        .init(keys: "j / ↓", action: "Next task", note: nil),
-        .init(keys: "k / ↑", action: "Previous task", note: nil),
-        .init(
-          keys: "l / →", action: "Expand subtasks, then step into them",
-          note: "Children appear indented under the task"),
-        .init(
-          keys: "h / ←", action: "Collapse, step out to the parent row, or leave the scope",
-          note: nil),
-        .init(
-          keys: "Shift+→ / Shift+←", action: "Zoom into the selected task / back out",
-          note: "The list becomes just that subtree. Also on ] and ["),
-        .init(keys: "Shift+L", action: "Open list switch command", note: nil),
-        .init(
-          keys: "Ctrl+← / Ctrl+→", action: "Cycle root tabs", note: "All / Due / Tags / Priority"),
-        .init(keys: "Ctrl+↑ / Ctrl+↓", action: "Cycle Due/Tag filter", note: nil),
-        .init(
-          keys: "q / w / e / r", action: "Jump to root tab", note: "All / Due / Tags / Priority"),
-        .init(keys: "z / x / c / v / b / n / m", action: "Select root filter chip", note: nil),
-      ]
-    ),
-    ShortcutReferenceGroup(
-      title: "Task Actions",
-      items: [
-        .init(keys: "Space", action: "Mark task done", note: nil),
-        .init(keys: "Shift+Space", action: "Invalidate task", note: nil),
-        .init(keys: "Enter", action: "Add sibling", note: nil),
-        .init(keys: "Shift+Enter / Tab", action: "Add child", note: nil),
-        .init(keys: "Cmd+← / Shift+Tab", action: "Unindent selected task", note: nil),
-        .init(keys: "Cmd+→", action: "Indent selected task", note: nil),
-        .init(keys: "Cmd+↑ / Cmd+↓", action: "Move task", note: nil),
-        .init(keys: "Delete", action: "Delete task", note: "Uses delete confirmation setting"),
-        .init(keys: "u", action: "Undo last action", note: nil),
-        .init(
-          keys: "1-9 / Hyper+1-9 / = / -",
-          action: "Set scoped priority / set absolute priority / send to back / clear",
-          note: nil),
-      ]
-    ),
-    ShortcutReferenceGroup(
-      title: "Edit, Search, Commands",
-      items: [
-        .init(keys: "/", action: "Focus search", note: nil),
-        .init(
-          keys: "F2 / i / a", action: "Edit selected task",
-          note: "F2 and a put cursor at end; i at start"),
-        .init(keys: ": / ; / Cmd+K", action: "Open command palette", note: nil),
-        .init(keys: "dd / dt", action: "Prefill due command", note: "due / due today"),
-        .init(keys: "gt / gu", action: "Prefill tag command", note: "tag / untag"),
-        .init(keys: "Esc", action: "Cancel input or close window", note: nil),
-      ]
-    ),
-    ShortcutReferenceGroup(
-      title: "Integrations & Timer",
-      items: [
-        .init(keys: "o / O", action: "Open in Obsidian / new Obsidian window", note: nil),
-        .init(keys: "gc", action: "Create Google Calendar event from selected task", note: nil),
-        .init(keys: "gg", action: "Open task link", note: nil),
-        .init(keys: "t / p", action: "Toggle timer / pause-resume timer", note: nil),
-        .init(keys: "Shift+A", action: "Quick Add at configured target", note: nil),
-      ]
-    ),
-  ]
 }

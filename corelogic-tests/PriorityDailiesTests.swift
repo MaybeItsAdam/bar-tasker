@@ -169,6 +169,48 @@ final class DailyCollectionTests: XCTestCase {
     XCTAssertEqual(collection.daily(withId: "a")?.title, "Gone")
   }
 
+  /// What makes archiving safe to offer as "delete" in the UI: it is
+  /// reversible, so deleting needs no confirmation step.
+  func testRestoringPutsAnArchivedDailyBack() {
+    var collection = DailyCollection()
+    collection.add(Daily(id: "a", title: "Back again"))
+    collection.archive(id: "a")
+    collection.restore(id: "a")
+
+    XCTAssertEqual(collection.active.map(\.id), ["a"])
+    XCTAssertNil(collection.daily(withId: "a")?.archivedAt)
+  }
+
+  /// The sort index is untouched by the round trip, so a restored daily lands
+  /// back in the middle of the routine rather than at the end of it.
+  func testRestoringKeepsThePositionItHad() {
+    var collection = DailyCollection()
+    collection.add(Daily(id: "a", title: "First"))
+    collection.add(Daily(id: "b", title: "Second"))
+    collection.add(Daily(id: "c", title: "Third"))
+
+    collection.archive(id: "b")
+    XCTAssertEqual(collection.active.map(\.id), ["a", "c"])
+
+    collection.restore(id: "b")
+    XCTAssertEqual(collection.active.map(\.id), ["a", "b", "c"])
+  }
+
+  /// A daily is only due when it is active, so archiving takes it off today's
+  /// checklist and restoring puts it back — the behaviour the Daily view's
+  /// delete depends on.
+  func testAnArchivedDailyIsNotDueAndARestoredOneIs() {
+    var collection = DailyCollection()
+    collection.add(Daily(id: "a", title: "Every day"))
+    let today = date(2026, 8, 18)
+
+    collection.archive(id: "a")
+    XCTAssertTrue(collection.due(on: today, calendar: calendar).isEmpty)
+
+    collection.restore(id: "a")
+    XCTAssertEqual(collection.due(on: today, calendar: calendar).map(\.id), ["a"])
+  }
+
   func testDueFiltersBySchedule() {
     var collection = DailyCollection()
     collection.add(Daily(id: "a", title: "Every day"))
@@ -435,7 +477,7 @@ final class DailyNoteDailiesRenderingTests: XCTestCase {
 
 /// The on-disk contract for `dailies.json`.
 ///
-/// `scripts/priority_mcp_server.py` writes this same file from a separate
+/// The Rust CLI writes this same file from a separate
 /// process, so the serialised shape is a cross-implementation interface, not an
 /// internal detail. These pin the two properties the Python side has to match.
 final class DailyDefinitionsStoreFormatTests: XCTestCase {

@@ -1,3 +1,4 @@
+import PriorityCore
 import SwiftUI
 
 // MARK: - KanbanBoardView
@@ -246,6 +247,11 @@ private struct KanbanTaskCard: View {
 
   private var isCompleting: Bool { manager.quickEntry.completingTaskId == task.id }
 
+  /// Cards take the tint/scale/fade half of the preset but not the collapse:
+  /// a kanban column is a fixed grid of cards, and folding one shut mid-column
+  /// shuffles every card below it.
+  private var treatment: CelebrationRowTreatment { manager.celebration.rowTreatment }
+
   private func showInAllView() {
     taskListViewModel.rootTaskView = .all
     navigationState.rootScopeFocusLevel = 0
@@ -301,15 +307,24 @@ private struct KanbanTaskCard: View {
     }
     .onHover { isHovered = $0 }
     .frame(maxWidth: .infinity, alignment: .leading)
+    .opacity(isCompleting && treatment.fades ? 0 : 1)
+    .scaleEffect(isCompleting ? treatment.scale : 1.0)
+    .animation(.spring(response: 0.3, dampingFraction: 0.5), value: isCompleting)
     .background(
-      isSelected
-        ? themeColor(.selectionBackground)
-        : themeColor(.panelBackground)
+      isCompleting && treatment.tintOpacity > 0
+        ? themeColor(.success).opacity(treatment.tintOpacity)
+        : isSelected
+          ? themeColor(.selectionBackground)
+          : themeColor(.panelBackground)
     )
     .overlay(alignment: .leading) {
-      if isSelected {
+      if (isCompleting && treatment != .none) || isSelected {
         Rectangle()
-          .fill(themeColor(.selectionForeground))
+          .fill(
+            isCompleting && treatment != .none
+              ? themeColor(.success)
+              : themeColor(.selectionForeground)
+          )
           .frame(width: 3)
       }
     }

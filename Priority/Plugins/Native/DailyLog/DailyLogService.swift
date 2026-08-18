@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import OSLog
+import PriorityCore
 
 /// Owns the daily log: the append-only event file, the dailies-folder bookmark,
 /// and the managed-section write into an Obsidian daily note.
@@ -105,11 +106,46 @@ final class DailyLogService {
     directoryWatcher = source
   }
 
+  /// Size and modification date of a watched file, as a change detector.
+  private struct FileStamp: Equatable {
+    let size: Int
+    let modified: Date
+
+    init?(_ url: URL) {
+      guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+        let size = values.fileSize,
+        let modified = values.contentModificationDate
+      else { return nil }
+      self.size = size
+      self.modified = modified
+    }
+  }
+
+  private var lastLogStamp: FileStamp?
+  private var lastDailiesStamp: FileStamp?
+
   /// Re-reads both files and notifies, but only when something actually
   /// changed: the watcher also fires for this process's own writes, and
   /// bumping the UI revision on every self-inflicted save would redraw the
   /// popover on each keystroke of a rename.
+  ///
+  /// The stat check in front is what keeps that cheap. The watcher fires on
+  /// *every* write to the directory — including this process's own, so every
+  /// recorded event triggers one — and the day log is append-only, so decoding
+  /// it and comparing the whole array meant the cost of each write grew with
+  /// the length of the user's history. Two `stat` calls settle it instead, and
+  /// the deep comparison below still has the final say on whether to notify.
   private func reloadFromDisk() {
+    let logStamp = FileStamp(store.fileURL)
+    let dailiesStamp = FileStamp(dailiesStore.fileURL)
+    if logStamp == lastLogStamp, dailiesStamp == lastDailiesStamp,
+      lastLogStamp != nil || lastDailiesStamp != nil
+    {
+      return
+    }
+    lastLogStamp = logStamp
+    lastDailiesStamp = dailiesStamp
+
     let events = store.loadAll()
     let dailies = dailiesStore.load()
     guard events != cachedEvents || dailies != cachedDailies else { return }
@@ -295,6 +331,14 @@ final class DailyLogService {
   func archiveDaily(id: String) {
     mutateDailies { $0.archive(id: id) }
   }
+
+  func restoreDaily(id: String) {
+    mutateDailies { $0.restore(id: id) }
+  }
+
+  /// Archived ones included — only the settings pane's restore list wants
+  /// these. Everything else reads `dailies`, which is active-only.
+  var allDailiesIncludingArchived: [Daily] { cachedDailies.dailies }
 
   func moveDaily(id: String, by offset: Int) {
     mutateDailies { $0.move(id: id, by: offset) }

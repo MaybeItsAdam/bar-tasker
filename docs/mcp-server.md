@@ -1,15 +1,14 @@
 # MCP Server Guide
 
-Priority includes an embedded MCP stdio server so an AI assistant can work directly with your Checkvist data.
+Priority ships an MCP stdio server so an AI assistant can work directly with your Checkvist data.
 
-- Server command: `Priority --mcp-server` (or `priority --mcp-server`, or the
-  fallback script — see [Keeping the three implementations honest](#keeping-the-three-implementations-honest))
+- Server command: `priority mcp` — the CLI, which the app ships at
+  `Contents/Helpers/priority`. `Priority --mcp-server` also works and hands over
+  to it; see [One server, two ways to name it](#one-server-two-ways-to-name-it)
 - Transport: stdio, newline-delimited JSON — one JSON-RPC object per line, as the
   MCP stdio transport specifies. LSP-style `Content-Length` framing is also
   accepted, and replies mirror whichever framing the client used.
-- Dependencies:
-  - Installed app: none beyond Priority itself
-  - Local debug/dev flow: `python3` can be used as an automatic fallback runner
+- Dependencies: none beyond Priority itself — the server ships inside the app
 
 ## What It Can Do
 
@@ -51,9 +50,9 @@ Notes:
 - The Checkvist tools talk directly to the Checkvist API.
 - It does not automate the local macOS app UI.
 - `task_add` supports both root insertion and specific parent insertion.
-- The local tools need no IPC: `--mcp-server` runs as the same bundle as the
-  app, so `UserDefaults` resolves to the same domain and the day-log files sit
-  at the same Application Support path.
+- The local tools need no IPC. They read the app's preferences plist by bundle
+  id and the day-log files at the same Application Support path, under the same
+  `flock` protocol the app uses.
 - `task_metadata` is read-only, and stays that way. Priorities, recurrence and
   start dates live in `UserDefaults`, which the running app holds in memory and
   rewrites on its own schedule — there is no equivalent of the file lock below
@@ -65,11 +64,11 @@ Notes:
 Two processes edit `dailies.json` and `daylog.jsonl`: the app and this server.
 Three things make that safe, and all three are load-bearing:
 
-1. **A file lock.** `FileLock` (`CoreLogic/FileLock.swift`) takes `flock(2)` on a
+1. **A file lock.** `FileLock` (`Sources/PriorityCore/FileLock.swift`) takes `flock(2)` on a
    sibling `.lock` file — a sibling, because saves are atomic (temp + rename) and
-   replace the data file's inode, so a lock held on it guards nothing. The
-   Python server uses `fcntl.flock` on the same path, so the two genuinely
-   exclude each other.
+   replace the data file's inode, so a lock held on it guards nothing. The CLI
+   takes the same lock on the same path, so the two genuinely exclude each
+   other.
 2. **Read/modify/write, never save-a-snapshot.** `DailyDefinitionsStore.mutate`
    re-reads inside the lock and applies the change to what is on disk *now*. The
    app used to write its launch-time copy back wholesale, which silently erased
@@ -96,36 +95,56 @@ tools this is `interval_days`: passing it alongside `active_weekdays` is refused
 rather than resolved in favour of whichever the implementation checks first, and
 passing `active_weekdays` to `daily_update` clears an existing cycle.
 
-### Keeping the three implementations honest
+### One server, two ways to name it
 
-There are three servers and a client may reach any of them:
+There is one implementation: the `priority` CLI (`cli/src/mcp.rs`). The app
+**ships** it, at `Contents/Helpers/priority`, installed during the build by
+`scripts/bundle_cli.sh` and signed with the app.
 
-| | Command | Why it exists |
-|---|---|---|
-| Swift | `Priority --mcp-server` | Embedded in the app; the tested original |
-| Python | `python3 scripts/priority_mcp_server.py` | Fallback when the app binary can't be resolved |
-| Rust | `priority --mcp-server` | The CLI already implements every tool — see `docs/cli.md` |
+| Command | What happens |
+|---|---|
+| `priority mcp` | The server, directly. What newly written configurations use. |
+| `Priority --mcp-server` | `MCPServerShim` `execv`s the bundled helper. What configurations written before this change say. |
 
-`scripts/mcp_parity_check.py` drives all three and diffs:
+Because the app bundles the CLI, `Priority --mcp-server` works on a machine
+where the CLI was never installed separately — which is what made retiring the
+old server safe.
 
-- their tool lists,
-- their answers to the local-state tools, against a temporary fixture,
-- the files they leave on disk afterwards,
-- and the HTTP requests the Checkvist tools make, against a stub API.
+There used to be a second implementation: 1,760 lines of Swift in
+`Priority/Plugins/MCP/MCPServer.swift`, running in-process. A third, a bundled
+`python3` fallback script, went earlier. Both existed for the same reason — a
+client might be pointed at any of them — and both cost the same thing: every
+tool change was a two- or three-way edit, and every divergence a two- or
+three-way diff. They were held equal from the outside by
+`scripts/mcp_parity_check.py`, which drove each over stdio and compared tool
+lists, answers, files written, and HTTP requests, because neither could import
+the other.
+
+What kept the Swift one alive was never a capability the CLI lacked; the parity
+check proved that every one of the nineteen tools agreed. It was that MCP client
+configurations already written to users' disks name
+`/Applications/Priority.app/Contents/MacOS/Priority --mcp-server`. Bundling the
+CLI and turning that path into a shim removed the reason, so:
+
+- ~1,760 lines of Swift are gone, as is ~610 lines of parity harness and a CI
+  job;
+- there is one implementation to be correct rather than two to keep equal;
+- and existing configurations keep working untouched, because the CLI already
+  accepted the bare `--mcp-server` flag (`cli/src/main.rs`) and already reads
+  credentials from the environment ahead of its own config file
+  (`cli/src/config.rs`) — which is exactly where a client configuration puts
+  them.
+
+`cargo test` covers the server. `scripts/mcp_smoke_check.py` covers the seam:
 
 ```bash
-cargo build --release --manifest-path cli/Cargo.toml   # so the Rust one is included
-python3 scripts/mcp_parity_check.py
+python3 scripts/mcp_smoke_check.py   # needs a Debug app build
 ```
 
-Swift is the reference the other two are compared against, because its logic is
-what `corelogic-tests/` covers directly. The check needs a Debug app build,
-reads no real data, and needs no Checkvist credentials. Run it after touching
-any of the three.
-
-A missing Rust build is reported and skipped rather than failing, so the check
-still runs on a machine without a toolchain — read the output and confirm it
-says three, not two.
+It drives both spellings above and checks they answer `initialize` and expose
+the same nineteen tools — in particular that an old-style invocation, with
+credentials in `env`, still reaches a working server. It reads no real data and
+needs no Checkvist credentials.
 
 ## Setup (the short version)
 
@@ -170,25 +189,32 @@ Set these environment variables for the MCP process (in your MCP client config):
 - `CHECKVIST_LIST_ID` (optional default list)
 - `CHECKVIST_BASE_URL` (optional, defaults to `https://checkvist.com`)
 
-The Rust server is the one exception: it falls back to the CLI's own config file
-(`~/.config/priority/config.json`, written by `priority auth login`) when
-these are unset, so a client config pointed at it can omit the `env` block
-entirely. The environment still wins where it is set, so nothing behaves
-differently for a config that supplies it. See `docs/cli.md`.
+The server falls back to the CLI's own config file
+(`~/.config/priority/config.json`, written by `priority auth login`) when these
+are unset, so a client config can omit the `env` block entirely. The environment
+still wins where it is set — which is what makes a configuration written before
+the migration, with credentials in `env`, keep behaving exactly as it did. See
+`docs/cli.md`.
 
 If `CHECKVIST_LIST_ID` is not set, pass `list_id` in tool calls that need a list.
 
-Command resolution priority used by the built-in MCP plugin:
+Command resolution priority, used both by the settings pane when it generates a
+config and by `MCPServerShim` when `--mcp-server` looks for something to run:
 
-1. `PRIORITY_MCP_EXECUTABLE_PATH` (explicit app executable override)
-2. App executable candidates (`Bundle.main`, `/Applications/Priority.app/...`)
-3. Bundled fallback script (`scripts/priority_mcp_server.py`) via `python3`
+1. `PRIORITY_MCP_EXECUTABLE_PATH` (explicit override — point a development build
+   at a freshly built CLI without reinstalling the app)
+2. The bundled helper: `/Applications/Priority.app/Contents/Helpers/priority`,
+   then the same path relative to the running bundle
+3. A separately installed CLI: `~/.local/bin`, `~/bin`, `/usr/local/bin`,
+   `/opt/homebrew/bin`
+
+If none resolves, a generated config points at
+`/Applications/Priority.app/Contents/Helpers/priority` so it is obvious what to
+fix, and `--mcp-server` exits with the list of paths it tried on stderr, where
+the client will log it.
 
 Extra control env vars:
 
-- `PRIORITY_MCP_SCRIPT_PATH` to point at a specific fallback script path
-- `PRIORITY_MCP_PREFER_SCRIPT=1` to force script mode
-- `PRIORITY_MCP_PREFER_APP=1` to force app mode
 - `PRIORITY_MCP_GUIDE_PATH` to override guide detection
 
 ## Run Manually
@@ -197,7 +223,7 @@ Extra control env vars:
 CHECKVIST_USERNAME="you@example.com" \
 CHECKVIST_REMOTE_KEY="your-remote-key" \
 CHECKVIST_LIST_ID="123456" \
-'/Applications/Priority.app/Contents/MacOS/Priority' --mcp-server
+'/Applications/Priority.app/Contents/Helpers/priority' mcp
 ```
 
 It will wait for an MCP client to connect over stdio.
@@ -205,6 +231,26 @@ It will wait for an MCP client to connect over stdio.
 ## Client Config Example
 
 Most MCP clients accept a JSON config similar to this:
+
+```json
+{
+  "mcpServers": {
+    "priority": {
+      "command": "/Applications/Priority.app/Contents/Helpers/priority",
+      "args": ["mcp"],
+      "env": {
+        "CHECKVIST_USERNAME": "you@example.com",
+        "CHECKVIST_REMOTE_KEY": "your-remote-key",
+        "CHECKVIST_LIST_ID": "123456"
+      }
+    }
+  }
+}
+```
+
+Use your own app path and credentials.
+
+A configuration written before the CLI was bundled names the app binary instead:
 
 ```json
 {
@@ -222,24 +268,13 @@ Most MCP clients accept a JSON config similar to this:
 }
 ```
 
-Use your own app path and credentials.
+That still works — the app hands the process to the bundled helper — so there is
+nothing you have to change.
 
-If the generated config uses script fallback, it will look like:
+A separately installed CLI works too, if you have run `scripts/install_cli.sh`:
 
 ```json
-{
-  "mcpServers": {
-    "priority": {
-      "command": "/usr/bin/env",
-      "args": ["python3", "/path/to/priority/scripts/priority_mcp_server.py"],
-      "env": {
-        "CHECKVIST_USERNAME": "you@example.com",
-        "CHECKVIST_REMOTE_KEY": "your-remote-key",
-        "CHECKVIST_LIST_ID": "123456"
-      }
-    }
-  }
-}
+{ "mcpServers": { "priority": { "command": "/usr/local/bin/priority", "args": ["mcp"] } } }
 ```
 
 ## Suggested First Calls

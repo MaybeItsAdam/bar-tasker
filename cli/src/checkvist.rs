@@ -1,9 +1,8 @@
 //! A direct Checkvist API client.
 //!
 //! Talks to the API rather than to the running app, so every command here works
-//! whether or not Priority is open. Mirrors `CheckvistClient` in
-//! `scripts/priority_mcp_server.py` and the client embedded in
-//! `Priority/Plugins/MCP/MCPServer.swift`.
+//! whether or not Priority is open. Mirrors `CheckvistClient`, the client
+//! embedded in `Priority/Plugins/MCP/MCPServer.swift`.
 
 use crate::config::Config;
 use crate::error::{Result, ToolError};

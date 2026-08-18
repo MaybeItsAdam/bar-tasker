@@ -1,7 +1,8 @@
 import AppKit
 import Foundation
-import Observation
 import OSLog
+import Observation
+import PriorityCore
 
 @MainActor
 @Observable class TimerManager {

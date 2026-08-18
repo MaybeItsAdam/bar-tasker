@@ -1,16 +1,16 @@
 import Foundation
 import Observation
+import PriorityCore
 
 @MainActor
 @Observable final class TaskListViewModel {
   // MARK: - Dependencies
   @ObservationIgnored private let repository: TaskRepository
-  @ObservationIgnored private let navigationState: NavigationState
-  @ObservationIgnored private let timer: TimerManager
-  @ObservationIgnored private let quickEntry: QuickEntryManager
   @ObservationIgnored private let preferencesStore: PreferencesStore
-  @ObservationIgnored private let preferences: PreferencesManager
-  @ObservationIgnored private weak var kanban: KanbanManager?
+  /// The five app-only managers this used to name concretely. Weak because
+  /// `AppCoordinator` owns this view model, so a strong reference back would be
+  /// a retain cycle — the same shape as `TaskMutationHost` and `SyncHost`.
+  @ObservationIgnored weak var host: TaskListViewModelHost?
 
   // MARK: - State
   var hideFuture: Bool = false {
@@ -62,6 +62,24 @@ import Observation
 
   @ObservationIgnored private var cacheStorage = CacheState()
 
+  /// Bumped by `invalidateCaches()`, and read by every accessor that touches
+  /// the derived cache.
+  ///
+  /// This is the cache's observability, and it has to be a stored observable
+  /// property because `cacheStorage` is `@ObservationIgnored`. Without it, a
+  /// SwiftUI view reading the cache while it happened to be *clean* registered
+  /// no dependency at all — `ensureVisibleTasksCacheValid()` returns at its
+  /// guard without touching anything observable — and so never updated again.
+  /// Whether that happened depended on call ordering: any non-view reader
+  /// (`KanbanManager`, `KanbanTaskDataSourceAdapter`) that got there first
+  /// cleared the dirty flag and took the view's tracking with it.
+  ///
+  /// It replaces a hand-maintained list of `_ = repository.x` touches in
+  /// `visibleTasks`, which had the same intent but covered only one of the
+  /// fifteen accessors and had already fallen behind its own inputs — the
+  /// priority queues drive row *ordering* and were missing from it.
+  private(set) var cacheVersion: Int = 0
+
   /// Up-to-date view of the derived caches.
   ///
   /// Reading this rebuilds lazily if anything has invalidated since the last
@@ -72,6 +90,9 @@ import Observation
   /// priority/eisenhower/timer write that follows it — pay for a full
   /// recompute. Internal code should use `cacheStorage` directly to avoid
   /// re-entering the validity check on hot paths.
+  ///
+  /// Reading this from a view also subscribes that view to the cache, via
+  /// `cacheVersion` — see its doc comment for why that is not automatic.
   var cache: CacheState {
     ensureVisibleTasksCacheValid()
     return cacheStorage
@@ -79,19 +100,12 @@ import Observation
 
   init(
     repository: TaskRepository,
-    navigationState: NavigationState,
-    timer: TimerManager,
-    quickEntry: QuickEntryManager,
-    kanban: KanbanManager?,
-    preferences: PreferencesManager
+    preferencesStore: PreferencesStore,
+    host: TaskListViewModelHost? = nil
   ) {
     self.repository = repository
-    self.navigationState = navigationState
-    self.timer = timer
-    self.quickEntry = quickEntry
-    self.kanban = kanban
-    self.preferences = preferences
-    self.preferencesStore = preferences.preferencesStore
+    self.preferencesStore = preferencesStore
+    self.host = host
 
     // Load persisted view-shaping state. These assignments run inside `init`,
     // so the `didSet` write-throughs above don't fire.
@@ -102,6 +116,21 @@ import Observation
     self.selectedRootTag = preferencesStore.string(.selectedRootTag)
   }
 
+  // MARK: - Host reads
+
+  // Named rather than inlined so the `host?.x ?? default` dance appears once
+  // each. The defaults describe an unattached view model, which only exists
+  // during construction.
+
+  private var hostCurrentParentId: Int { host?.currentParentId ?? 0 }
+  private var hostCurrentSiblingIndex: Int { host?.currentSiblingIndex ?? 0 }
+  private var hostIsSearchFilterActive: Bool { host?.isSearchFilterActive ?? false }
+  private var hostSearchText: String { host?.searchText ?? "" }
+  private var hostTimerElapsedByTaskId: [Int: TimeInterval] {
+    host?.timerElapsedByTaskId ?? [:]
+  }
+  private var hostShowsBreadcrumbContext: Bool { host?.showsTaskBreadcrumbContext ?? false }
+
   /// Marks the derived caches stale. The rebuild is deferred to the next read
   /// of `cache` (or of any accessor that calls
   /// `ensureVisibleTasksCacheValid`), so a burst of writes — e.g. a delete,
@@ -109,9 +138,15 @@ import Observation
   /// costs one recompute instead of one per write.
   func invalidateCaches() {
     cacheStorage.invalidate()
+    // Wrapping rather than trapping: the value is only ever compared for
+    // change, so it has no meaning to preserve at the boundary.
+    cacheVersion &+= 1
   }
 
   func ensureVisibleTasksCacheValid() {
+    // Read before the guard, deliberately. This is what registers a reading
+    // view's dependency on the cache even when there is nothing to rebuild.
+    _ = cacheVersion
     guard cacheStorage.dirty, !cacheStorage.isRebuilding else { return }
     cacheStorage.isRebuilding = true
     defer { cacheStorage.isRebuilding = false }
@@ -161,16 +196,16 @@ import Observation
     let nodes = tasks.map { TimerNode(id: $0.id, parentId: $0.parentId) }
     cacheStorage.childCount = TimerStore.childCountByTaskId(nodes: nodes)
     cacheStorage.rolledUpElapsed = TimerStore.rolledUpElapsedByTaskId(
-      nodes: nodes, ownElapsed: timer.timerByTaskId)
+      nodes: nodes, ownElapsed: hostTimerElapsedByTaskId)
     cacheStorage.rootLevelTagNames = computeRootLevelTagNames(limit: 30)
   }
 
-  private func computeVisibility() -> TaskVisibilityEngine.Result {
+  private func computeVisibility() -> TaskVisibilityEngine.Result<CheckvistTask> {
     let tasks = repository.tasks
-    let currentParentId = navigationState.currentParentId
+    let currentParentId = hostCurrentParentId
     let currentLevelTasks = tasks.filter { ($0.parentId ?? 0) == currentParentId }
     let isRootLevel = currentParentId == 0
-    let isSearchFilterActive = quickEntry.isSearchFilterActive
+    let isSearchFilterActive = hostIsSearchFilterActive
     let shouldShowRootScopeSection = !isSearchFilterActive
 
     return TaskVisibilityEngine.compute(
@@ -179,7 +214,7 @@ import Observation
         currentLevelTasks: currentLevelTasks,
         currentParentId: currentParentId,
         isSearchFilterActive: isSearchFilterActive,
-        searchText: quickEntry.searchText,
+        searchText: hostSearchText,
         hideFuture: hideFuture,
         shouldShowRootScopeSection: shouldShowRootScopeSection,
         isRootLevel: isRootLevel,
@@ -336,9 +371,9 @@ import Observation
     return cacheStorage.remainderStartIndex
   }
 
-  var isRootLevel: Bool { navigationState.currentParentId == 0 }
+  var isRootLevel: Bool { hostCurrentParentId == 0 }
 
-  var shouldShowRootScopeSection: Bool { !quickEntry.isSearchFilterActive }
+  var shouldShowRootScopeSection: Bool { !hostIsSearchFilterActive }
 
   var rootScopeShowsFilterControls: Bool {
     guard shouldShowRootScopeSection && isRootLevel else { return false }
@@ -431,7 +466,9 @@ import Observation
       guard let task = taskById[taskId] else { continue }
       var chain: [CheckvistTask] = []
       var cursor: CheckvistTask? = task
-      while let current = cursor {
+      // See `TaskFilterEngine.isDescendant` for why the visited set is here.
+      var seen: Set<Int> = []
+      while let current = cursor, seen.insert(current.id).inserted {
         chain.append(current)
         if let pid = current.parentId, pid != 0, let parent = taskById[pid] {
           cursor = parent
@@ -453,16 +490,16 @@ import Observation
 
   /// Tasks visible at the current level, sorted by position
   var currentLevelTasks: [CheckvistTask] {
-    repository.tasks.filter { ($0.parentId ?? 0) == navigationState.currentParentId }
+    repository.tasks.filter { ($0.parentId ?? 0) == hostCurrentParentId }
   }
 
   var currentTask: CheckvistTask? {
     if rootTaskView == .kanban {
-      return kanban?.currentKanbanTask
+      return host?.kanbanCurrentTask
     }
     let level = visibleTasks
     guard !level.isEmpty else { return nil }
-    let clampedIndex = min(max(navigationState.currentSiblingIndex, 0), level.count - 1)
+    let clampedIndex = min(max(hostCurrentSiblingIndex, 0), level.count - 1)
     return level[clampedIndex]
   }
 
@@ -472,8 +509,10 @@ import Observation
   var breadcrumbs: [CheckvistTask] {
     ensureVisibleTasksCacheValid()
     var result: [CheckvistTask] = []
-    var parentId = navigationState.currentParentId
-    while parentId != 0 {
+    var parentId = hostCurrentParentId
+    // See `TaskFilterEngine.isDescendant` for why the visited set is here.
+    var seen: Set<Int> = []
+    while parentId != 0, seen.insert(parentId).inserted {
       if let parent = cacheStorage.taskById[parentId] {
         result.append(parent)
         parentId = parent.parentId ?? 0
@@ -512,16 +551,10 @@ import Observation
   }
 
   var visibleTasks: [CheckvistTask] {
-    _ = repository.tasks
-    _ = repository.expandedTaskIds
-    _ = navigationState.currentParentId
-    _ = quickEntry.searchText
-    _ = quickEntry.quickEntryMode
-    _ = rootTaskView
-    _ = selectedRootDueBucketRawValue
-    _ = selectedRootTag
-    _ = hideFuture
-    _ = showChildrenInMenus
+    // The `_ = repository.x` roll-call that used to sit here is gone:
+    // `ensureVisibleTasksCacheValid()` reads `cacheVersion`, which every one of
+    // those inputs bumps through `CacheInvalidationBus`. One dependency, and it
+    // cannot fall behind the set of things the rebuild actually reads.
     ensureVisibleTasksCacheValid()
     return cacheStorage.visibleTasks
   }
@@ -535,15 +568,15 @@ import Observation
       return pid != 0
     }
     if isSearchFilterActive {
-      return pid != navigationState.currentParentId
+      return pid != hostCurrentParentId
     }
-    if preferences.showTaskBreadcrumbContext {
+    if hostShowsBreadcrumbContext {
       return pid != 0
     }
     return false
   }
 
-  var isSearchFilterActive: Bool { quickEntry.isSearchFilterActive }
+  var isSearchFilterActive: Bool { hostIsSearchFilterActive }
 
   func subtreeBlockRange(for taskId: Int, in flatTasks: [CheckvistTask]) -> Range<Int>? {
     ensureVisibleTasksCacheValid()
@@ -577,8 +610,8 @@ import Observation
   func rolledUpElapsedByTaskId() -> [Int: TimeInterval] {
     // Touch the observable dictionary so SwiftUI re-renders on per-second
     // ticks. Without this, callers only read the @ObservationIgnored cache
-    // and never establish a dependency on `timer.timerByTaskId`.
-    _ = timer.timerByTaskId
+    // and never establish a dependency on `hostTimerElapsedByTaskId`.
+    _ = hostTimerElapsedByTaskId
     ensureVisibleTasksCacheValid()
     return cacheStorage.rolledUpElapsed
   }

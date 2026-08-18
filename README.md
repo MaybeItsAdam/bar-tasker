@@ -74,7 +74,8 @@ Onboarding boxes guide the Checkvist, Obsidian and Google Calendar setup. Each o
 | `r` | Priority view |
 | `t` | Kanban view |
 | `y` | Matrix view |
-| `Shift+T` | Daily view |
+| `u` | Daily view |
+| `?` | Every shortcut, on your own bindings — the reference sheet |
 | `Esc` | Cancel input / close popover |
 
 ### Task actions
@@ -83,17 +84,20 @@ Onboarding boxes guide the Checkvist, Obsidian and Google Calendar setup. Each o
 | --- | --- |
 | `Space` | Complete |
 | `Shift+Space` | Invalidate ("won't do") |
-| `Enter` | Add sibling |
-| `Shift+Enter` / `Tab` | Add child |
-| `Shift+Tab` | Unindent |
+| `Enter` | Add sibling below |
+| `Alt+Enter` | Add sibling **above** |
+| `Shift+Enter` | Add child |
+| `Tab` / `Shift+Tab` | Indent / unindent |
+| `Cmd+D` | Duplicate — content only, no due date, tags or subtasks |
 | `Shift+A` | Quick-add at the configured location |
 | `Cmd+↑` / `Cmd+↓` | Move task |
 | `1`–`9` | Scoped priority rank, within the parent |
 | `Hyper+1`–`Hyper+9` | Absolute priority rank (`Ctrl+Cmd+Option+Shift`) |
 | `=` | Send to priority back |
-| `-` | Clear scoped priority |
+| `-` / `0` | Clear scoped priority |
 | `Hyper+-` | Clear absolute priority |
 | `'` | Start a focus session on the selected task, from any view |
+| `Cmd+Z` | Undo the last change |
 
 ### Kanban
 
@@ -111,8 +115,41 @@ Onboarding boxes guide the Checkvist, Obsidian and Google Calendar setup. Each o
 | `j` / `k` | Move through the checklist |
 | `Space` | Tick / un-tick |
 | `Return` | Add a daily — stays open, so a whole routine can be typed in one go |
+| `a` / `i` | Rename the selected daily in place |
+| `Delete` | Delete it. Past days keep their record, and it can be restored in Preferences |
 | `Cmd+↑` / `Cmd+↓` | Reorder |
-| `Esc` | Cancel adding, discarding what's been typed |
+| `Esc` | Cancel adding or renaming, discarding what's been typed |
+
+### Coming from Checkvist
+
+Priority is a Checkvist client, so the gestures worth keeping are Checkvist's.
+`j` `k` and the arrows, `Space` and `Shift+Space`, `Enter` and `Shift+Enter`,
+`Tab` and `Shift+Tab`, `Shift+←` / `Shift+→` for hoisting, `⌘↑` / `⌘↓` to move,
+`Del`, `F2`, `1`–`9` and `0`, `/`, and the `dd` `dr` `gg` `sc` sequences all mean
+what they mean there. So does `?`.
+
+Where it can't match, it's for one reason: Checkvist spells most of its actions
+as two-letter sequences (`td`, `tt`, `ct`, `hf`, `ll`, `ee`, `nn`, `uu`), and
+Priority spends those same starter letters on single-key root tabs
+(`q w e r t y u`) and filter slots (`z x c v b n ,`). A letter can be a sequence
+starter or a shortcut, not both — pressing it has to either act or wait for a
+second key. The tabs won, because switching view is the thing you do most.
+
+The nearest equivalents:
+
+| Checkvist | Here | |
+| --- | --- | --- |
+| `td` schedule for today | `dt` | `t` is the Kanban tab |
+| `tt` tags | `gt` | `t` is the Kanban tab |
+| `ct` clear tags | `gu` | `c` is a filter slot |
+| `hf` hide future | `Shift+H` | `h` collapses |
+| `ll` go to a list | `Shift+L` | `l` expands |
+| `ee` / `ea` / `ei` edit | `F2` / `a` / `i` | `e` is the Tags tab |
+| `uu` undo | `Cmd+Z` | `u` is the Daily tab |
+| `om` distraction-free | `'` | focus session |
+
+All of them are rebindable in `Preferences → Keybindings` if you'd rather have
+the Checkvist spelling than the tab.
 
 ### Integrations
 
@@ -156,7 +193,7 @@ Due values understand natural language and times: `due today 14:30`, `due tomorr
 | **Priority** | `r` | Your ranked queue |
 | **Kanban** | `t` | Configurable columns, filtered by tag or scoped to subtasks |
 | **Matrix** | `y` | Eisenhower quadrants by importance and urgency |
-| **Daily** | `Shift+T` | Dailies, the chart, and what you finished |
+| **Daily** | `u` | Dailies, the chart, and what you finished |
 
 Kanban cards show the task text with tags stripped, a `P1`–`P9` priority badge, the due date with overdue/today highlighting, inline tags, and a subtask count. Columns are configured in Preferences and reorder by drag.
 
@@ -183,7 +220,7 @@ Hiding the graph shortens the panel by exactly the chart's height, which turns t
 
 ## Daily log
 
-The Daily view (`Shift+T`) answers "what did I get done, and how does today compare?"
+The Daily view (`u`) answers "what did I get done, and how does today compare?"
 
 ### Dailies
 
@@ -193,7 +230,8 @@ Recurring things you intend to do — habits, not tasks — sitting at the top o
 - **They're local.** Stored in `~/Library/Application Support/Priority/dailies.json`, so "brush teeth" never clutters your project lists or syncs to other Checkvist clients. Ticking one is instant and works offline.
 - **Ticks land in the same log as task completions**, so they count towards the chart and appear in the Obsidian note.
 - **Two kinds of schedule.** Fixed weekdays (`Mon Wed Fri`, weekdays, weekends, every day) or a rotating cycle — every other day, every three days — counted from the day you set it. A cycle walks through the week, so it's the one for "water the plants", not "standup".
-- **Set the schedule as you type** from the menu in the add field, or edit any daily in full — day-by-day toggles, cycle length, archiving — in `Preferences → Plugins → Daily Log`. Removing a daily archives it, so past days keep their record instead of showing an orphaned id.
+- **Set the schedule as you type** from the menu in the add field, or edit any daily in full — day-by-day toggles, cycle length — in `Preferences → Plugins → Daily Log`.
+- **Rename in place with `a`, delete with `Delete`**, without leaving the checklist. Deleting *archives*: the row goes from today's list and from the editor, but every past day that ticked it still renders with its title rather than a raw id, and it can be restored from the Deleted list in `Preferences → Plugins → Daily Log`. That is why deleting needs no confirmation — nothing has been lost.
 
 ### What the day records
 
@@ -266,7 +304,7 @@ priority --json dailies | jq '.dailies[] | select(.done | not)'
 
 Its credentials are its own, in `~/.config/priority/config.json` at mode 0600 — separate from the app's login-keychain item, so neither depends on how the other was built or signed. The dailies, log and metadata commands need no credentials at all.
 
-Every command is one of the MCP tools under a friendlier name, and the same binary serves them over MCP with `priority --mcp-server`.
+Every command is one of the MCP tools under a friendlier name, and the same binary serves them over MCP with `priority mcp`. It is also the app's MCP server: Priority.app ships this binary at `Contents/Helpers/priority`.
 
 **Full guide: [docs/cli.md](docs/cli.md)**
 
@@ -276,7 +314,7 @@ Priority exposes **19 MCP tools** so an AI assistant can work with your lists di
 
 Set it up from `Preferences → Plugins → Native MCP Integration`. It detects Claude Code, Claude Desktop, Cursor, Windsurf, VS Code and Zed, and adds Priority to the one you pick in a single click, preserving any servers already in that client's config.
 
-There are three interchangeable implementations — the one embedded in the app, a dependency-free Python fallback script, and the Rust CLI. A client may be pointed at any of them, so `scripts/mcp_parity_check.py` drives all three against a fixture and a stub API and diffs their tool lists, their answers, the files they leave on disk, and the HTTP requests they make.
+There is one implementation — the Rust CLI — and the app ships it at `Contents/Helpers/priority`, so it works whether or not you installed the CLI separately. `Priority --mcp-server` hands the process over to it, which keeps configurations written for older versions working unchanged. There were three implementations once; `scripts/mcp_smoke_check.py` is what remains of holding them together, and it now only checks that handover.
 
 **Full guide: [docs/mcp-server.md](docs/mcp-server.md)**
 
@@ -303,15 +341,14 @@ cd priority
 # The app
 xcodebuild -project 'Priority.xcodeproj' -scheme 'Priority' -configuration Debug -destination 'platform=macOS' build
 
-# Headless logic (303 tests)
+# Headless logic (598 tests)
 swift test
 
-# The CLI (48 tests)
+# The CLI (92 tests) — also the app's MCP server, bundled during the app build
 cargo test --manifest-path cli/Cargo.toml
 
-# All three MCP servers agree
-cargo build --release --manifest-path cli/Cargo.toml
-python3 scripts/mcp_parity_check.py
+# `Priority --mcp-server` still reaches it
+python3 scripts/mcp_smoke_check.py
 
 # Build + launch Debug, or produce a release DMG
 ./scripts/run.sh
@@ -322,7 +359,8 @@ python3 scripts/mcp_parity_check.py
 
 | Path | What |
 | --- | --- |
-| `Priority/` | The macOS app. `CoreLogic/` is pure, headless, UI-free logic. |
+| `Priority/` | The macOS app. |
+| `Sources/PriorityCore/` | Pure, headless, UI-free logic. The app links it as a package product. |
 | `Priority/Plugins/` | Integration plugins, one folder each, behind protocols |
 | `cli/` | The Rust CLI crate — shares no source with the Swift side |
 | `scripts/` | Build, install, the Python MCP fallback, and the parity check |

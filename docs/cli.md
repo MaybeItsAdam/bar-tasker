@@ -247,38 +247,40 @@ what an assistant did.
 
 ## As an MCP server
 
-The same binary is also the third MCP server implementation:
+This binary *is* Priority's MCP server. There is no other — the app ships a copy
+at `Priority.app/Contents/Helpers/priority` and `Priority --mcp-server` hands
+the process over to it (`Priority/MCPServerShim.swift`).
 
 ```bash
 priority mcp
 priority --mcp-server     # accepted too, so a config written for the app works unchanged
 ```
 
-Point a client at it the same way as at the app, swapping the command. If you
-have run `auth login`, no `env` block is needed at all — this is the one thing
-the Rust server can do that the other two cannot, since they have no config file
-to fall back on:
+That second spelling is load-bearing rather than a convenience: MCP client
+configurations written before the app bundled this binary say
+`/Applications/Priority.app/Contents/MacOS/Priority --mcp-server`, and they
+keep working because both the flag and the environment-first credential rule
+below were already here.
+
+If you have run `auth login`, no `env` block is needed at all:
 
 ```json
 {
   "mcpServers": {
     "priority": {
       "command": "/Users/you/.local/bin/priority",
-      "args": ["--mcp-server"]
+      "args": ["mcp"]
     }
   }
 }
 ```
 
 Passing credentials in `env` still works and still takes precedence, which is
-why that asymmetry costs nothing: every existing config keeps behaving
-identically, and `scripts/mcp_parity_check.py` drives all three with the
-credentials in the environment (and with `PRIORITY_CONFIG_PATH` pointed at a
-file that does not exist) so this file can never make the Rust one answer
-differently.
+what makes an existing configuration keep behaving identically — the config file
+can never override what a client already supplies.
 
-See `docs/mcp-server.md` for the tool list and for how the three implementations
-are held to the same behaviour.
+See `docs/mcp-server.md` for the tool list and the history of how three
+implementations became one.
 
 ## Editing dailies while the app is open
 
@@ -308,7 +310,7 @@ cli/
     checkvist.rs  the API client
     config.rs     ~/.config/priority/config.json, and the environment-first rule
     local.rs      dailies, day log, and preferences, off disk
-    lock.rs       flock(2), shared with the app and the Python server
+    lock.rs       flock(2), on the same lock files the app takes
     mcp.rs        the JSON-RPC stdio server and the tool schemas
     tests.rs      unit tests
 ```
@@ -319,6 +321,11 @@ be expressed as a tool call does not belong in `cli.rs`.
 
 The crate is deliberately outside both `Package.swift` and the Xcode project: it
 shares no source with them, and nothing in `Priority/` should ever `import` it.
+The app *runs* it — `scripts/bundle_cli.sh`, from an Xcode build phase, cargo-
+builds it and installs it into the bundle — but that is a process boundary, not
+a source dependency. One consequence worth knowing: **building the app needs
+cargo.** `PRIORITY_SKIP_CLI_BUNDLE=1` opts out, and produces an app with no MCP
+server.
 
 ## Developing
 
@@ -326,9 +333,10 @@ shares no source with them, and nothing in `Priority/` should ever `import` it.
 cargo test --manifest-path cli/Cargo.toml
 cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
 cargo fmt --manifest-path cli/Cargo.toml --check
-python3 scripts/mcp_parity_check.py      # needs a Debug app build and a release CLI build
+python3 scripts/mcp_smoke_check.py       # needs a Debug app build
 ```
 
-The parity check is the one that matters after a behaviour change: it drives all
-three MCP servers and diffs their answers, the files they leave on disk, and the
-HTTP requests they make. CI runs all four.
+`cargo test` is what covers the server's behaviour, now that there is only one
+implementation of it. The smoke check covers the seam instead: that
+`Priority --mcp-server` still reaches this binary, and that a configuration
+written before the migration still gets a working server. CI runs all four.

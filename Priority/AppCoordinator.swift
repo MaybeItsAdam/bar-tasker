@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import OSLog
 import Observation
+import PriorityCore
 import ServiceManagement
 import SwiftUI
 
@@ -11,21 +12,31 @@ import SwiftUI
     subsystem: "uk.co.maybeitsadam.priority", category: "manager")
 
   let repository: TaskRepository
-  let feedbackService: FeedbackService
   @ObservationIgnored let cacheInvalidationBus: CacheInvalidationBus
 
   let navigationState: NavigationState
 
+  /// Transient one-line feedback under the list. Clears itself after three
+  /// seconds.
+  ///
+  /// The generation token is what makes overlapping messages behave: each
+  /// assignment starts its own timer, so without it the *first* message's timer
+  /// would fire three seconds later and wipe whatever the second message had
+  /// put there — a message set at t=2 vanishing at t=3 instead of t=5.
   var statusMessage: String? {
     didSet {
-      if statusMessage != nil {
-        Task { @MainActor in
-          try? await Task.sleep(for: .seconds(3))
-          self.statusMessage = nil
-        }
+      guard statusMessage != nil else { return }
+      statusMessageGeneration &+= 1
+      let generation = statusMessageGeneration
+      Task { @MainActor in
+        try? await Task.sleep(for: .seconds(3))
+        guard self.statusMessageGeneration == generation else { return }
+        self.statusMessage = nil
       }
     }
   }
+
+  @ObservationIgnored private var statusMessageGeneration = 0
 
   var orderedRootTaskViews: [RootTaskView] {
     if let data = UserDefaults.standard.data(forKey: "rootTaskViewOrder"),
@@ -73,6 +84,9 @@ import SwiftUI
   let focusSessionManager: FocusSessionManager
 
   let dailyLog: DailyLogManager
+  /// Which completion celebration is active, and the flourish the popover
+  /// overlay is currently showing.
+  let celebration: CompletionCelebrationManager
   /// Popover chrome — the dock row, the resize strip, per-view heights.
   let popoverChrome: PopoverChromeManager
 
@@ -121,8 +135,7 @@ import SwiftUI
     #endif
   }
 
-  init(pluginRegistry: PluginRegistry, feedbackService: FeedbackService? = nil) {
-    self.feedbackService = feedbackService ?? DefaultFeedbackService()
+  init(pluginRegistry: PluginRegistry) {
     let resolvedLocalTaskStore = LocalTaskStore()
     let resolvedCheckvistSyncPlugin =
       pluginRegistry.activeCheckvistSyncPlugin ?? NativeCheckvistSyncPlugin()
@@ -228,6 +241,14 @@ import SwiftUI
     self.recurrence = RecurrenceManager(preferencesStore: preferencesStore)
     let quickEntry = QuickEntryManager(cacheInvalidationBus: cacheInvalidationBus)
     self.quickEntry = quickEntry
+    // Retains the registry, unlike the other capabilities: the celebration
+    // preset is switchable from Settings, so resolving it once here would pin
+    // whatever was active at launch.
+    self.celebration = CompletionCelebrationManager(
+      preferencesStore: preferencesStore,
+      registry: pluginRegistry,
+      quickEntry: quickEntry
+    )
     let integrations = IntegrationCoordinator(
       preferencesStore: preferencesStore,
       obsidianPlugin: resolvedObsidianPlugin,
@@ -244,11 +265,7 @@ import SwiftUI
 
     self.taskListViewModel = TaskListViewModel(
       repository: repository,
-      navigationState: navigationState,
-      timer: timer,
-      quickEntry: quickEntry,
-      kanban: kanban,
-      preferences: preferences
+      preferencesStore: preferences.preferencesStore
     )
 
     self.taskNavigationService = TaskNavigationService(
@@ -256,6 +273,8 @@ import SwiftUI
       repository: repository,
       navigationState: navigationState
     )
+    // Attached after `self` is fully initialised, like the other hosts.
+    self.taskListViewModel.host = self
     self.taskMutationService = TaskMutationService(host: self, repository: repository)
     self.undoService = UndoService(performer: self.taskMutationService)
     self.syncService = SyncService(host: self, repository: repository)
@@ -295,6 +314,19 @@ import SwiftUI
     dailyLog.dataSource = dailyLogDataSourceAdapter
     dailyLog.onError = { [weak self] message in
       self?.repository.errorMessage = message
+    }
+    // Ticking a daily used to be entirely silent — a separate funnel from task
+    // completion, with no feedback of any kind. It gets the same haptic and the
+    // same celebration now. No cancellation semantics: unlike a task close there
+    // is no request to abandon, the tick has already landed locally.
+    dailyLog.onDailyTicked = { [weak self] daily in
+      guard let self else { return }
+      NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+      let event = self.completionEvent(for: .daily(id: daily.id), alreadyRecorded: true)
+      Task { @MainActor in
+        _ = await self.celebration.runInline(event)
+        self.celebration.presentFlourish(for: event)
+      }
     }
     // A finished focus block is the one piece of "what I did today" that no
     // task mutation records, so it's captured here rather than through the
@@ -347,151 +379,41 @@ extension AppCoordinator {
   }
 }
 
+/// What is left here is the kanban adapter layer: `KanbanManager` decides
+/// *what* a column move means in terms of content and due date — which needs
+/// the app-only `KanbanColumn` type — and `TaskMutationService` performs it.
+/// The performing half used to live here too, hand-rolling its own optimistic
+/// and offline handling; it now goes through the same service as every other
+/// mutation.
 extension AppCoordinator {
   @MainActor func moveCurrentTaskToKanbanColumn(direction: Int) {
     guard let outcome = kanban.computeMoveCurrentTask(direction: direction) else { return }
-    switch outcome {
-    case .error(let msg):
-      repository.errorMessage = msg
-    case .update(let task, let newContent, let newDue):
-      applyOptimisticMoveAndSync(task: task, content: newContent, due: newDue)
-    }
+    apply(outcome)
   }
 
   @MainActor func moveTask(id taskId: Int, toColumn targetColumn: KanbanColumn) {
     guard let outcome = kanban.computeMoveTask(id: taskId, toColumn: targetColumn) else { return }
+    apply(outcome)
+  }
+
+  @MainActor private func apply(_ outcome: KanbanMoveOutcome) {
     switch outcome {
     case .error(let msg):
       repository.errorMessage = msg
     case .update(let task, let newContent, let newDue):
-      applyOptimisticMoveAndSync(task: task, content: newContent, due: newDue)
+      taskMutationService.applyOptimisticUpdate(
+        task: task, content: newContent, due: newDue)
     }
   }
 
   /// Creates a new root-level task pre-configured for the given kanban column.
+  /// The column-to-content/due translation is kanban's; the insert is the
+  /// mutation service's.
   @MainActor func addTaskInKanbanColumn(rawContent: String, column: KanbanColumn) {
     let trimmed = rawContent.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
-    guard !repository.listId.isEmpty else {
-      repository.errorMessage = "Choose a Checkvist list in Preferences to add tasks."
-      return
-    }
-
     let (content, due) = kanban.contentAndDueForNewTask(rawContent: trimmed, in: column)
-
-    // Optimistic local insert. Shares the id sequence with
-    // `TaskMutationService` so the two optimistic-insert paths can't hand out
-    // the same placeholder id.
-    let optimisticId = OptimisticTaskID.make()
-    let optimisticTask = CheckvistTask(
-      id: optimisticId, content: content, status: 0, due: due,
-      position: nil, parentId: nil, level: nil
-    )
-    repository.tasks.append(optimisticTask)
-    kanban.kanbanSelectedTaskId = optimisticId
-
-    let listId = repository.listId
-    let credentials = repository.activeCredentials
-    let plugin = repository.activeSyncPlugin
-
-    Task { [weak self] in
-      do {
-        let newTask = try await plugin.createTask(
-          listId: listId, content: content, parentId: nil, position: nil,
-          credentials: credentials
-        )
-        await MainActor.run { [weak self] in
-          guard let self else { return }
-          if let newTask {
-            // If a due date was set, sync it to the server too.
-            if let due, !due.isEmpty {
-              let taskId = newTask.id
-              Task {
-                _ = try? await plugin.updateTask(
-                  listId: listId, taskId: taskId, content: nil, due: due,
-                  credentials: credentials
-                )
-              }
-            }
-            self.undoService.lastAction = .add(taskId: newTask.id)
-            // Replace optimistic task with the real one.
-            if let idx = self.repository.tasks.firstIndex(where: { $0.id == optimisticId }) {
-              self.repository.tasks[idx] = CheckvistTask(
-                id: newTask.id, content: content, status: 0, due: due,
-                position: newTask.position, parentId: nil, level: nil
-              )
-            }
-            self.kanban.kanbanSelectedTaskId = newTask.id
-          } else {
-            self.repository.tasks.removeAll { $0.id == optimisticId }
-            self.repository.errorMessage = "Failed to add task."
-          }
-        }
-      } catch {
-        await MainActor.run { [weak self] in
-          self?.repository.tasks.removeAll { $0.id == optimisticId }
-          self?.repository.errorMessage = "Error adding task: \(error.localizedDescription)"
-        }
-      }
-    }
-  }
-
-  /// Applies the move locally (immediate) and syncs to the server in the background.
-  @MainActor func applyOptimisticMoveAndSync(
-    task: CheckvistTask, content: String?, due: String?
-  ) {
-    undoService.lastAction = .update(
-      taskId: task.id, oldContent: task.content, oldDue: task.due)
-
-    guard let index = repository.tasks.firstIndex(where: { $0.id == task.id }) else { return }
-    let originalTask = repository.tasks[index]
-    repository.tasks[index] = CheckvistTask(
-      id: originalTask.id,
-      content: content ?? originalTask.content,
-      status: originalTask.status,
-      due: due ?? originalTask.due,
-      position: originalTask.position,
-      parentId: originalTask.parentId,
-      level: originalTask.level,
-      notes: originalTask.notes,
-      updatedAt: originalTask.updatedAt
-    )
-
-    let listId = repository.listId
-    let credentials = repository.activeCredentials
-    let plugin = repository.activeSyncPlugin
-    let taskId = task.id
-
-    Task { [weak self] in
-      do {
-        let success = try await plugin.updateTask(
-          listId: listId,
-          taskId: taskId,
-          content: content,
-          due: due,
-          credentials: credentials
-        )
-        if !success {
-          await MainActor.run { [weak self] in
-            guard let self else { return }
-            if let idx = self.repository.tasks.firstIndex(where: { $0.id == taskId }) {
-              self.repository.tasks[idx] = originalTask
-            }
-            self.repository.errorMessage = "Failed to sync task move."
-          }
-        }
-      } catch {
-        await MainActor.run { [weak self] in
-          guard let self else { return }
-          if !self.repository.isNetworkReachable {
-            self.repository.pendingTaskMutations[taskId] = (content: content, due: due)
-          } else if let idx = self.repository.tasks.firstIndex(where: { $0.id == taskId }) {
-            self.repository.tasks[idx] = originalTask
-            self.repository.errorMessage = "Failed to sync task move."
-          }
-        }
-      }
-    }
+    taskMutationService.addRootTask(content: content, due: due)
   }
 
   // MARK: - Keychain / Debug / Command execution

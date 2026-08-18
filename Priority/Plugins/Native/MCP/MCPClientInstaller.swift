@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import OSLog
+import PriorityCore
 
 /// Writes Priority's MCP entry into the config files of clients that keep one.
 ///

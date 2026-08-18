@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 @MainActor
 final class CommandExecutor {

@@ -1,0 +1,253 @@
+import XCTest
+
+@testable import PriorityCore
+
+final class CompletionMilestonePolicyTests: XCTestCase {
+
+  // MARK: - Tier selection
+
+  func testOrdinaryCompletionIsOrdinary() {
+    let milestone = CompletionMilestonePolicy.milestone(
+      for: .task(id: 1),
+      remainingVisibleTaskCount: 7,
+      ordinal: 3
+    )
+    XCTAssertEqual(milestone, .ordinary)
+    XCTAssertFalse(milestone.earnsFlourish)
+  }
+
+  /// The count is taken before the optimistic removal, so "the last one" is 1.
+  /// Off-by-one here would mean the flourish either never fires or fires one
+  /// task early, and neither is visible in a unit-less eyeball test.
+  func testLastVisibleTaskClearsTheList() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 1, ordinal: 3),
+      .listCleared
+    )
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 2, ordinal: 3),
+      .ordinary
+    )
+  }
+
+  /// Defensive: a caller that reads the count after removal passes 0. That
+  /// should still read as "the list is now empty", not fall through to ordinary.
+  func testZeroRemainingAlsoClearsTheList() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 0, ordinal: 1),
+      .listCleared
+    )
+  }
+
+  func testEveryTenthCompletionEarnsATally() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 5, ordinal: 10),
+      .dailyTally(count: 10)
+    )
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 5, ordinal: 20),
+      .dailyTally(count: 20)
+    )
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 5, ordinal: 11),
+      .ordinary
+    )
+  }
+
+  /// The day's first completion is ordinal 1, not 0 — it must not read as a
+  /// tally just because 0 is divisible by ten.
+  func testFirstCompletionOfTheDayIsNotATally() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 5, ordinal: 1),
+      .ordinary
+    )
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 5, ordinal: 0),
+      .ordinary
+    )
+  }
+
+  /// Clearing the list on your tenth completion is one celebration, not two.
+  func testClearingTheListOutranksATally() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 1, ordinal: 10),
+      .listCleared
+    )
+  }
+
+  func testDailyTickIsAlwaysDailyTicked() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .daily(id: "habit"), remainingVisibleTaskCount: 4, ordinal: 3),
+      .dailyTicked
+    )
+    // A daily never reads as "list cleared" — an empty *task* list says nothing
+    // about the dailies list it isn't in.
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .daily(id: "habit"), remainingVisibleTaskCount: 1, ordinal: 3),
+      .dailyTicked
+    )
+    // …and it outranks a tally on the same tick.
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .daily(id: "habit"), remainingVisibleTaskCount: 4, ordinal: 10),
+      .dailyTicked
+    )
+  }
+
+  func testOnlyOrdinaryCompletionsSkipTheFlourish() {
+    XCTAssertFalse(CompletionMilestone.ordinary.earnsFlourish)
+    XCTAssertTrue(CompletionMilestone.listCleared.earnsFlourish)
+    XCTAssertTrue(CompletionMilestone.dailyTicked.earnsFlourish)
+    XCTAssertTrue(CompletionMilestone.dailyTally(count: 10).earnsFlourish)
+  }
+
+  func testKindReportsWhetherItIsADaily() {
+    XCTAssertTrue(CompletionKind.daily(id: "h").isDaily)
+    XCTAssertFalse(CompletionKind.task(id: 1).isDaily)
+  }
+
+  // MARK: - Durations
+
+  /// Not zero: a zero-length animation leaves SwiftUI no frame to interpolate,
+  /// so the row would jump rather than resolve.
+  func testReducedMotionCollapsesButDoesNotRemoveDuration() {
+    XCTAssertEqual(CompletionMilestonePolicy.durationScale(reduceMotion: false), 1.0)
+    let reduced = CompletionMilestonePolicy.durationScale(reduceMotion: true)
+    XCTAssertGreaterThan(reduced, 0)
+    XCTAssertLessThan(reduced, 1.0)
+  }
+
+  /// The budget is the whole point of the seam: a preset that asks for a second
+  /// of blocking animation would delay the close request by a second.
+  func testRequestedDurationIsClampedToTheBudget() {
+    let clamped = CompletionMilestonePolicy.clampedDuration(
+      5.0,
+      budget: CompletionMilestonePolicy.inlineBudget,
+      reduceMotion: false
+    )
+    XCTAssertEqual(clamped, CompletionMilestonePolicy.inlineBudget, accuracy: 0.0001)
+  }
+
+  func testShortDurationPassesThroughUnchanged() {
+    let clamped = CompletionMilestonePolicy.clampedDuration(
+      0.05,
+      budget: CompletionMilestonePolicy.inlineBudget,
+      reduceMotion: false
+    )
+    XCTAssertEqual(clamped, 0.05, accuracy: 0.0001)
+  }
+
+  func testReducedMotionScalesBeforeClamping() {
+    let clamped = CompletionMilestonePolicy.clampedDuration(
+      0.10,
+      budget: CompletionMilestonePolicy.inlineBudget,
+      reduceMotion: true
+    )
+    XCTAssertEqual(
+      clamped,
+      0.10 * CompletionMilestonePolicy.durationScale(reduceMotion: true),
+      accuracy: 0.0001
+    )
+  }
+
+  func testNegativeDurationIsFlooredAtZero() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.clampedDuration(
+        -1, budget: CompletionMilestonePolicy.inlineBudget, reduceMotion: false),
+      0
+    )
+  }
+
+  /// The shipped sequence is ~210ms of blocking animation. If the budget ever
+  /// drifts below that, the default preset silently gets cut short.
+  func testInlineBudgetStillCoversTheShippedSequence() {
+    XCTAssertGreaterThanOrEqual(CompletionMilestonePolicy.inlineBudget, 0.21)
+    XCTAssertGreaterThan(
+      CompletionMilestonePolicy.flourishBudget,
+      CompletionMilestonePolicy.inlineBudget
+    )
+  }
+
+  // MARK: - Row treatments
+
+  /// "None" has to be inert on every axis, not just the obvious one — the row
+  /// checks `!= .none` to decide whether to colour its edge marker.
+  func testNoneTreatmentChangesNothing() {
+    let none = CelebrationRowTreatment.none
+    XCTAssertFalse(none.drawsStrikethrough)
+    XCTAssertEqual(none.tintOpacity, 0)
+    XCTAssertEqual(none.scale, 1.0)
+    XCTAssertFalse(none.collapses)
+    XCTAssertFalse(none.fades)
+  }
+
+  /// Guards the shipped look: a line, a wash, a one-percent nudge on the row,
+  /// and a pop on the checkmark.
+  func testStrikeTreatmentMatchesTheShippedLook() {
+    XCTAssertTrue(CelebrationRowTreatment.strike.drawsStrikethrough)
+    XCTAssertEqual(CelebrationRowTreatment.strike.tintOpacity, 0.14, accuracy: 0.0001)
+    XCTAssertEqual(CelebrationRowTreatment.strike.scale, 1.01, accuracy: 0.0001)
+    XCTAssertEqual(CelebrationRowTreatment.strike.iconPop, 1.35, accuracy: 0.0001)
+    XCTAssertFalse(CelebrationRowTreatment.strike.collapses)
+  }
+
+  /// The retune's whole premise. A row is full-bleed and has no nearby edge to
+  /// measure a percent or two against, so the row scale was doing the work
+  /// invisibly; the glyph is small and fixated on, so the same emphasis reads
+  /// there. If a future preset ever inverts this, it should be deliberate.
+  func testTheIconCarriesMoreEmphasisThanTheRow() {
+    for treatment in [CelebrationRowTreatment.strike, .spark] {
+      XCTAssertGreaterThan(
+        treatment.iconPop - 1.0, treatment.scale - 1.0,
+        "the glyph is where a completion is felt, not the row")
+    }
+  }
+
+  /// Fold removes the row; a glyph growing while its container folds shut is
+  /// two effects fighting, which is the same reason Fold has no strikethrough.
+  func testFoldDoesNotPopTheIcon() {
+    XCTAssertEqual(CelebrationRowTreatment.fold.iconPop, 1.0, accuracy: 0.0001)
+  }
+
+  func testNoneLeavesTheIconAlone() {
+    XCTAssertEqual(CelebrationRowTreatment.none.iconPop, 1.0, accuracy: 0.0001)
+  }
+
+  /// The collapse is the statement; a line through a vanishing row is two
+  /// effects fighting.
+  func testFoldCollapsesAndDoesNotStrikeThrough() {
+    XCTAssertTrue(CelebrationRowTreatment.fold.collapses)
+    XCTAssertTrue(CelebrationRowTreatment.fold.fades)
+    XCTAssertFalse(CelebrationRowTreatment.fold.drawsStrikethrough)
+  }
+
+  func testSparkKeepsTheStrikeUnderABrighterWash() {
+    XCTAssertTrue(CelebrationRowTreatment.spark.drawsStrikethrough)
+    XCTAssertGreaterThan(
+      CelebrationRowTreatment.spark.tintOpacity,
+      CelebrationRowTreatment.strike.tintOpacity
+    )
+    XCTAssertFalse(CelebrationRowTreatment.spark.collapses)
+  }
+
+  func testEveryTreatmentIsDistinguishableFromNone() {
+    for treatment in [
+      CelebrationRowTreatment.strike,
+      CelebrationRowTreatment.fold,
+      CelebrationRowTreatment.spark,
+    ] {
+      XCTAssertNotEqual(treatment, .none)
+    }
+  }
+}

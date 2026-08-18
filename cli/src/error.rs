@@ -7,8 +7,8 @@ use std::fmt;
 /// argument, a missing credential, a Checkvist refusal, an unwritable file —
 /// ends up in the same two places, an `isError` MCP result or a line on stderr,
 /// and none of the callers branch on the kind. `status` and `body` carry the
-/// HTTP detail when there is one, matching `CheckvistError` in
-/// `scripts/priority_mcp_server.py` so the MCP error payloads agree.
+/// HTTP detail when there is one, matching `CheckvistError` in the app's MCP
+/// server so the error payloads agree.
 #[derive(Debug)]
 pub struct ToolError {
     pub message: String,

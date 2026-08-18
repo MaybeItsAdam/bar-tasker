@@ -90,6 +90,9 @@ struct PendingTaskUpdate: Sendable, Codable {
       loadAbsolutePriorityQueue(for: listId)
       loadEisenhowerLevels(for: listId)
       loadExpandedTaskIds(for: listId)
+      // Suppressions are ids in the list we just left; against a different
+      // list they would hide unrelated tasks that happen to share an id.
+      completionSuppressionByTaskId = [:]
       onListIdChanged?(listId)
     }
   }
@@ -168,24 +171,59 @@ struct PendingTaskUpdate: Sendable, Codable {
   @ObservationIgnored var loadingOperationCount: Int = 0
   @ObservationIgnored var hasAttemptedRemoteKeyBootstrap: Bool = false
 
+  // MARK: - In-Flight Fetch State
+
+  /// Bumped for every fetch issued. A response carrying an older generation is
+  /// stale by definition — a newer fetch has been issued since — so it must not
+  /// be written over `tasks`. Fetches come from several places at once (the
+  /// become-active auto-refresh, the refresh button, every mutation's refetch,
+  /// the reorder resync, the offline flush) and nothing serialises them, so
+  /// without this the answers can land out of order.
+  @ObservationIgnored private var fetchGeneration = 0
+
+  /// Tasks the user has closed, invalidated or deleted locally, mapped to the
+  /// first fetch generation allowed to contradict that.
+  ///
+  /// A fetch already in flight when the user completes a task answers with the
+  /// pre-close list, and applying it verbatim brought the row straight back —
+  /// the completed task reappearing, minus its priority rank, until the next
+  /// refresh. Only a fetch issued *after* the close went out can speak to
+  /// whether the task is still open.
+  @ObservationIgnored private var completionSuppressionByTaskId: [Int: Int] = [:]
+
+  /// Bumped whenever the offline queues change.
+  ///
+  /// The queues themselves are `@ObservationIgnored` on purpose — they are
+  /// written on hot mutation paths and nothing renders them directly — which
+  /// left `hasPendingOfflineWork` computed entirely from unobserved storage,
+  /// so it could never drive a UI indicator. Only `SyncService` reads it today,
+  /// so this was a trap rather than a bug; the revision closes it without
+  /// making the arrays themselves observable. Every queue write goes through
+  /// `persistPendingOfflineWork()` or `clearPendingOfflineWork()`, which is
+  /// what makes one counter sufficient.
+  private(set) var pendingOfflineWorkRevision = 0
+
   /// True when any offline-queued work is awaiting a reconnect flush.
   var hasPendingOfflineWork: Bool {
-    !pendingTaskMutations.isEmpty
+    _ = pendingOfflineWorkRevision
+    return !pendingTaskMutations.isEmpty
       || !pendingTaskCreates.isEmpty
       || !pendingTaskActions.isEmpty
       || !pendingTaskDeletes.isEmpty
   }
 
-  /// Wipes the in-memory queues *and* the on-disk payload. Use this when the
-  /// queued work is being abandoned (list switch) or has been successfully
-  /// drained — callers that want to re-stash on failure should re-enqueue
-  /// after calling this.
+  /// Wipes the in-memory queues *and* the on-disk payload. Only for work that
+  /// is genuinely being abandoned — switching lists, where the queued ids refer
+  /// to a list we are leaving. Replay does *not* use this: it removes each item
+  /// as the server confirms it, so that quitting mid-flush cannot discard work
+  /// that has not been applied yet.
   func clearPendingOfflineWork() {
     pendingTaskMutations = [:]
     pendingTaskCreates = []
     pendingTaskActions = []
     pendingTaskDeletes = []
     pendingOfflineWorkStore.clear()
+    pendingOfflineWorkRevision &+= 1
   }
 
   // MARK: - Pending-queue enqueue helpers (write-through to disk)
@@ -216,6 +254,85 @@ struct PendingTaskUpdate: Sendable, Codable {
     persistPendingOfflineWork()
   }
 
+  // MARK: - Pending-queue removal helpers (write-through to disk)
+  //
+  // The replay in `SyncService.flushPendingTaskMutations` removes each item as
+  // it is confirmed, rather than clearing the whole queue up front and
+  // re-stashing the failures. The old shape wiped the on-disk payload before
+  // the first request went out, so quitting or crashing mid-flush lost every
+  // item that had not yet failed — the queue exists precisely to survive that.
+
+  /// Remove a create once the server has acknowledged it.
+  func removePendingCreate(tempId: Int) {
+    guard let idx = pendingTaskCreates.firstIndex(where: { $0.tempId == tempId }) else { return }
+    pendingTaskCreates.remove(at: idx)
+    persistPendingOfflineWork()
+  }
+
+  /// Remove a delete once it has been applied (or found to be moot).
+  func removePendingDelete(_ taskId: Int) {
+    guard let idx = pendingTaskDeletes.firstIndex(of: taskId) else { return }
+    pendingTaskDeletes.remove(at: idx)
+    persistPendingOfflineWork()
+  }
+
+  /// Remove one queued action. Matches on id *and* action so a task with both a
+  /// close and a reopen queued loses only the one that was replayed.
+  func removePendingAction(taskId: Int, action: CheckvistTaskAction) {
+    guard
+      let idx = pendingTaskActions.firstIndex(where: {
+        $0.taskId == taskId && $0.action == action
+      })
+    else { return }
+    pendingTaskActions.remove(at: idx)
+    persistPendingOfflineWork()
+  }
+
+  /// Remove a queued content/due update.
+  func removePendingMutation(taskId: Int) {
+    guard pendingTaskMutations.removeValue(forKey: taskId) != nil else { return }
+    persistPendingOfflineWork()
+  }
+
+  // MARK: - Pending-queue retargeting
+  //
+  // When a create replays successfully but the work queued behind it then
+  // fails, that work is still filed under the placeholder id. Re-filing it
+  // under the real server id means the next flush can send it without needing
+  // this flush's temp→real mapping, which does not outlive the call.
+
+  /// Re-file a queued delete from `oldId` to `newId`. No-op when they match.
+  func retargetPendingDelete(from oldId: Int, to newId: Int) {
+    guard oldId != newId else { return }
+    if let idx = pendingTaskDeletes.firstIndex(of: oldId) {
+      pendingTaskDeletes[idx] = newId
+    } else {
+      pendingTaskDeletes.append(newId)
+    }
+    persistPendingOfflineWork()
+  }
+
+  /// Re-file a queued action from `oldId` to `newId`. No-op when they match.
+  func retargetPendingAction(from oldId: Int, to newId: Int, action: CheckvistTaskAction) {
+    guard oldId != newId else { return }
+    if let idx = pendingTaskActions.firstIndex(where: {
+      $0.taskId == oldId && $0.action == action
+    }) {
+      pendingTaskActions[idx] = PendingTaskAction(taskId: newId, action: action)
+    } else {
+      pendingTaskActions.append(PendingTaskAction(taskId: newId, action: action))
+    }
+    persistPendingOfflineWork()
+  }
+
+  /// Re-file a queued update from `oldId` to `newId`. No-op when they match.
+  func retargetPendingMutation(from oldId: Int, to newId: Int) {
+    guard oldId != newId else { return }
+    let carried = pendingTaskMutations.removeValue(forKey: oldId)
+    pendingTaskMutations[newId] = carried ?? pendingTaskMutations[newId]
+    persistPendingOfflineWork()
+  }
+
   /// Drop any queued work that targets a still-pending temp create. Returns
   /// `true` if the create was found and cancelled — callers (delete) can use
   /// that to short-circuit the round-trip create+delete on the server.
@@ -243,6 +360,7 @@ struct PendingTaskUpdate: Sendable, Codable {
         actions: pendingTaskActions,
         deletes: pendingTaskDeletes,
         mutations: codableMutations))
+    pendingOfflineWorkRevision &+= 1
   }
 
   // MARK: - Computed Properties
@@ -384,6 +502,88 @@ struct PendingTaskUpdate: Sendable, Codable {
     } else if !pendingPayload.isEmpty {
       resolvedPendingOfflineWorkStore.clear()
     }
+  }
+}
+
+// MARK: - In-Flight Fetch Coordination
+
+extension TaskRepository {
+  /// Opens a fetch. Hand the returned generation back to
+  /// `isLatestFetchGeneration` once the response arrives, and to
+  /// `filteringLocallyCompletedTasks(from:generation:)` before applying it.
+  @MainActor func beginFetchGeneration() -> Int {
+    fetchGeneration += 1
+    return fetchGeneration
+  }
+
+  /// False once a newer fetch has been issued: that one owns `tasks` now, and
+  /// letting this response land would put back whatever it superseded.
+  @MainActor func isLatestFetchGeneration(_ generation: Int) -> Bool {
+    generation == fetchGeneration
+  }
+
+  /// Records `taskIds` as completed locally, so no fetch already in flight can
+  /// bring them back. Only a fetch issued from here on is trusted about them.
+  @MainActor func suppressLocallyCompletedTasks(_ taskIds: Set<Int>) {
+    guard !taskIds.isEmpty else { return }
+    let firstTrustedGeneration = fetchGeneration + 1
+    for taskId in taskIds {
+      completionSuppressionByTaskId[taskId] = firstTrustedGeneration
+    }
+  }
+
+  /// Lifts `suppressLocallyCompletedTasks`. Call it whenever an optimistic
+  /// completion is undone — a rolled-back close, or a reopen — or the task
+  /// stays invisible even though the server still lists it open.
+  @MainActor func unsuppressLocallyCompletedTasks(_ taskIds: Set<Int>) {
+    for taskId in taskIds {
+      completionSuppressionByTaskId.removeValue(forKey: taskId)
+    }
+  }
+
+  /// Strips tasks the user has completed locally out of a fetch response, and
+  /// retires each suppression this response was new enough to speak for: it was
+  /// issued after the close, so its answer is now the truth. If it still lists
+  /// the task as open (the close silently didn't take, or it was reopened
+  /// elsewhere) the task reappears on the *next* fetch rather than being hidden
+  /// forever.
+  ///
+  /// Two sources feed the filter. The suppression map covers a close that has
+  /// gone out but hasn't been confirmed; the offline queue covers one that
+  /// hasn't gone out at all, and that one has no generation attached because it
+  /// stays true for exactly as long as the work is queued — which is what keeps
+  /// tasks completed offline from reappearing after a relaunch.
+  @MainActor func filteringLocallyCompletedTasks(
+    from fetchedTasks: [CheckvistTask], generation: Int
+  ) -> [CheckvistTask] {
+    var hiddenTaskIds = Set(completionSuppressionByTaskId.keys)
+    hiddenTaskIds.formUnion(offlineCompletedTaskIds)
+
+    let retiredTaskIds = completionSuppressionByTaskId
+      .filter { $0.value <= generation }
+      .map(\.key)
+    for taskId in retiredTaskIds {
+      completionSuppressionByTaskId.removeValue(forKey: taskId)
+    }
+
+    guard !hiddenTaskIds.isEmpty else { return fetchedTasks }
+    return fetchedTasks.filter { !hiddenTaskIds.contains($0.id) }
+  }
+
+  /// Ids whose close, invalidate or delete is still waiting in the offline
+  /// queue. Walked in order so a reopen queued behind a close wins — the
+  /// ancestor reopens that defeat Checkvist's cascade sit behind a child close,
+  /// so the order genuinely matters.
+  private var offlineCompletedTaskIds: Set<Int> {
+    var closed: Set<Int> = []
+    for pending in pendingTaskActions {
+      switch pending.action {
+      case .close, .invalidate: closed.insert(pending.taskId)
+      case .reopen: closed.remove(pending.taskId)
+      }
+    }
+    closed.formUnion(pendingTaskDeletes)
+    return closed
   }
 }
 

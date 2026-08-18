@@ -1,7 +1,13 @@
 import AppKit
 import OSLog
+import PriorityCore
 
 @MainActor
+// The dispatch below is still one long function: 60 binding branches, each
+// with a body that reaches a different manager. `ShortcutGate`,
+// `ShortcutSequenceBuffer` and `ShortcutResolver` have taken the *decisions*
+// out to `PriorityCore` where they are tested; what is left is the performing,
+// and splitting that by line count alone would not make it clearer.
 // swiftlint:disable type_body_length function_body_length cyclomatic_complexity
 struct KeyboardShortcutRouter {
   let manager: AppCoordinator
@@ -16,9 +22,11 @@ struct KeyboardShortcutRouter {
     let ctrl = event.modifierFlags.contains(.control)
     let cmd = event.modifierFlags.contains(.command)
     let option = event.modifierFlags.contains(.option)
-    let keyToken = Self.keyToken(
-      event: event,
-      charsIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+    // The token spelling lives in `PriorityCore` alongside
+    // `ConfigurableShortcutAction.defaultBinding`, which has to agree with it.
+    let keyToken = ShortcutKeyToken.make(
+      keyCode: event.keyCode,
+      charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
       shift: shift,
       ctrl: ctrl,
       cmd: cmd,
@@ -33,107 +41,27 @@ struct KeyboardShortcutRouter {
     // The binding can drift briefly during AppKit focus changes; trust the native
     // first responder so Enter stays with the active text field.
     let isFocused = manager.quickEntry.isQuickEntryFocused || typingInNativeTextField
-    if manager.needsInitialSetup {
-      // During onboarding, let all key events through to the setup form.
-      // Only handle Escape to close the window.
-      manager.quickEntry.keyBuffer = ""
-      if event.keyCode == 53 {
-        closeWindow()
-        return true
-      }
-      return false
-    }
-    // Only the plugin-selection bar swallows shortcuts. Its rows are focusable
-    // switches and Space is the default `markDone` binding, so letting keys
-    // through would mark a task done instead of flipping the switch the user is
-    // sitting on. The other bars are single-action notices with nothing to
-    // focus, and `.checkvist` in particular stays up until it is dismissed —
-    // blocking there left the list keyboard-dead for as long as someone put off
-    // connecting.
-    if manager.onboardingService.activeOnboardingDialog == .pluginSelection {
-      manager.quickEntry.keyBuffer = ""
-      if event.keyCode == 53 {
-        closeWindow()
-        return true
-      }
-      return false
-    }
-    if !isFocused, let phase = manager.focusSessionManager.phase {
-      if event.keyCode == 53 {  // Escape always ends the whole session.
-        manager.focusSessionManager.cancelSession()
-        manager.timer.pauseTimer()
-        updateTitle()
-        return true
-      }
-      if event.keyCode == 36 {  // Enter advances the pomodoro flow.
-        switch phase {
-        case .running:
-          break
-        case .focusCompleted:
-          manager.focusSessionManager.startBreak()
-          return true
-        case .breakRunning:
-          manager.focusSessionManager.skipBreak()
-          return true
-        case .breakCompleted:
-          if let taskId = manager.focusSessionManager.lastFocusedTaskId {
-            let baseline = manager.timer.timerByTaskId[taskId, default: 0]
-            if !manager.timer.timerIsEnabled {
-              manager.timer.timerMode = .visible
-            }
-            if manager.timer.timedTaskId == taskId {
-              if !manager.timer.timerRunning {
-                manager.timer.resumeTimer()
-              }
-            } else {
-              manager.timer.toggleTimer(forTaskId: taskId)
-            }
-            manager.focusSessionManager.startAnotherSession(baselineElapsed: baseline)
-            updateTitle()
-          }
-          return true
-        }
-      }
-      return true
-    }
-    if let focusTaskId = manager.focusSessionManager.promptTaskId {
-      // Esc always cancels.
-      if event.keyCode == 53 {
-        manager.focusSessionManager.dismissPrompt()
-        return true
-      }
-      // Enter starts the session.
-      if event.keyCode == 36 {
-        let baselineElapsed = manager.timer.timerByTaskId[focusTaskId, default: 0]
-        if !manager.timer.timerIsEnabled {
-          manager.timer.timerMode = .visible
-        }
-        if manager.timer.timedTaskId == focusTaskId {
-          if !manager.timer.timerRunning {
-            manager.timer.resumeTimer()
-          }
-        } else {
-          manager.timer.toggleTimer(forTaskId: focusTaskId)
-        }
-        manager.focusSessionManager.startSession(baselineElapsed: baselineElapsed)
-        updateTitle()
-        return true
-      }
-      if !isFocused {
-        // Up / Right increases, Down / Left decreases. Shift = step of 5.
-        if event.keyCode == 126 || event.keyCode == 124 {
-          manager.focusSessionManager.adjustDuration(by: shift ? 5 : 1)
-          return true
-        }
-        if event.keyCode == 125 || event.keyCode == 123 {
-          manager.focusSessionManager.adjustDuration(by: shift ? -5 : -1)
-          return true
-        }
-        // Block other keys so they don't mutate the underlying view.
-        return true
-      }
-      // Otherwise let the event through so the TextField can process digits.
-      return false
+    // The modal gates — onboarding, the plugin-selection dialog, a running
+    // focus session, the focus prompt — decide whether anything below is
+    // reached at all. The decision and its precedence live in `PriorityCore`
+    // so they can be tested; this is only the part that performs it.
+    let gate = ShortcutGate.evaluate(
+      ShortcutGate.State(
+        needsInitialSetup: manager.needsInitialSetup,
+        showsPluginSelectionDialog:
+          manager.onboardingService.activeOnboardingDialog == .pluginSelection,
+        focusSessionPhase: manager.focusSessionManager.phase.map(Self.gatePhase),
+        hasFocusPrompt: manager.focusSessionManager.promptTaskId != nil,
+        isTextEntryFocused: isFocused
+      ),
+      keyCode: event.keyCode,
+      shift: shift
+    )
+    for action in gate.actions { perform(action) }
+    switch gate.disposition {
+    case .handled: return true
+    case .notHandled: return false
+    case .continueDispatch: break
     }
     let isRepeat = event.isARepeat
     let chars = event.charactersIgnoringModifiers ?? ""
@@ -141,6 +69,23 @@ struct KeyboardShortcutRouter {
       manager.navigationState.rootScopeFocusLevel = 0
     }
     let rootScopeFocused = manager.taskListViewModel.shouldShowRootScopeSection && manager.navigationState.rootScopeFocusLevel > 0
+    // Where each binding is live is `ShortcutResolver`'s table, not a guard
+    // written out again here. The two used to be the same thing stated twice,
+    // which is how the Daily view's Cmd+arrow reorder came to be unreachable.
+    let shortcutContext = ShortcutContext(
+      rootTaskView: manager.taskListViewModel.rootTaskView,
+      isTextEntryFocused: isFocused,
+      isRootScopeFocused: rootScopeFocused,
+      showsRootScopeSection: manager.taskListViewModel.shouldShowRootScopeSection,
+      showsRootFilterControls: manager.taskListViewModel.rootScopeShowsFilterControls,
+      hasCommandModifiers: ctrl || cmd || option
+    )
+    func claims(
+      _ action: ConfigurableShortcutAction,
+      scope: ShortcutResolver.Scope = .general
+    ) -> Bool {
+      ShortcutResolver.permits(action, scope: scope, in: shortcutContext) && matches(action)
+    }
     // Allow UP arrow to enter the scope row when at the top of the current view.
     // In kanban mode, visibleTasks is intentionally empty (kanban uses per-column task lists),
     // so we check the focused column's first task instead.
@@ -164,7 +109,7 @@ struct KeyboardShortcutRouter {
     #endif
 
     // Reliable fallback for command/actions prompt.
-    if !isFocused && matches(.openCommandPalette) {
+    if claims(.openCommandPalette) {
       manager.quickEntry.keyBuffer = ""
       manager.quickEntry.quickEntryMode = .command
       manager.quickEntry.quickEntryText = ""
@@ -223,59 +168,55 @@ struct KeyboardShortcutRouter {
 
     // Root scope keyboard navigation:
     // Ctrl+←/→ switches root tabs. Ctrl+↑/↓ cycles Due bucket or Tag filter.
-    if manager.taskListViewModel.shouldShowRootScopeSection && !isFocused {
-      if matches(.rootCycleTabPrevious) {
-        manager.taskNavigationService.cycleRootTaskView(direction: -1)
-        return true
-      }
-      if matches(.rootCycleTabNext) {
-        manager.taskNavigationService.cycleRootTaskView(direction: 1)
-        return true
-      }
-      if matches(.rootCycleFilterPrevious) {
-        manager.taskNavigationService.cycleRootScopeFilter(direction: -1)
-        return true
-      }
-      if matches(.rootCycleFilterNext) {
-        manager.taskNavigationService.cycleRootScopeFilter(direction: 1)
-        return true
-      }
+    if claims(.rootCycleTabPrevious) {
+      manager.taskNavigationService.cycleRootTaskView(direction: -1)
+      return true
+    }
+    if claims(.rootCycleTabNext) {
+      manager.taskNavigationService.cycleRootTaskView(direction: 1)
+      return true
+    }
+    if claims(.rootCycleFilterPrevious) {
+      manager.taskNavigationService.cycleRootScopeFilter(direction: -1)
+      return true
+    }
+    if claims(.rootCycleFilterNext) {
+      manager.taskNavigationService.cycleRootScopeFilter(direction: 1)
+      return true
     }
 
     // Cmd+←/→ - move task to adjacent kanban column (kanban mode only).
-    if manager.taskListViewModel.rootTaskView == .kanban && !isFocused {
-      if matches(.kanbanMoveLeft) {
-        if !isRepeat {
-          manager.moveCurrentTaskToKanbanColumn(direction: -1)
-        }
-        return true
+    if claims(.kanbanMoveLeft) {
+      if !isRepeat {
+        manager.moveCurrentTaskToKanbanColumn(direction: -1)
       }
-      if matches(.kanbanMoveRight) {
-        if !isRepeat {
-          manager.moveCurrentTaskToKanbanColumn(direction: 1)
-        }
-        return true
+      return true
+    }
+    if claims(.kanbanMoveRight) {
+      if !isRepeat {
+        manager.moveCurrentTaskToKanbanColumn(direction: 1)
       }
-      if matches(.kanbanShowInAll) {
-        if !isRepeat, let task = manager.kanban.currentKanbanTask {
-          let childCounts = manager.taskListViewModel.childCountByTaskId()
-          manager.taskListViewModel.rootTaskView = .all
-          manager.navigationState.rootScopeFocusLevel = 0
-          if childCounts[task.id, default: 0] > 0 {
-            manager.navigationState.currentParentId = task.id
-            manager.navigationState.currentSiblingIndex = 0
-          } else {
-            manager.taskNavigationService.navigate(to: task)
-          }
+      return true
+    }
+    if claims(.kanbanShowInAll) {
+      if !isRepeat, let task = manager.kanban.currentKanbanTask {
+        let childCounts = manager.taskListViewModel.childCountByTaskId()
+        manager.taskListViewModel.rootTaskView = .all
+        manager.navigationState.rootScopeFocusLevel = 0
+        if childCounts[task.id, default: 0] > 0 {
+          manager.navigationState.currentParentId = task.id
+          manager.navigationState.currentSiblingIndex = 0
+        } else {
+          manager.taskNavigationService.navigate(to: task)
         }
-        return true
       }
+      return true
     }
 
     // ] / [ - enter or exit the selected task as the current scope.
     // Works in every view: kanban uses its scoped drill, other views use the
     // shared parent-id navigation so the keybind behaves consistently.
-    if !isFocused && !rootScopeFocused && matches(.kanbanEnterTaskChildren) {
+    if claims(.kanbanEnterTaskChildren) {
       if !isRepeat {
         if manager.taskListViewModel.rootTaskView == .kanban {
           manager.kanban.enterSelectedTaskAsScope()
@@ -291,14 +232,14 @@ struct KeyboardShortcutRouter {
       }
       return true
     }
-    if !isFocused && !rootScopeFocused && matches(.kanbanFocusMode) {
+    if claims(.kanbanFocusMode) {
       if !isRepeat, let task = manager.taskListViewModel.currentTask {
         manager.focusSessionManager.presentPrompt(forTaskId: task.id)
         updateTitle()
       }
       return true
     }
-    if !isFocused && !rootScopeFocused && matches(.kanbanExitToTaskParent) {
+    if claims(.kanbanExitToTaskParent) {
       if !isRepeat {
         if manager.taskListViewModel.rootTaskView == .kanban {
           manager.kanban.exitToParentScope()
@@ -315,19 +256,8 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    // Cmd+↑/↓ - reorder. Optimistic UI is applied synchronously in moveTask;
-    // the API request is queued so key repeat coalesces into the reorder queue.
-    if matches(.moveTaskDown) {
-      Task { if let task = manager.taskListViewModel.currentTask { await manager.syncService.moveTask(task, direction: 1) } }
-      return true
-    }
-    if matches(.moveTaskUp) {
-      Task { if let task = manager.taskListViewModel.currentTask { await manager.syncService.moveTask(task, direction: -1) } }
-      return true
-    }
-
     // o / O - open selected task in Obsidian / new Obsidian window.
-    if !isFocused && matches(.openInObsidian) {
+    if claims(.openInObsidian) {
       if !isRepeat {
         Task {
           await manager.integrations.syncTaskToObsidian(taskId: nil, openMode: .standard)
@@ -336,7 +266,7 @@ struct KeyboardShortcutRouter {
       }
       return true
     }
-    if !isFocused && matches(.openInObsidianNewWindow) {
+    if claims(.openInObsidianNewWindow) {
       if !isRepeat {
         Task {
           await manager.integrations.syncTaskToObsidian(taskId: nil, openMode: .newWindow)
@@ -351,11 +281,11 @@ struct KeyboardShortcutRouter {
     // own surface and has no `visibleTasks` to move through; falling into
     // `taskNavigationService` here would move a selection nothing is showing.
     if manager.taskListViewModel.rootTaskView == .daily && !isFocused && !rootScopeFocused {
-      if matches(.nextTask) {
+      if claims(.nextTask, scope: .daily) {
         manager.dailyLog.moveDailySelection(by: 1)
         return true
       }
-      if matches(.previousTask) {
+      if claims(.previousTask, scope: .daily) {
         // Only claim Up once the top of the list is passed, so the root scope
         // row stays reachable exactly as it is in every other view.
         if manager.dailyLog.selectedDailyIndex > 0 {
@@ -377,19 +307,38 @@ struct KeyboardShortcutRouter {
         }
         return true
       }
-      if matches(.addSibling) {
+      if claims(.addSibling, scope: .daily) {
         if !isRepeat { manager.dailyLog.isAddingDaily = true }
         return true
       }
+      // Rename in place. Both edit bindings open the same field: a daily is one
+      // short line, so "caret at the start" versus "at the end" is a
+      // distinction without a difference here, and having only one of the two
+      // work would just look broken.
+      if claims(.editTaskAtEnd, scope: .daily) || claims(.editTaskAtStart, scope: .daily) {
+        if !isRepeat { manager.dailyLog.beginEditingSelectedDaily() }
+        return true
+      }
+      // Archives rather than removes, which is what makes it safe to do without
+      // a confirmation — see `DailyLogManager.deleteDaily`. The status line
+      // says where it went, because a row vanishing with no explanation is
+      // indistinguishable from having lost it.
+      if claims(.deleteTask, scope: .daily) {
+        if !isRepeat, let daily = manager.dailyLog.deleteSelectedDaily() {
+          manager.statusMessage =
+            "Deleted \"\(daily.title)\" — restore it in Preferences › Daily Log"
+        }
+        return true
+      }
       // Cmd+↑/↓ reorders, same gesture as moving a task in the list views.
-      if matches(.moveTaskUp) {
+      if claims(.moveTaskUp, scope: .daily) {
         if !isRepeat, let daily = manager.dailyLog.selectedDaily {
           manager.dailyLog.moveDaily(daily, by: -1)
           manager.dailyLog.moveDailySelection(by: -1)
         }
         return true
       }
-      if matches(.moveTaskDown) {
+      if claims(.moveTaskDown, scope: .daily) {
         if !isRepeat, let daily = manager.dailyLog.selectedDaily {
           manager.dailyLog.moveDaily(daily, by: 1)
           manager.dailyLog.moveDailySelection(by: 1)
@@ -398,8 +347,25 @@ struct KeyboardShortcutRouter {
       }
     }
 
+    // Cmd+↑/↓ - reorder. Optimistic UI is applied synchronously in moveTask;
+    // the API request is queued so key repeat coalesces into the reorder queue.
+    //
+    // After the Daily view, deliberately. This ran before it until the
+    // `ShortcutResolver` table made the shadowing visible: the Daily branch
+    // above binds the same gesture to reordering a *daily*, and never saw it,
+    // so Cmd+↑/↓ in the Daily view silently reordered a task in the list
+    // underneath instead.
+    if claims(.moveTaskDown) {
+      Task { if let task = manager.taskListViewModel.currentTask { await manager.syncService.moveTask(task, direction: 1) } }
+      return true
+    }
+    if claims(.moveTaskUp) {
+      Task { if let task = manager.taskListViewModel.currentTask { await manager.syncService.moveTask(task, direction: -1) } }
+      return true
+    }
+
     // Up/Down arrows - list navigation + root scope navigation.
-    if !isFocused && matches(.nextTask) {
+    if claims(.nextTask) {
       if rootScopeFocused {
         if manager.navigationState.rootScopeFocusLevel == 1 && manager.taskListViewModel.rootScopeShowsFilterControls {
           manager.navigationState.rootScopeFocusLevel = 2
@@ -416,7 +382,7 @@ struct KeyboardShortcutRouter {
       updateTitle()
       return true
     }
-    if !isFocused && matches(.previousTask) {
+    if claims(.previousTask) {
       if rootScopeFocused {
         if manager.navigationState.rootScopeFocusLevel == 2 {
           manager.navigationState.rootScopeFocusLevel = 1
@@ -436,46 +402,42 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    if rootScopeFocused && !isFocused && !ctrl && !cmd && !option {
-      if matches(.enterChildren) {
-        if manager.navigationState.rootScopeFocusLevel == 1 {
-          manager.taskNavigationService.cycleRootTaskView(direction: 1)
-        } else if manager.navigationState.rootScopeFocusLevel == 2 {
-          manager.taskNavigationService.cycleRootScopeFilter(direction: 1)
-        }
-        return true
+    if claims(.enterChildren, scope: .rootScopeRow) {
+      if manager.navigationState.rootScopeFocusLevel == 1 {
+        manager.taskNavigationService.cycleRootTaskView(direction: 1)
+      } else if manager.navigationState.rootScopeFocusLevel == 2 {
+        manager.taskNavigationService.cycleRootScopeFilter(direction: 1)
       }
-      if matches(.exitToParent) {
-        if manager.navigationState.rootScopeFocusLevel == 1 {
-          manager.taskNavigationService.cycleRootTaskView(direction: -1)
-        } else if manager.navigationState.rootScopeFocusLevel == 2 {
-          manager.taskNavigationService.cycleRootScopeFilter(direction: -1)
-        }
-        return true
+      return true
+    }
+    if claims(.exitToParent, scope: .rootScopeRow) {
+      if manager.navigationState.rootScopeFocusLevel == 1 {
+        manager.taskNavigationService.cycleRootTaskView(direction: -1)
+      } else if manager.navigationState.rootScopeFocusLevel == 2 {
+        manager.taskNavigationService.cycleRootScopeFilter(direction: -1)
       }
-      if event.keyCode == 36 || event.keyCode == 53 {
-        manager.navigationState.rootScopeFocusLevel = 0
-        return true
-      }
+      return true
+    }
+    if event.keyCode == 36 || event.keyCode == 53 {
+      manager.navigationState.rootScopeFocusLevel = 0
+      return true
     }
 
     // In kanban mode, ←/→ (h/l) navigate between columns without moving the task.
-    if manager.taskListViewModel.rootTaskView == .kanban && !isFocused && !rootScopeFocused {
-      if matches(.kanbanFocusLeft) {
-        manager.kanban.focusKanbanColumn(direction: -1)
-        updateTitle()
-        return true
-      }
-      if matches(.kanbanFocusRight) {
-        manager.kanban.focusKanbanColumn(direction: 1)
-        updateTitle()
-        return true
-      }
+    if claims(.kanbanFocusLeft) {
+      manager.kanban.focusKanbanColumn(direction: -1)
+      updateTitle()
+      return true
+    }
+    if claims(.kanbanFocusRight) {
+      manager.kanban.focusKanbanColumn(direction: 1)
+      updateTitle()
+      return true
     }
 
     // Shift+→ / Shift+← - zoom the whole list into the selected task, or back
     // out of it. The scope-changing pair, as `]` / `[` are in every view.
-    if !isFocused && !rootScopeFocused && matches(.zoomIntoTask) {
+    if claims(.zoomIntoTask) {
       manager.navigationState.rootScopeFocusLevel = 0
       if manager.taskListViewModel.rootTaskView == .kanban {
         manager.kanban.enterSelectedTaskAsScope()
@@ -486,7 +448,7 @@ struct KeyboardShortcutRouter {
       updateTitle()
       return true
     }
-    if !isFocused && !rootScopeFocused && matches(.zoomOutOfTask) {
+    if claims(.zoomOutOfTask) {
       manager.navigationState.rootScopeFocusLevel = 0
       if manager.taskListViewModel.rootTaskView == .kanban {
         manager.kanban.exitToParentScope()
@@ -498,7 +460,7 @@ struct KeyboardShortcutRouter {
       return true
     }
     // → - open the selected row in place, then walk into what it shows.
-    if matches(.enterChildren) {
+    if claims(.enterChildren) {
       if isFocused { return false }
       manager.navigationState.rootScopeFocusLevel = 0
       manager.taskNavigationService.expandOrDescend()
@@ -506,7 +468,7 @@ struct KeyboardShortcutRouter {
       return true
     }
     // ← - shut the row, step back up to its parent, or leave the scope.
-    if matches(.exitToParent) {
+    if claims(.exitToParent) {
       if isFocused { return false }
       manager.navigationState.rootScopeFocusLevel = 0
       manager.taskNavigationService.collapseOrAscend()
@@ -516,7 +478,7 @@ struct KeyboardShortcutRouter {
 
     // Space - mark done; Shift+Space - invalidate.
     // Ignore key repeat to prevent multiple status changes.
-    if !isFocused && !rootScopeFocused && matches(.invalidateTask) {
+    if claims(.invalidateTask) {
       if !isRepeat {
         Task {
           await manager.taskMutationService.invalidateCurrentTask()
@@ -525,7 +487,7 @@ struct KeyboardShortcutRouter {
       }
       return true
     }
-    if !isFocused && !rootScopeFocused && matches(.markDone) {
+    if claims(.markDone) {
       if !isRepeat {
         Task {
           await manager.taskMutationService.markCurrentTaskDone()
@@ -535,7 +497,7 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    if matches(.addSibling) {
+    if claims(.addSibling) {
       if rootScopeFocused {
         manager.navigationState.rootScopeFocusLevel = 0
         return true
@@ -556,7 +518,39 @@ struct KeyboardShortcutRouter {
       manager.quickEntry.isQuickEntryFocused = true
       return true
     }
-    if matches(.addChild) {
+
+    // Option+Enter - add a sibling *above* the selection, as Checkvist does.
+    // No kanban branch: a column is an unordered bucket there, so "above" has
+    // nothing to mean, and Enter's column composer already covers it.
+    if claims(.addSiblingAbove) {
+      if isFocused { return false }
+      if rootScopeFocused { return true }
+      guard manager.taskListViewModel.rootTaskView != .kanban else { return true }
+      manager.quickEntry.quickEntryMode = .addSiblingAbove
+      manager.quickEntry.quickEntryText = ""
+      manager.quickEntry.isQuickEntryFocused = true
+      return true
+    }
+
+    // Cmd+D - duplicate, Checkvist's Ctrl+D. The copy lands directly below the
+    // original with the same content; nothing else is carried over, because due
+    // dates and tags on a duplicate are as often wrong as right.
+    if claims(.duplicateTask) {
+      if !isRepeat, let task = manager.taskListViewModel.currentTask {
+        Task {
+          await manager.taskMutationService.addTask(
+            content: task.content, insertAfterTask: task)
+        }
+      }
+      return true
+    }
+
+    // ? - the keyboard reference, on the key Checkvist puts it on.
+    if claims(.showShortcutReference) {
+      if !isRepeat { manager.popoverChrome.showsShortcutReference.toggle() }
+      return true
+    }
+    if claims(.addChild) {
       if rootScopeFocused {
         manager.navigationState.rootScopeFocusLevel = 0
         return true
@@ -568,8 +562,13 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    // Tab / Shift+Tab - indent/unindent OR add child.
-    if matches(.unindentTask) {
+    // Tab / Shift+Tab - indent and unindent, as in Checkvist.
+    //
+    // Tab used to be a second binding for "add child", which left Shift+Tab as
+    // an unindent whose counterpart indented nothing. It reaches here now
+    // because `addChild` above no longer claims it — the two branches are in
+    // this order, so a stray `tab` on `addChild` would shadow the indent again.
+    if claims(.unindentTask) {
       if isFocused { return false }
       if rootScopeFocused { return true }
       if !isRepeat {
@@ -577,7 +576,7 @@ struct KeyboardShortcutRouter {
       }
       return true
     }
-    if matches(.indentTask) {
+    if claims(.indentTask) {
       if isFocused { return false }
       if rootScopeFocused { return true }
       if !isRepeat {
@@ -587,7 +586,15 @@ struct KeyboardShortcutRouter {
     }
 
     // Escape - cancel input if active; otherwise close.
-    if matches(.closeOrCancel) {
+    if claims(.closeOrCancel) {
+      // The keyboard reference first: it covers the whole panel, so whatever is
+      // behind it is not what Escape can plausibly have meant. Its filter field
+      // holds focus, which would otherwise send this down the quick-entry
+      // branch below and dismiss nothing visible.
+      if manager.popoverChrome.showsShortcutReference {
+        manager.popoverChrome.showsShortcutReference = false
+        return true
+      }
       // Dismiss kanban inline add field first.
       if manager.kanban.addingToColumnId != nil {
         manager.kanban.addingToColumnId = nil
@@ -601,6 +608,14 @@ struct KeyboardShortcutRouter {
       // still showing, because `isAddingDaily` outlives the window.
       if manager.dailyLog.isAddingDaily {
         manager.dailyLog.cancelAddingDaily()
+        return true
+      }
+      // And the rename field, for the same reason: the router runs ahead of the
+      // responder chain, so the field's own `.onExitCommand` never sees Escape.
+      // Discards the draft — the field commits on Return and on losing focus,
+      // so Escape is the only way to say "forget it".
+      if manager.dailyLog.editingDailyId != nil {
+        manager.dailyLog.cancelDailyEdit()
         return true
       }
       if rootScopeFocused {
@@ -625,7 +640,7 @@ struct KeyboardShortcutRouter {
     }
 
     // F2 - edit task, cursor at end.
-    if !isFocused && matches(.editTaskAtEnd) {
+    if claims(.editTaskAtEnd) {
       manager.quickEntry.quickEntryMode = .editTask
       manager.quickEntry.editCursorAtEnd = true
       manager.quickEntry.quickEntryText = manager.taskListViewModel.currentTask?.content ?? ""
@@ -634,7 +649,7 @@ struct KeyboardShortcutRouter {
     }
 
     // Copy task (and subtree) to clipboard
-    if !isFocused && matches(.copyTask) {
+    if claims(.copyTask) {
       if !isRepeat, let task = manager.taskListViewModel.currentTask {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -657,7 +672,7 @@ struct KeyboardShortcutRouter {
     }
 
     // Del (forward delete / Fn+Backspace) - delete task.
-    if !isFocused && matches(.deleteTask) {
+    if claims(.deleteTask) {
       if isRepeat { return true }
       if manager.preferences.confirmBeforeDelete {
         manager.quickEntry.pendingDeleteConfirmation = true
@@ -677,42 +692,40 @@ struct KeyboardShortcutRouter {
     }
 
     // q/w/e/r - root tab shortcuts: All / Due / Tags / Priority.
-    if !isFocused {
-      if matches(.rootTabAll) {
-        manager.taskNavigationService.setRootTaskView(.all)
-        updateTitle()
-        return true
-      }
-      if matches(.rootTabDue) {
-        manager.taskNavigationService.setRootTaskView(.due)
-        updateTitle()
-        return true
-      }
-      if matches(.rootTabTags) {
-        manager.taskNavigationService.setRootTaskView(.tags)
-        updateTitle()
-        return true
-      }
-      if matches(.rootTabPriority) {
-        manager.taskNavigationService.setRootTaskView(.priority)
-        updateTitle()
-        return true
-      }
-      if matches(.rootTabKanban) {
-        manager.taskNavigationService.setRootTaskView(.kanban)
-        updateTitle()
-        return true
-      }
-      if matches(.rootTabMatrix) {
-        manager.taskNavigationService.setRootTaskView(.eisenhower)
-        updateTitle()
-        return true
-      }
-      if matches(.rootTabDaily) {
-        manager.taskNavigationService.setRootTaskView(.daily)
-        updateTitle()
-        return true
-      }
+    if claims(.rootTabAll) {
+      manager.taskNavigationService.setRootTaskView(.all)
+      updateTitle()
+      return true
+    }
+    if claims(.rootTabDue) {
+      manager.taskNavigationService.setRootTaskView(.due)
+      updateTitle()
+      return true
+    }
+    if claims(.rootTabTags) {
+      manager.taskNavigationService.setRootTaskView(.tags)
+      updateTitle()
+      return true
+    }
+    if claims(.rootTabPriority) {
+      manager.taskNavigationService.setRootTaskView(.priority)
+      updateTitle()
+      return true
+    }
+    if claims(.rootTabKanban) {
+      manager.taskNavigationService.setRootTaskView(.kanban)
+      updateTitle()
+      return true
+    }
+    if claims(.rootTabMatrix) {
+      manager.taskNavigationService.setRootTaskView(.eisenhower)
+      updateTitle()
+      return true
+    }
+    if claims(.rootTabDaily) {
+      manager.taskNavigationService.setRootTaskView(.daily)
+      updateTitle()
+      return true
     }
 
     // z/x/c/v/b/n/m - lower root filter shortcuts (Due/Tags row options).
@@ -721,7 +734,7 @@ struct KeyboardShortcutRouter {
         .rootFilter1, .rootFilter2, .rootFilter3, .rootFilter4, .rootFilter5, .rootFilter6,
         .rootFilter7,
       ]
-      if let filterIndex = rootFilterActions.firstIndex(where: { matches($0) }) {
+      if let filterIndex = rootFilterActions.firstIndex(where: { claims($0) }) {
         manager.taskNavigationService.selectRootScopeFilter(at: filterIndex)
         updateTitle()
         return true
@@ -729,164 +742,142 @@ struct KeyboardShortcutRouter {
     }
 
     // Two-key sequences.
-    let sequenceActions: [ConfigurableShortcutAction] = [
-      .sequenceDue, .sequenceDueToday, .sequenceStart, .sequenceRepeat, .sequenceOpenLink,
-      .sequenceGoogleCalendar, .sequenceTag, .sequenceUntag, .sequenceToggleContext, .sequenceUrgency, .sequenceImportance, .sequenceMatrixCoord,
-    ]
+    let sequenceActions = ConfigurableShortcutAction.twoKeySequenceActions
     let sequenceTokens = sequenceActions.flatMap {
       manager.preferences.shortcutBinding(for: $0).split(separator: ",").map {
         String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
       }
     }
-    let matrixSequenceStarters: Set<String> = Set(
-      manager.preferences.shortcutBinding(for: .sequenceMatrixCoord).split(separator: ",").compactMap {
-        let token = String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard token.count >= 2 else { return nil }
-        return String(token.prefix(1))
-      }
+    let matrixSequenceStarters = ShortcutSequenceBuffer.starters(
+      fromBindings: manager.preferences.shortcutBinding(for: .sequenceMatrixCoord)
+        .split(separator: ",").map(String.init))
+    let sequenceStarters = ShortcutSequenceBuffer.starters(fromBindings: sequenceTokens)
+    // The two-key sequence state machine. Which keys start a sequence, when a
+    // pending one advances rather than completes, and when the buffer is
+    // dropped all live in `PriorityCore`; this performs the result.
+    let sequenceStep = ShortcutSequenceBuffer.advance(
+      buffer: manager.quickEntry.keyBuffer,
+      characters: chars,
+      starters: sequenceStarters,
+      matrixStarters: matrixSequenceStarters,
+      isTextEntryFocused: isFocused,
+      shift: shift,
+      ctrl: ctrl
     )
-    let sequenceStarters: Set<String> = Set(
-      sequenceTokens.compactMap { token in
-        guard token.count >= 2 else { return nil }
-        return String(token.prefix(1))
-      }
-    )
-    if !manager.quickEntry.keyBuffer.isEmpty {
-      let normalizedChars = chars.lowercased()
-      let bufferedSequence = manager.quickEntry.keyBuffer.lowercased()
-
-      // Matrix quick-entry: m + <urgency 0-9> + <importance 0-9>
-      if !isFocused,
-        bufferedSequence.count == 1,
-        matrixSequenceStarters.contains(bufferedSequence),
-        normalizedChars.count == 1,
-        normalizedChars.first?.isNumber == true
-      {
-        manager.quickEntry.keyBuffer = bufferedSequence + normalizedChars
-        manager.statusMessage = "Matrix: (\(normalizedChars), _)"
-        return true
-      }
-      if !isFocused,
-        bufferedSequence.count == 2,
-        let starter = bufferedSequence.first.map(String.init),
-        matrixSequenceStarters.contains(starter),
-        let urgencyDigit = bufferedSequence.last,
-        urgencyDigit.isNumber,
-        normalizedChars.count == 1,
-        normalizedChars.first?.isNumber == true,
-        let urgency = Double(String(urgencyDigit)),
-        let importance = Double(normalizedChars)
-      {
-        manager.quickEntry.keyBuffer = ""
-        if let task = manager.taskListViewModel.currentTask {
-          manager.repository.setUrgency(taskId: task.id, level: urgency)
-          manager.repository.setImportance(taskId: task.id, level: importance)
-          manager.repository.errorMessage = nil
-          manager.statusMessage = "Matrix: (\(Int(urgency)), \(Int(importance)))"
-          updateTitle()
-        } else {
-          manager.repository.errorMessage = "No task selected."
-        }
-        return true
-      }
-
-      let sequence = bufferedSequence + normalizedChars
-      manager.quickEntry.keyBuffer = ""
-      if !isFocused {
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceDue, sequence: sequence) {
-          manager.quickEntry.quickEntryMode = .command
-          manager.quickEntry.commandSuggestionIndex = 0
-          manager.quickEntry.quickEntryText = "due "
-          manager.quickEntry.isQuickEntryFocused = true
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceDueToday, sequence: sequence)
-        {
-          manager.quickEntry.quickEntryMode = .command
-          manager.quickEntry.commandSuggestionIndex = 0
-          manager.quickEntry.quickEntryText = "due today "
-          manager.quickEntry.isQuickEntryFocused = true
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceStart, sequence: sequence) {
-          manager.quickEntry.quickEntryMode = .command
-          manager.quickEntry.commandSuggestionIndex = 0
-          manager.quickEntry.quickEntryText = "start "
-          manager.quickEntry.isQuickEntryFocused = true
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceRepeat, sequence: sequence) {
-          manager.quickEntry.quickEntryMode = .command
-          manager.quickEntry.commandSuggestionIndex = 0
-          manager.quickEntry.quickEntryText = "repeat "
-          manager.quickEntry.isQuickEntryFocused = true
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceOpenLink, sequence: sequence)
-        {
-          if let task = manager.taskListViewModel.currentTask { manager.integrations.openTaskLink(task: task) }
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(
-          action: .sequenceGoogleCalendar,
-          sequence: sequence
-        ) {
-          manager.integrations.openTaskInGoogleCalendar()
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceTag, sequence: sequence) {
-          manager.quickEntry.quickEntryMode = .command
-          manager.quickEntry.commandSuggestionIndex = 0
-          manager.quickEntry.quickEntryText = "tag "
-          manager.quickEntry.isQuickEntryFocused = true
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceMatrixCoord, sequence: sequence)
-        {
-          manager.quickEntry.quickEntryMode = .command
-          manager.quickEntry.commandSuggestionIndex = 0
-          manager.quickEntry.quickEntryText = "matrix "
-          manager.quickEntry.isQuickEntryFocused = true
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceUrgency, sequence: sequence) {
-          manager.quickEntry.quickEntryMode = .command
-          manager.quickEntry.commandSuggestionIndex = 0
-          manager.quickEntry.quickEntryText = "urgency "
-          manager.quickEntry.isQuickEntryFocused = true
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceImportance, sequence: sequence) {
-          manager.quickEntry.quickEntryMode = .command
-          manager.quickEntry.commandSuggestionIndex = 0
-          manager.quickEntry.quickEntryText = "importance "
-          manager.quickEntry.isQuickEntryFocused = true
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(action: .sequenceUntag, sequence: sequence) {
-          manager.quickEntry.quickEntryMode = .command
-          manager.quickEntry.commandSuggestionIndex = 0
-          manager.quickEntry.quickEntryText = "untag "
-          manager.quickEntry.isQuickEntryFocused = true
-          return true
-        }
-        if manager.preferences.shortcutMatchesSequence(
-          action: .sequenceToggleContext,
-          sequence: sequence
-        ) {
-          manager.preferences.showTaskBreadcrumbContext.toggle()
-          return true
-        }
-      }
-      return false
-    }
-    if sequenceStarters.contains(chars.lowercased()) && !shift && !ctrl && !isFocused {
-      manager.quickEntry.keyBuffer = chars.lowercased()
+    manager.quickEntry.keyBuffer = sequenceStep.buffer
+    switch sequenceStep.effect {
+    case .pass:
+      break
+    case .awaitSecondKey:
       return true
+    case .reportMatrixUrgency(let digit):
+      manager.statusMessage = "Matrix: (\(digit), _)"
+      return true
+    case .applyMatrixCoordinate(let urgency, let importance):
+      guard let task = manager.taskListViewModel.currentTask else {
+        manager.repository.errorMessage = "No task selected."
+        return true
+      }
+      manager.repository.setUrgency(taskId: task.id, level: urgency)
+      manager.repository.setImportance(taskId: task.id, level: importance)
+      manager.repository.errorMessage = nil
+      manager.statusMessage = "Matrix: (\(Int(urgency)), \(Int(importance)))"
+      updateTitle()
+      return true
+    case .abandon:
+      return false
+    case .attempt(let sequence):
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceDue, sequence: sequence) {
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = "due "
+        manager.quickEntry.isQuickEntryFocused = true
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceDueToday, sequence: sequence)
+      {
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = "due today "
+        manager.quickEntry.isQuickEntryFocused = true
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceStart, sequence: sequence) {
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = "start "
+        manager.quickEntry.isQuickEntryFocused = true
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceRepeat, sequence: sequence) {
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = "repeat "
+        manager.quickEntry.isQuickEntryFocused = true
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceOpenLink, sequence: sequence)
+      {
+        if let task = manager.taskListViewModel.currentTask { manager.integrations.openTaskLink(task: task) }
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(
+        action: .sequenceGoogleCalendar,
+        sequence: sequence
+      ) {
+        manager.integrations.openTaskInGoogleCalendar()
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceTag, sequence: sequence) {
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = "tag "
+        manager.quickEntry.isQuickEntryFocused = true
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceMatrixCoord, sequence: sequence)
+      {
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = "matrix "
+        manager.quickEntry.isQuickEntryFocused = true
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceUrgency, sequence: sequence) {
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = "urgency "
+        manager.quickEntry.isQuickEntryFocused = true
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceImportance, sequence: sequence) {
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = "importance "
+        manager.quickEntry.isQuickEntryFocused = true
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(action: .sequenceUntag, sequence: sequence) {
+        manager.quickEntry.quickEntryMode = .command
+        manager.quickEntry.commandSuggestionIndex = 0
+        manager.quickEntry.quickEntryText = "untag "
+        manager.quickEntry.isQuickEntryFocused = true
+        return true
+      }
+      if manager.preferences.shortcutMatchesSequence(
+        action: .sequenceToggleContext,
+        sequence: sequence
+      ) {
+        manager.preferences.showTaskBreadcrumbContext.toggle()
+        return true
+      }
+      // A sequence that matched nothing is handed on unclaimed rather than
+      // retried as a single-key binding.
+      return false
     }
 
     // p - toggle timer on current task.
-    if !isFocused && matches(.toggleTimer) {
+    if claims(.toggleTimer) {
       if !isRepeat && manager.timer.timerIsEnabled {
         if let task = manager.taskListViewModel.currentTask {
           manager.timer.toggleTimer(forTaskId: task.id)
@@ -896,7 +887,7 @@ struct KeyboardShortcutRouter {
     }
 
     // shift+p - pause/resume timer.
-    if !isFocused && matches(.toggleTimerPause) {
+    if claims(.toggleTimerPause) {
       if !isRepeat && manager.timer.timerIsEnabled {
         if manager.timer.timerRunning { manager.timer.pauseTimer() } else { manager.timer.resumeTimer() }
       }
@@ -904,19 +895,19 @@ struct KeyboardShortcutRouter {
     }
 
     // j/k/u - Vim up/down navigation, undo.
-    if !isFocused && matches(.undo) {
+    if claims(.undo) {
       if !isRepeat { Task { await manager.undoService.undo() } }
       return true
     }
 
     // H (Shift+h) - toggle hide future.
-    if !isFocused && matches(.toggleHideFuture) {
+    if claims(.toggleHideFuture) {
       manager.taskListViewModel.hideFuture.toggle()
       return true
     }
 
     // Shift+L - fast list switch prompt.
-    if !isFocused && matches(.quickListSwitch) {
+    if claims(.quickListSwitch) {
       manager.quickEntry.quickEntryMode = .command
       manager.quickEntry.commandSuggestionIndex = 0
       manager.quickEntry.quickEntryText = "list "
@@ -925,13 +916,13 @@ struct KeyboardShortcutRouter {
     }
 
     // Shift+A - quick add using the configured quick add location.
-    if !isFocused && matches(.quickAdd) {
+    if claims(.quickAdd) {
       _ = manager.taskMutationService.beginQuickAddEntry()
       return true
     }
 
     // Forward-slash - focus search.
-    if !isFocused && matches(.focusSearch) {
+    if claims(.focusSearch) {
       manager.quickEntry.quickEntryMode = .search
       manager.quickEntry.isQuickEntryFocused = true
       return true
@@ -940,17 +931,17 @@ struct KeyboardShortcutRouter {
     // 1-9 set scoped priority, Hyper+1-9 (Ctrl+Cmd+Option+Shift) set absolute priority,
     // = sends to the back of prioritized tasks, - clears priority.
     if !isFocused && !rootScopeFocused {
-      if matches(.clearAbsolutePriority) {
+      if claims(.clearAbsolutePriority) {
         manager.taskMutationService.clearAbsolutePriorityForCurrentTask()
         updateTitle()
         return true
       }
-      if matches(.clearPriority) {
+      if claims(.clearPriority) {
         manager.taskMutationService.clearPriorityForCurrentTask()
         updateTitle()
         return true
       }
-      if matches(.pushPriorityBack) {
+      if claims(.pushPriorityBack) {
         manager.taskMutationService.sendCurrentTaskToPriorityBack()
         updateTitle()
         return true
@@ -970,7 +961,7 @@ struct KeyboardShortcutRouter {
         }
       }()
 
-      if matches(.setPriorityRank),
+      if claims(.setPriorityRank),
         let priority = Int(chars) ?? keyCodePriority,
         (1...TaskRepository.maxPriorityRank).contains(priority)
       {
@@ -978,7 +969,7 @@ struct KeyboardShortcutRouter {
         updateTitle()
         return true
       }
-      if matches(.setAbsolutePriorityRank),
+      if claims(.setAbsolutePriorityRank),
         let priority = Int(chars) ?? keyCodePriority,
         (1...TaskRepository.maxPriorityRank).contains(priority)
       {
@@ -989,7 +980,7 @@ struct KeyboardShortcutRouter {
     }
 
     // i - insert, a - append.
-    if !isFocused && matches(.editTaskAtStart) {
+    if claims(.editTaskAtStart) {
       manager.quickEntry.quickEntryMode = .editTask
       manager.quickEntry.editCursorAtEnd = false
       manager.quickEntry.quickEntryText = manager.taskListViewModel.currentTask?.content ?? ""
@@ -1000,60 +991,5 @@ struct KeyboardShortcutRouter {
     return false
   }
 
-  /// Drops an active search filter so a scope change lands in the real list
-  /// rather than inside the results of a search the user has moved on from.
-  private func clearSearchFilter() {
-    guard !manager.quickEntry.searchText.isEmpty else { return }
-    manager.quickEntry.searchText = ""
-    manager.quickEntry.quickEntryMode = .search
-    manager.quickEntry.isQuickEntryFocused = false
-  }
-
-  private static func keyToken(
-    event: NSEvent,
-    charsIgnoringModifiers rawChars: String,
-    shift: Bool,
-    ctrl: Bool,
-    cmd: Bool,
-    option: Bool
-  ) -> String {
-    let keyNameByCode: [UInt16: String] = [
-      18: "1",
-      19: "2",
-      20: "3",
-      21: "4",
-      23: "5",
-      22: "6",
-      26: "7",
-      28: "8",
-      25: "9",
-      29: "0",
-      27: "-",
-      24: "=",
-      49: "space",
-      36: "enter",
-      48: "tab",
-      53: "escape",
-      120: "f2",
-      117: "delete",
-      123: "left",
-      124: "right",
-      125: "down",
-      126: "up",
-    ]
-
-    let chars = rawChars.trimmingCharacters(in: .whitespacesAndNewlines)
-    let base =
-      keyNameByCode[event.keyCode]
-      ?? (chars.isEmpty ? "key\(event.keyCode)" : chars.lowercased())
-
-    var parts: [String] = []
-    if ctrl { parts.append("ctrl") }
-    if cmd { parts.append("cmd") }
-    if option { parts.append("option") }
-    if shift { parts.append("shift") }
-    parts.append(base)
-    return parts.joined(separator: "+")
-  }
 }
 // swiftlint:enable type_body_length function_body_length cyclomatic_complexity

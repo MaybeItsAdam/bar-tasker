@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PriorityCore
 
 @MainActor
 @Observable class QuickEntryManager {

@@ -1,4 +1,5 @@
 import Foundation
+import PriorityCore
 
 /// A recurring task rule stored as a raw string in UserDefaults.
 /// Supported patterns:
