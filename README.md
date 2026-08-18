@@ -21,7 +21,7 @@ It works offline. It works from the terminal. And it exposes the whole surface t
 - [Install](#install) · [First run](#first-run)
 - [Keyboard flow](#keyboard-flow) · [Command palette](#command-palette)
 - [Views](#views) · [The dock row](#the-dock-row)
-- [Daily log](#daily-log) · [Obsidian daily notes](#obsidian-daily-notes)
+- [Daily log](#daily-log) · [Obsidian daily notes](#obsidian-daily-notes) · [AFFiNE](#affine)
 - [Command line](#command-line) · [MCP server](#mcp-server) · [Plugins](#plugins)
 - [Build from source](#build-from-source) · [Where your data lives](#where-your-data-lives)
 
@@ -177,6 +177,7 @@ Open with `:`, `;` or `Cmd+K`. Most commands accept several spellings — `unrep
 | **View** | `list <name>`, `tab <name>`, `cycle tab next` / `prev`, `cycle filter next` / `prev`, `toggle children`, `toggle subtree`, `toggle context`, `toggle hide future` |
 | **Timer** | `focus mode`, `toggle timer`, `pause timer` |
 | **Obsidian** | `sync obsidian`, `open obsidian new window`, `link` / `create` / `clear obsidian folder`, `choose obsidian inbox` |
+| **AFFiNE** | `sync affine`, `open affine`, `affine daily` |
 | **Calendar** | `sync google calendar`, `open google calendar` |
 | **MCP** | `mcp guide`, `mcp config`, `copy mcp config`, `refresh mcp path` |
 | **App** | `preferences`, `search`, `quick add`, `refresh lists`, `upload offline tasks` |
@@ -269,6 +270,31 @@ _Unfinished:_
 
 Only the text between the markers is ever touched, and rewriting a day replaces its own block rather than stacking a second one. **Creating missing notes is off by default**, so the plugin can't beat a Templater or Daily Notes template to the file — turn it on only if nothing else builds your dailies.
 
+## AFFiNE
+
+Priority keeps a two-way checklist in an [AFFiNE](https://affine.pro) workspace. `sync affine` writes your list's open tasks as real todo blocks under a `## Tasks` heading in that list's document — and reads back what you ticked in AFFiNE, closing those tasks in Checkvist before it writes:
+
+```markdown
+## Tasks
+
+- [ ] [Write the release notes](https://checkvist.com/checklists/12#t34)
+  - [ ] [Draft the summary](https://checkvist.com/checklists/12#t35)
+- [x] [Ship the DMG](https://checkvist.com/checklists/12#t31)   ← ticked here, closed there
+```
+
+`affine daily` writes the day's log into that day's document, the same block the Obsidian writer produces.
+
+AFFiNE documents are CRDT block trees rather than text, so the writing is done by [`affine-mcp-server`](https://github.com/DAWNCR0W/affine-mcp-server), which Priority launches and drives over MCP:
+
+```bash
+npm install -g affine-mcp-server
+affine-mcp login
+```
+
+Then switch the plugin on in `Preferences → Plugins → AFFiNE` and click **Load Workspaces**. Your AFFiNE credentials stay in that helper's own config — Priority never handles them. Priority owns the `## Tasks` heading and what sits under it; everything else in the document is yours, and an item you typed in by hand is put back rather than deleted.
+
+**Details: [docs/affine.md](docs/affine.md)**
+
 ## Command line
 
 `priority` is a Rust CLI covering the same ground: your lists, your dailies, your day log. It talks to the Checkvist API directly and reads Priority's local files off disk, so it works whether or not the app is running — and its writes take the same `flock(2)` the app does, so both can be open at once.
@@ -322,7 +348,7 @@ There is one implementation — the Rust CLI — and the app ships it at `Conten
 
 Every external integration is a plugin behind a protocol.
 
-Built in: `NativeCheckvistSyncPlugin`, `NativeObsidianIntegrationPlugin`, `NativeGoogleCalendarIntegrationPlugin`, `NativeMCPIntegrationPlugin`, `NativeDailyLogPlugin`, `OfflineTaskSyncPlugin`.
+Built in: `NativeCheckvistSyncPlugin`, `NativeObsidianIntegrationPlugin`, `NativeAFFiNEIntegrationPlugin`, `NativeGoogleCalendarIntegrationPlugin`, `NativeMCPIntegrationPlugin`, `NativeDailyLogPlugin`, `OfflineTaskSyncPlugin`.
 
 To install your own, open `Preferences → Plugins` and click **Install Plugin** (folder, `.zip`, or `.priority-plugin`), or drop a plugin folder into `~/Library/Application Support/Priority/Plugins` and hit **Reload**.
 
@@ -341,7 +367,7 @@ cd priority
 # The app
 xcodebuild -project 'Priority.xcodeproj' -scheme 'Priority' -configuration Debug -destination 'platform=macOS' build
 
-# Headless logic (598 tests)
+# Headless logic (658 tests)
 swift test
 
 # The CLI (92 tests) — also the app's MCP server, bundled during the app build

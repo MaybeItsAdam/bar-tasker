@@ -367,6 +367,24 @@ protocol DailyLogDataSource: AnyObject {
     )
   }
 
+  /// A day as markdown, for a destination that is not the vault.
+  ///
+  /// The same rendering `writeDailyNote` splices into an Obsidian note, so a
+  /// day reads identically wherever it is written. The markers come with it;
+  /// stripping them is the caller's business, because only the caller knows
+  /// whether its destination can carry an HTML comment.
+  func renderedDaySection(for day: Date = Date()) -> String {
+    DailyNoteMarkdown.section(
+      summary: summary(on: day),
+      titlesByTaskId: dataSource?.taskTitlesById ?? [:],
+      dailies: plugin.dailies(dueOn: day)
+    )
+  }
+
+  /// The file-name pattern dailies are named with, so another integration can
+  /// title a day the same way this one names it.
+  var dayTitlePattern: String { plugin.noteFormat.fileNameFormat }
+
   /// Writes a day's note on demand, regardless of the automatic setting.
   @discardableResult
   func writeNoteNow(for day: Date = Date()) -> Bool {

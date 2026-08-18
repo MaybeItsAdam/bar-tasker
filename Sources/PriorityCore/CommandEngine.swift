@@ -94,6 +94,9 @@ public enum Command: Equatable, Sendable {
   case linkObsidianFolder
   case createObsidianFolder
   case clearObsidianFolderLink
+  case syncAFFiNE
+  case openAFFiNEDocument
+  case syncAFFiNEDay
   case syncGoogleCalendar
   case refreshMCPPath
   case copyMCPClientConfig
@@ -252,6 +255,18 @@ public enum CommandEngine {
       label: "Clear Obsidian folder link", command: "clear obsidian folder",
       preview: "Remove the linked folder for this task subtree", keybind: nil,
       submitImmediately: true),
+    .init(
+      label: "Sync AFFiNE checklist", command: "sync affine",
+      preview: "Close what you ticked in AFFiNE, then write back what's still open",
+      keybind: nil, submitImmediately: true),
+    .init(
+      label: "Open AFFiNE checklist", command: "open affine",
+      preview: "Open this list's AFFiNE checklist in the browser", keybind: nil,
+      submitImmediately: true),
+    .init(
+      label: "Write today's log to AFFiNE", command: "affine daily",
+      preview: "Write today's completions and dailies into today's AFFiNE document",
+      keybind: nil, submitImmediately: true),
     .init(
       label: "Create Google Calendar event", command: "sync google calendar",
       preview: "Create a Google Calendar event from the selected task", keybind: "gc",
@@ -557,6 +572,15 @@ public enum CommandEngine {
       || cmd == "clear folder link"
     {
       return .clearObsidianFolderLink
+    }
+    if cmd == "affine daily" || cmd == "sync affine day" || cmd == "affine log" {
+      return .syncAFFiNEDay
+    }
+    if cmd == "sync affine" || cmd == "send to affine" || cmd == "affine" {
+      return .syncAFFiNE
+    }
+    if cmd == "open affine" || cmd == "open affine document" {
+      return .openAFFiNEDocument
     }
     if cmd == "sync google calendar" || cmd == "google calendar" || cmd == "gcal"
       || cmd == "open google calendar" || cmd == "calendar"

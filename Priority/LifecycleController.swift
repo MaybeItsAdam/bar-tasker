@@ -86,9 +86,10 @@ final class LifecycleController {
 
     // Other manager callbacks (non-cache concerns only).
     coordinator.quickEntry.integrationFlagsProvider = { [weak coordinator] in
-      guard let coordinator else { return (false, false, false) }
+      guard let coordinator else { return (false, false, false, false) }
       return (
         coordinator.integrations.obsidianIntegrationEnabled,
+        coordinator.integrations.affineIntegrationEnabled,
         coordinator.integrations.googleCalendarIntegrationEnabled,
         coordinator.integrations.mcpIntegrationEnabled
       )
@@ -101,6 +102,20 @@ final class LifecycleController {
     }
     coordinator.integrations.onError = { [weak coordinator] err in
       coordinator?.repository.errorMessage = err
+    }
+    coordinator.integrations.onStatus = { [weak coordinator] message in
+      coordinator?.statusMessage = message
+    }
+    coordinator.integrations.onCloseTasks = { [weak coordinator] taskIds in
+      guard let coordinator else { return }
+      for taskId in taskIds {
+        guard
+          let task = coordinator.repository.tasks.first(where: { $0.id == taskId }),
+          task.status == 0
+        else { continue }
+        await coordinator.taskMutationService.taskAction(task, endpoint: "close")
+        await coordinator.taskMutationService.createNextOccurrence(for: task)
+      }
     }
 
     coordinator.preferences.onLaunchAtLoginChanged = { [weak self] newValue in

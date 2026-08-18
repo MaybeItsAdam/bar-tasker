@@ -4,6 +4,7 @@ import Foundation
 final class PluginRegistry {
   private(set) var checkvistSyncPluginsByIdentifier: [String: any CheckvistSyncPlugin] = [:]
   private(set) var obsidianPluginsByIdentifier: [String: any ObsidianIntegrationPlugin] = [:]
+  private(set) var affinePluginsByIdentifier: [String: any AFFiNEIntegrationPlugin] = [:]
   private(set) var googleCalendarPluginsByIdentifier:
     [String: any GoogleCalendarIntegrationPlugin] =
       [:]
@@ -16,6 +17,7 @@ final class PluginRegistry {
 
   private(set) var activeCheckvistSyncPluginIdentifier: String?
   private(set) var activeObsidianPluginIdentifier: String?
+  private(set) var activeAFFiNEPluginIdentifier: String?
   private(set) var activeGoogleCalendarPluginIdentifier: String?
   private(set) var activeMCPIntegrationPluginIdentifier: String?
   private(set) var activeDailyLogPluginIdentifier: String?
@@ -29,6 +31,11 @@ final class PluginRegistry {
   var activeObsidianPlugin: (any ObsidianIntegrationPlugin)? {
     guard let activeObsidianPluginIdentifier else { return nil }
     return obsidianPluginsByIdentifier[activeObsidianPluginIdentifier]
+  }
+
+  var activeAFFiNEPlugin: (any AFFiNEIntegrationPlugin)? {
+    guard let activeAFFiNEPluginIdentifier else { return nil }
+    return affinePluginsByIdentifier[activeAFFiNEPluginIdentifier]
   }
 
   var activeGoogleCalendarPlugin: (any GoogleCalendarIntegrationPlugin)? {
@@ -71,6 +78,13 @@ final class PluginRegistry {
     obsidianPluginsByIdentifier[plugin.pluginIdentifier] = plugin
     if activate || activeObsidianPluginIdentifier == nil {
       activeObsidianPluginIdentifier = plugin.pluginIdentifier
+    }
+  }
+
+  func register(_ plugin: any AFFiNEIntegrationPlugin, activate: Bool = false) {
+    affinePluginsByIdentifier[plugin.pluginIdentifier] = plugin
+    if activate || activeAFFiNEPluginIdentifier == nil {
+      activeAFFiNEPluginIdentifier = plugin.pluginIdentifier
     }
   }
 
@@ -120,6 +134,13 @@ final class PluginRegistry {
   }
 
   @discardableResult
+  func activateAFFiNEPlugin(identifier: String) -> Bool {
+    guard affinePluginsByIdentifier[identifier] != nil else { return false }
+    activeAFFiNEPluginIdentifier = identifier
+    return true
+  }
+
+  @discardableResult
   func activateGoogleCalendarPlugin(identifier: String) -> Bool {
     guard googleCalendarPluginsByIdentifier[identifier] != nil else { return false }
     activeGoogleCalendarPluginIdentifier = identifier
@@ -151,6 +172,7 @@ final class PluginRegistry {
     let registry = PluginRegistry()
     registry.register(NativeCheckvistSyncPlugin(), activate: true)
     registry.register(NativeObsidianIntegrationPlugin(), activate: true)
+    registry.register(NativeAFFiNEIntegrationPlugin(), activate: true)
     registry.register(NativeGoogleCalendarIntegrationPlugin(), activate: true)
     registry.register(NativeMCPIntegrationPlugin(), activate: true)
     registry.register(NativeDailyLogPlugin(), activate: true)

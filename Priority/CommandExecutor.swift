@@ -196,6 +196,19 @@ final class CommandExecutor {
       manager.quickEntry.commandSuggestionIndex = 0
       manager.quickEntry.isQuickEntryFocused = true
       return
+    case .syncAFFiNE:
+      // A list, not a task: all three stay reachable with nothing selected.
+      await manager.integrations.syncAFFiNEChecklist()
+      return
+    case .openAFFiNEDocument:
+      manager.integrations.openAFFiNEDocument(listId: manager.repository.listId)
+      return
+    case .syncAFFiNEDay:
+      await manager.integrations.exportDayToAFFiNE(
+        renderedSection: manager.dailyLog.renderedDaySection(),
+        titlePattern: manager.dailyLog.dayTitlePattern
+      )
+      return
     case .unknown(let raw):
       manager.repository.errorMessage = "Unknown command: \(raw)"
       return

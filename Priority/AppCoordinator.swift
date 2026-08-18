@@ -142,6 +142,9 @@ import SwiftUI
     let resolvedObsidianPlugin =
       pluginRegistry.activeObsidianPlugin
       ?? NativeObsidianIntegrationPlugin()
+    let resolvedAFFiNEPlugin =
+      pluginRegistry.activeAFFiNEPlugin
+      ?? NativeAFFiNEIntegrationPlugin()
     let resolvedGoogleCalendarPlugin =
       pluginRegistry.activeGoogleCalendarPlugin
       ?? NativeGoogleCalendarIntegrationPlugin()
@@ -156,6 +159,7 @@ import SwiftUI
       builtInPluginIdentifiers: [
         resolvedCheckvistSyncPlugin.pluginIdentifier,
         resolvedObsidianPlugin.pluginIdentifier,
+        resolvedAFFiNEPlugin.pluginIdentifier,
         resolvedGoogleCalendarPlugin.pluginIdentifier,
         resolvedMCPIntegrationPlugin.pluginIdentifier,
         resolvedDailyLogPlugin.pluginIdentifier,
@@ -252,6 +256,7 @@ import SwiftUI
     let integrations = IntegrationCoordinator(
       preferencesStore: preferencesStore,
       obsidianPlugin: resolvedObsidianPlugin,
+      affinePlugin: resolvedAFFiNEPlugin,
       googleCalendarPlugin: resolvedGoogleCalendarPlugin,
       mcpIntegrationPlugin: resolvedMCPIntegrationPlugin,
       initialListId: storedListId
@@ -516,6 +521,7 @@ extension AppCoordinator {
     [
       repository.checkvistSyncPlugin as any Plugin,
       integrations.obsidianPlugin as any Plugin,
+      integrations.affinePlugin as any Plugin,
       integrations.googleCalendarPlugin as any Plugin,
       integrations.mcpIntegrationPlugin as any Plugin,
       dailyLog.plugin as any Plugin,

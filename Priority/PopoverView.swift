@@ -902,6 +902,17 @@ struct PopoverView: View {
           onPromptTap: { _ = manager.integrations.chooseObsidianInboxFolder() }
         )
         pluginToggleRow(
+          label: "AFFiNE",
+          isOn: Bindable(manager).integrations.affineIntegrationEnabled,
+          // Enabling it is not enough: the writing is done by a helper the user
+          // installs themselves, so say so rather than failing at the first
+          // export.
+          prompt: manager.integrations.affineIntegrationEnabled
+            && !manager.integrations.affinePlugin.isConfigured
+            ? "Install affine-mcp" : nil,
+          onPromptTap: { AppDelegate.shared.menuSettings(pane: .plugins) }
+        )
+        pluginToggleRow(
           label: "Google Calendar",
           isOn: Bindable(manager).integrations.googleCalendarIntegrationEnabled,
           prompt: nil,

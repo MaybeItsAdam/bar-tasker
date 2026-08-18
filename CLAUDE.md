@@ -63,7 +63,7 @@ Consequences when editing:
 
 ## Plugin Architecture
 
-All external integrations (Checkvist sync, Obsidian, Google Calendar, MCP) are plugins behind protocols in `Priority/Plugins/Protocols/PluginProtocols.swift`. Native implementations live one folder per plugin under `Priority/Plugins/Native/<Name>/`, registered through `PluginRegistry` (`PluginRegistry.nativeFirst()` is the production factory).
+All external integrations (Checkvist sync, Obsidian, AFFiNE, Google Calendar, MCP) are plugins behind protocols in `Priority/Plugins/Protocols/PluginProtocols.swift`. Native implementations live one folder per plugin under `Priority/Plugins/Native/<Name>/`, registered through `PluginRegistry` (`PluginRegistry.nativeFirst()` is the production factory).
 
 Conventions enforced by `docs/plugins.md`:
 

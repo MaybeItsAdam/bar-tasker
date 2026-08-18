@@ -9,6 +9,9 @@ import PriorityCore
 protocol IntegrationDataSource: AnyObject {
   var tasks: [CheckvistTask] { get }
   var listId: String { get }
+  /// The active list's name, for integrations that file work under it. Empty
+  /// when offline or before the lists have loaded.
+  var listTitle: String { get }
   var currentTask: CheckvistTask? { get }
   var activeCredentials: CheckvistCredentials { get }
 }
@@ -25,12 +28,26 @@ protocol IntegrationDataSource: AnyObject {
   @ObservationIgnored var onIntegrationStateChanged: (() -> Void)?
   /// Called with an error message (or nil to clear) when integration actions produce errors.
   @ObservationIgnored var onError: ((String?) -> Void)?
+  /// Called with a transient success line. An integration that writes somewhere
+  /// the user cannot see needs to say what it did — clearing the error is not
+  /// the same as reporting a result.
+  @ObservationIgnored var onStatus: ((String) -> Void)?
+  /// Closes tasks that were completed in another surface — today, boxes ticked
+  /// in AFFiNE. Owned by the caller because closing a task is the mutation
+  /// service's job, not an integration's.
+  @ObservationIgnored var onCloseTasks: (([Int]) async -> Void)?
 
   // MARK: - Integration enable flags
 
   var obsidianIntegrationEnabled: Bool {
     didSet {
       preferencesStore.set(obsidianIntegrationEnabled, for: .obsidianIntegrationEnabled)
+      onIntegrationStateChanged?()
+    }
+  }
+  var affineIntegrationEnabled: Bool {
+    didSet {
+      preferencesStore.set(affineIntegrationEnabled, for: .affineIntegrationEnabled)
       onIntegrationStateChanged?()
     }
   }
@@ -65,6 +82,7 @@ protocol IntegrationDataSource: AnyObject {
   // MARK: - Plugin references
 
   let obsidianPlugin: any ObsidianIntegrationPlugin
+  let affinePlugin: any AFFiNEIntegrationPlugin
   let googleCalendarPlugin: any GoogleCalendarIntegrationPlugin
   let mcpIntegrationPlugin: any MCPIntegrationPlugin
 
@@ -94,22 +112,28 @@ protocol IntegrationDataSource: AnyObject {
   init(
     preferencesStore: PreferencesStore,
     obsidianPlugin: any ObsidianIntegrationPlugin,
+    affinePlugin: any AFFiNEIntegrationPlugin,
     googleCalendarPlugin: any GoogleCalendarIntegrationPlugin,
     mcpIntegrationPlugin: any MCPIntegrationPlugin,
     initialListId: String
   ) {
     self.preferencesStore = preferencesStore
     self.obsidianPlugin = obsidianPlugin
+    self.affinePlugin = affinePlugin
     self.googleCalendarPlugin = googleCalendarPlugin
     self.mcpIntegrationPlugin = mcpIntegrationPlugin
 
     let storedObsidianEnabled = preferencesStore.optionalBool(.obsidianIntegrationEnabled)
+    let storedAFFiNEEnabled = preferencesStore.optionalBool(.affineIntegrationEnabled)
     let storedGoogleEnabled = preferencesStore.optionalBool(.googleCalendarIntegrationEnabled)
     let storedMCPEnabled = preferencesStore.optionalBool(.mcpIntegrationEnabled)
 
     self.obsidianIntegrationEnabled =
       storedObsidianEnabled
       ?? preferencesStore.bool(.obsidianIntegrationEnabled, default: false)
+    self.affineIntegrationEnabled =
+      storedAFFiNEEnabled
+      ?? preferencesStore.bool(.affineIntegrationEnabled, default: false)
     self.googleCalendarIntegrationEnabled =
       storedGoogleEnabled
       ?? preferencesStore.bool(.googleCalendarIntegrationEnabled, default: false)

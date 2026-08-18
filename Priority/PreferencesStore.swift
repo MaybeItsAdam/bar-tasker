@@ -23,6 +23,7 @@ final class PreferencesStore {
     case ignoreKeychainInDebug
     case checkvistIntegrationEnabled
     case obsidianIntegrationEnabled
+    case affineIntegrationEnabled
     case googleCalendarIntegrationEnabled
     case googleCalendarEventLinksByTaskKey
     case mcpIntegrationEnabled

@@ -19,7 +19,8 @@ import PriorityCore
   var keyBuffer: String = ""
 
   @ObservationIgnored private let cacheInvalidationBus: CacheInvalidationBus
-  @ObservationIgnored var integrationFlagsProvider: (() -> (obsidian: Bool, googleCalendar: Bool, mcp: Bool))?
+  @ObservationIgnored var integrationFlagsProvider:
+    (() -> (obsidian: Bool, affine: Bool, googleCalendar: Bool, mcp: Bool))?
   @ObservationIgnored var shortcutBindingProvider: ((ConfigurableShortcutAction) -> String)?
 
   init(cacheInvalidationBus: CacheInvalidationBus = CacheInvalidationBus()) {
@@ -42,6 +43,7 @@ import PriorityCore
   func filteredCommandSuggestions(
     query: String,
     obsidianEnabled: Bool,
+    affineEnabled: Bool,
     googleCalendarEnabled: Bool,
     mcpEnabled: Bool
   ) -> [CommandSuggestion] {
@@ -51,6 +53,8 @@ import PriorityCore
         "clear obsidian inbox", "link obsidian folder", "create obsidian folder",
         "clear obsidian folder":
         return obsidianEnabled
+      case "sync affine", "open affine", "affine daily":
+        return affineEnabled
       case "sync google calendar":
         return googleCalendarEnabled
       case "refresh mcp path", "copy mcp config", "open mcp guide":
@@ -125,12 +129,14 @@ import PriorityCore
   func selectNextCommandSuggestion(
     for query: String,
     obsidianEnabled: Bool,
+    affineEnabled: Bool,
     googleCalendarEnabled: Bool,
     mcpEnabled: Bool
   ) {
     let total = filteredCommandSuggestions(
       query: query,
       obsidianEnabled: obsidianEnabled,
+      affineEnabled: affineEnabled,
       googleCalendarEnabled: googleCalendarEnabled,
       mcpEnabled: mcpEnabled
     ).count
@@ -141,12 +147,14 @@ import PriorityCore
   func selectPreviousCommandSuggestion(
     for query: String,
     obsidianEnabled: Bool,
+    affineEnabled: Bool,
     googleCalendarEnabled: Bool,
     mcpEnabled: Bool
   ) {
     let total = filteredCommandSuggestions(
       query: query,
       obsidianEnabled: obsidianEnabled,
+      affineEnabled: affineEnabled,
       googleCalendarEnabled: googleCalendarEnabled,
       mcpEnabled: mcpEnabled
     ).count
@@ -156,8 +164,10 @@ import PriorityCore
 
   // MARK: - Command palette (no-argument overloads using integrationFlagsProvider)
 
-  private func currentIntegrationFlags() -> (obsidian: Bool, googleCalendar: Bool, mcp: Bool) {
-    integrationFlagsProvider?() ?? (obsidian: false, googleCalendar: false, mcp: false)
+  private func currentIntegrationFlags()
+    -> (obsidian: Bool, affine: Bool, googleCalendar: Bool, mcp: Bool)
+  {
+    integrationFlagsProvider?() ?? (obsidian: false, affine: false, googleCalendar: false, mcp: false)
   }
 
   func filteredCommandSuggestions(query: String) -> [CommandSuggestion] {
@@ -165,6 +175,7 @@ import PriorityCore
     return filteredCommandSuggestions(
       query: query,
       obsidianEnabled: flags.obsidian,
+      affineEnabled: flags.affine,
       googleCalendarEnabled: flags.googleCalendar,
       mcpEnabled: flags.mcp
     )
@@ -175,6 +186,7 @@ import PriorityCore
     selectNextCommandSuggestion(
       for: query,
       obsidianEnabled: flags.obsidian,
+      affineEnabled: flags.affine,
       googleCalendarEnabled: flags.googleCalendar,
       mcpEnabled: flags.mcp
     )
@@ -185,6 +197,7 @@ import PriorityCore
     selectPreviousCommandSuggestion(
       for: query,
       obsidianEnabled: flags.obsidian,
+      affineEnabled: flags.affine,
       googleCalendarEnabled: flags.googleCalendar,
       mcpEnabled: flags.mcp
     )
