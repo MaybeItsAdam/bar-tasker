@@ -607,6 +607,26 @@ struct PopoverView: View {
     }
   }
 
+  /// The inline add field, wearing the same selection bar as the row it
+  /// belongs to. Rendered above or below that row depending on the mode; which
+  /// side is the caller's business, so this only has to line the field up.
+  @ViewBuilder
+  private func inlineComposer(atVisibleIndex index: Int) -> some View {
+    quickEntryBar(
+      verticalPadding: PopoverLayout.inlineEntryVerticalPadding,
+      // Line the composer up with the row it belongs to, which is indented
+      // once the outline is open.
+      leadingInset: CGFloat(taskListViewModel.outlineDepth(atVisibleIndex: index))
+        * PopoverLayout.outlineIndentWidth
+        + (manager.quickEntry.quickEntryMode == .addChild ? 20 : 0)
+    )
+    .background(Color(NSColor.textBackgroundColor).opacity(0.3))
+    .overlay(alignment: .leading) {
+      Rectangle().fill(themeColor(.selectionForeground)).frame(width: 3)
+    }
+    .id("quickEntry")
+  }
+
   var isAddMode: Bool {
     manager.quickEntry.quickEntryMode == .addSibling
       || manager.quickEntry.quickEntryMode == .addSiblingAbove
@@ -1306,6 +1326,16 @@ struct PopoverView: View {
                   dueSectionHeader(sectionHeader)
                 }
 
+                // Option+Enter composes *above* the selection, so its field
+                // has to sit above the row too — a composer that inserts one
+                // way while appearing to insert the other is worse than not
+                // having the binding.
+                if navigationState.currentSiblingIndex == index,
+                  manager.quickEntry.quickEntryMode == .addSiblingAbove
+                {
+                  inlineComposer(atVisibleIndex: index)
+                }
+
                 taskRow(
                   task: task,
                   index: index,
@@ -1316,21 +1346,10 @@ struct PopoverView: View {
                 .id(task.id)
 
                 if navigationState.currentSiblingIndex == index,
-                  manager.quickEntry.quickEntryMode == .addSibling || manager.quickEntry.quickEntryMode == .addChild
+                  manager.quickEntry.quickEntryMode == .addSibling
+                    || manager.quickEntry.quickEntryMode == .addChild
                 {
-                  quickEntryBar(
-                    verticalPadding: PopoverLayout.inlineEntryVerticalPadding,
-                    // Line the composer up with the row it belongs to, which is
-                    // indented once the outline is open.
-                    leadingInset: CGFloat(taskListViewModel.outlineDepth(atVisibleIndex: index))
-                      * PopoverLayout.outlineIndentWidth
-                      + (manager.quickEntry.quickEntryMode == .addChild ? 20 : 0)
-                  )
-                  .background(Color(NSColor.textBackgroundColor).opacity(0.3))
-                  .overlay(alignment: .leading) {
-                    Rectangle().fill(themeColor(.selectionForeground)).frame(width: 3)
-                  }
-                  .id("quickEntry")
+                  inlineComposer(atVisibleIndex: index)
                 }
               }
             }
@@ -1342,7 +1361,9 @@ struct PopoverView: View {
             }
           }
           .onChange(of: manager.quickEntry.isQuickEntryFocused) { _, focused in
-            if focused && [.addSibling, .addChild].contains(manager.quickEntry.quickEntryMode) {
+            if focused,
+              [.addSibling, .addSiblingAbove, .addChild].contains(manager.quickEntry.quickEntryMode)
+            {
               Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(100))
                 // Keep the inline composer visually attached to its task row.

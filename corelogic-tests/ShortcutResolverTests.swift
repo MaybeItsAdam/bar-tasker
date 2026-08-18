@@ -139,6 +139,58 @@ final class ShortcutResolverTests: XCTestCase {
         in: .init(isRootScopeFocused: true, hasCommandModifiers: true)))
   }
 
+  // MARK: - Leaving the root scope row
+
+  /// The regression this function exists for. In the router the Enter/Escape
+  /// exit was a bare key-code test inside `if rootScopeFocused { … }`; the two
+  /// bindings beside it moved into the table and the key test was left behind
+  /// with no guard at all. It then returned handled for *every* unmodified
+  /// Enter in the list, which is several hundred lines above the branch that
+  /// opens the add composer — so Enter stopped adding tasks entirely.
+  func testEnterOnlyLeavesTheRootScopeRowWhileItHasFocus() {
+    XCTAssertTrue(
+      ShortcutResolver.dismissesRootScopeRow(
+        keyCode: ShortcutGate.Key.enter, in: .init(isRootScopeFocused: true)))
+    XCTAssertFalse(
+      ShortcutResolver.dismissesRootScopeRow(
+        keyCode: ShortcutGate.Key.enter, in: .init(isRootScopeFocused: false)),
+      "Enter in the list belongs to addSibling")
+  }
+
+  func testEscapeLeavesTheRootScopeRowTheSameWay() {
+    XCTAssertTrue(
+      ShortcutResolver.dismissesRootScopeRow(
+        keyCode: ShortcutGate.Key.escape, in: .init(isRootScopeFocused: true)))
+    XCTAssertFalse(
+      ShortcutResolver.dismissesRootScopeRow(
+        keyCode: ShortcutGate.Key.escape, in: .init(isRootScopeFocused: false)))
+  }
+
+  /// Whatever has the row's focus, a text field that has the keyboard outranks
+  /// it — Enter there is a submission.
+  func testTypingKeepsEnterEvenWithTheRootScopeRowFocused() {
+    XCTAssertFalse(
+      ShortcutResolver.dismissesRootScopeRow(
+        keyCode: ShortcutGate.Key.enter,
+        in: .init(isTextEntryFocused: true, isRootScopeFocused: true)))
+  }
+
+  func testOnlyEnterAndEscapeLeaveTheRootScopeRow() {
+    let focused = ShortcutContext(isRootScopeFocused: true)
+    for key in [ShortcutGate.Key.upArrow, ShortcutGate.Key.leftArrow, 49] as [UInt16] {
+      XCTAssertFalse(ShortcutResolver.dismissesRootScopeRow(keyCode: key, in: focused))
+    }
+  }
+
+  /// Cmd+Enter is a chord the row has no business consuming, the same reason
+  /// it ignores modified arrows.
+  func testAModifiedEnterIsNotAnExitFromTheRootScopeRow() {
+    XCTAssertFalse(
+      ShortcutResolver.dismissesRootScopeRow(
+        keyCode: ShortcutGate.Key.enter,
+        in: .init(isRootScopeFocused: true, hasCommandModifiers: true)))
+  }
+
   func testRootTabCyclingNeedsTheScopeSectionOnScreen() {
     XCTAssertTrue(
       ShortcutResolver.permits(.rootCycleTabNext, in: .init(showsRootScopeSection: true)))

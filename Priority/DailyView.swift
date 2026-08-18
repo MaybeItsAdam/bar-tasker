@@ -235,13 +235,15 @@ struct DailyView: View {
           .font(Typography.taskFont(size: 13, name: manager.preferences.appFontName))
           // Struck through *and* muted, so doneness never rests on colour alone.
           //
-          // Suppressed while the celebration runs, so the drawn rule below can
-          // perform it as a motion. This is the fix for the Daily view's
-          // completion looking broken: `toggleDaily` records the tick and bumps
-          // the revision *before* `onDailyTicked` fires, so the row was already
-          // wearing its final strikethrough by the time the strike animation
-          // started, and the animation had nothing left to say.
-          .strikethrough(isDone && !isCompleting, color: themeColor(.textMuted))
+          // Only one of the two strikes ever renders. Where the preset draws
+          // its own rule, this boolean one is off entirely — running both put
+          // two lines on the row: SwiftUI sets its strikethrough near the
+          // x-height while a rule centred on the text frame lands a couple of
+          // points lower, so as the celebration ended the drawn line retracted
+          // leftwards *underneath* the native one that had just snapped in.
+          // That trailing second line was the "extra line" the tick appeared to
+          // leave behind.
+          .strikethrough(isDone && !treatment.drawsStrikethrough, color: themeColor(.textMuted))
           .foregroundColor(isDone ? themeColor(.textMuted) : themeColor(.textPrimary))
           .lineLimit(1)
           .truncationMode(.tail)
@@ -249,13 +251,22 @@ struct DailyView: View {
             // The same drawn rule the task rows use, rather than the boolean
             // `.strikethrough` — a modifier SwiftUI cannot interpolate, and so
             // cannot animate. Presets that say removal is the effect opt out.
+            //
+            // Driven by `isDone`, not by `isCompleting`: on a daily the strike
+            // is the *lasting* state, not a flourish that plays over one. Tying
+            // it to the celebration flag meant it drew in and then wound itself
+            // back out 180ms later. `.animation(_:value:)` still animates the
+            // draw, because `isDone` is what changes when the row is ticked.
             if treatment.drawsStrikethrough {
               Rectangle()
-                .fill(themeColor(.success).opacity(0.65))
+                .fill(
+                  isCompleting
+                    ? themeColor(.success).opacity(0.65)
+                    : themeColor(.textMuted)
+                )
                 .frame(height: 1.5)
-                .scaleEffect(x: isCompleting ? 1.0 : 0.001, y: 1, anchor: .leading)
-                .animation(
-                  CelebrationMotion.strike(reduceMotion: reduceMotion), value: isCompleting)
+                .scaleEffect(x: isDone ? 1.0 : 0.001, y: 1, anchor: .leading)
+                .animation(CelebrationMotion.strike(reduceMotion: reduceMotion), value: isDone)
             }
           }
       }

@@ -418,7 +418,10 @@ struct KeyboardShortcutRouter {
       }
       return true
     }
-    if event.keyCode == 36 || event.keyCode == 53 {
+    // Only while the root scope row actually has focus. Unguarded, this
+    // swallowed every unmodified Enter in the list — see
+    // `ShortcutResolver.dismissesRootScopeRow`.
+    if ShortcutResolver.dismissesRootScopeRow(keyCode: event.keyCode, in: shortcutContext) {
       manager.navigationState.rootScopeFocusLevel = 0
       return true
     }

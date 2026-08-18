@@ -239,6 +239,22 @@ public enum ShortcutResolver {
     }
   }
 
+  /// Whether Enter or Escape should dismiss the root scope row and hand focus
+  /// back to the list.
+  ///
+  /// These two are not `ConfigurableShortcutAction`s — the row is a transient
+  /// focus state rather than something you navigate to, so its way out is
+  /// fixed. The rule lives here because in the router it was a bare
+  /// `event.keyCode == 36 || event.keyCode == 53` sitting inside an
+  /// `if rootScopeFocused` block, and moving that block's other two branches
+  /// into this table left the key test behind *without* its guard. Every
+  /// unmodified Enter in the list then dismissed a row that had no focus and
+  /// returned handled, so Enter stopped adding a task at all.
+  public static func dismissesRootScopeRow(keyCode: UInt16, in context: ShortcutContext) -> Bool {
+    guard onRootScope.permits(context) else { return false }
+    return keyCode == ShortcutGate.Key.enter || keyCode == ShortcutGate.Key.escape
+  }
+
   /// Every action live in a context, in dispatch order, with duplicates
   /// collapsed to their first occurrence.
   public static func availableActions(in context: ShortcutContext) -> [ConfigurableShortcutAction] {
