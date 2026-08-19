@@ -30,11 +30,48 @@ public enum CompletionMilestone: Equatable, Sendable {
   case dailyTicked
   /// The Nth completion of the logical day, N a multiple of `tallyInterval`.
   case dailyTally(count: Int)
+  /// The first completion of a day that extends a run of consecutive days,
+  /// `days` long including today.
+  ///
+  /// Worth more than the tally it outranks. Ten completions in a day is a
+  /// number that says how busy the day was; a run of days says you kept showing
+  /// up, which is the thing the app is actually for — and, unlike a tally, it
+  /// is a number you can lose, which is what gives it its pull.
+  case dailyStreak(days: Int)
 
   /// Whether this occasion earns a post-mutation flourish on top of the inline
   /// effect. Ordinary completions deliberately do not, so routine ticking stays
   /// as fast as it is today.
   public var earnsFlourish: Bool { self != .ordinary }
+
+  /// How much room the flourish should take, `0...1`.
+  ///
+  /// Clearing your list is the rarest and most earned thing that happens in the
+  /// app and it used to get a 1.5pt rule — visibly *less* than the row it
+  /// followed. Presets scale their flourish by this rather than each inventing
+  /// a hierarchy, so the ordering holds however they choose to draw it.
+  public var flourishWeight: Double {
+    switch self {
+    case .ordinary: return 0
+    case .dailyTicked: return 0.45
+    case .dailyTally: return 0.7
+    case .dailyStreak: return 0.85
+    case .listCleared: return 1.0
+    }
+  }
+
+  /// A short caption for the flourish, or `nil` where the motion says it.
+  ///
+  /// Only the two occasions carrying a *number* get words — a streak and a
+  /// tally mean nothing without one. Clearing the list needs no caption: an
+  /// empty list is its own announcement.
+  public var caption: String? {
+    switch self {
+    case .dailyStreak(let days): return "\(days) day streak"
+    case .dailyTally(let count): return "\(count) today"
+    case .ordinary, .dailyTicked, .listCleared: return nil
+    }
+  }
 }
 
 public struct CompletionEvent: Equatable, Sendable {
@@ -64,6 +101,13 @@ public enum CompletionMilestonePolicy {
   /// Every Nth completion of the day earns a tally milestone.
   public static let tallyInterval = 10
 
+  /// Shortest run of consecutive days that earns a streak milestone.
+  ///
+  /// Three rather than two: a two-day run is "yesterday and today", which
+  /// happens constantly and would make the rarest-looking celebration in the
+  /// app one of the most frequent.
+  public static let streakMinimum = 3
+
   /// Ceiling for the *blocking* half of a celebration.
   ///
   /// `TaskMutationService.markCurrentTaskDone` runs the feedback before the
@@ -77,11 +121,14 @@ public enum CompletionMilestonePolicy {
   /// dispatched and therefore delays nothing.
   public static let flourishBudget: TimeInterval = 0.5
 
-  /// Precedence: `listCleared` > `dailyTicked` > `dailyTally` > `ordinary`.
+  /// Precedence: `listCleared` > `dailyStreak` > `dailyTicked` > `dailyTally` >
+  /// `ordinary`.
   ///
-  /// Clearing the list wins because it is the rarest and most legible of the
-  /// three; a tally that coincides with it is absorbed rather than queued
-  /// behind it.
+  /// Clearing the list wins because it is the rarest and most legible of them;
+  /// a tally that coincides with it is absorbed rather than queued behind it.
+  /// The streak sits second because it is the next rarest — it can only fire on
+  /// the first completion of a day — and it outranks `dailyTicked` for the same
+  /// reason: a daily tick happens several times every morning.
   ///
   /// - Parameters:
   ///   - kind: what was completed.
@@ -93,13 +140,23 @@ public enum CompletionMilestonePolicy {
   ///     before": the task path asks before recording and the daily path asks
   ///     after, so a "before" count would mean something different at each call
   ///     site. Each caller converts once, here it means one thing.
+  ///   - streakDays: consecutive days ending today, today included, on which
+  ///     something was completed. Zero means "not known", which is what a
+  ///     caller without a day log passes.
   public static func milestone(
     for kind: CompletionKind,
     remainingVisibleTaskCount: Int,
-    ordinal: Int
+    ordinal: Int,
+    streakDays: Int = 0
   ) -> CompletionMilestone {
     if case .task = kind, remainingVisibleTaskCount <= 1 {
       return .listCleared
+    }
+    // Only on the day's opening completion: a streak is a property of the day,
+    // so marking it once is the whole point. Firing it again at noon would say
+    // nothing new and would cost the flourish its rarity.
+    if ordinal == 1, streakDays >= streakMinimum {
+      return .dailyStreak(days: streakDays)
     }
     if kind.isDaily {
       return .dailyTicked

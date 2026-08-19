@@ -110,6 +110,96 @@ final class CompletionMilestonePolicyTests: XCTestCase {
     XCTAssertTrue(CompletionMilestone.listCleared.earnsFlourish)
     XCTAssertTrue(CompletionMilestone.dailyTicked.earnsFlourish)
     XCTAssertTrue(CompletionMilestone.dailyTally(count: 10).earnsFlourish)
+    XCTAssertTrue(CompletionMilestone.dailyStreak(days: 4).earnsFlourish)
+  }
+
+  // MARK: - Streaks
+
+  /// Only on the day's opening completion. A streak is a property of the day,
+  /// so marking it once is the point — firing it again at noon would say
+  /// nothing new and would cost the flourish the rarity it trades on.
+  func testStreakFiresOnlyOnTheDaysFirstCompletion() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 5, ordinal: 1, streakDays: 4),
+      .dailyStreak(days: 4)
+    )
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 5, ordinal: 2, streakDays: 4),
+      .ordinary
+    )
+  }
+
+  /// Two days is "yesterday and today", which happens constantly. Celebrating
+  /// it would make the rarest-looking effect in the app one of the commonest.
+  func testShortRunsDoNotEarnAStreak() {
+    for days in 0..<CompletionMilestonePolicy.streakMinimum {
+      XCTAssertEqual(
+        CompletionMilestonePolicy.milestone(
+          for: .task(id: 1), remainingVisibleTaskCount: 5, ordinal: 1, streakDays: days),
+        .ordinary,
+        "a \(days)-day run should not be a milestone"
+      )
+    }
+  }
+
+  /// Precedence. Clearing the list is rarer still and absorbs the streak rather
+  /// than queueing behind it; the streak in turn outranks a daily tick, which
+  /// happens several times most mornings.
+  func testStreakSitsBelowClearingTheListAndAboveADailyTick() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 1, ordinal: 1, streakDays: 9),
+      .listCleared
+    )
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .daily(id: "h"), remainingVisibleTaskCount: 5, ordinal: 1, streakDays: 9),
+      .dailyStreak(days: 9)
+    )
+  }
+
+  /// A caller with no day log passes zero, which must read as "not known"
+  /// rather than as a zero-day streak worth mentioning.
+  func testUnknownStreakDefaultsToNoMilestone() {
+    XCTAssertEqual(
+      CompletionMilestonePolicy.milestone(
+        for: .task(id: 1), remainingVisibleTaskCount: 5, ordinal: 1),
+      .ordinary
+    )
+  }
+
+  // MARK: - Flourish weight
+
+  /// The ordering is the fix: clearing your entire list used to draw the same
+  /// 1.5pt hairline as ticking one daily, which made the rarest event in the
+  /// app quieter than the row that caused it.
+  func testFlourishWeightRanksTheOccasions() {
+    XCTAssertEqual(CompletionMilestone.ordinary.flourishWeight, 0)
+    XCTAssertLessThan(
+      CompletionMilestone.dailyTicked.flourishWeight,
+      CompletionMilestone.dailyTally(count: 10).flourishWeight
+    )
+    XCTAssertLessThan(
+      CompletionMilestone.dailyTally(count: 10).flourishWeight,
+      CompletionMilestone.dailyStreak(days: 5).flourishWeight
+    )
+    XCTAssertLessThan(
+      CompletionMilestone.dailyStreak(days: 5).flourishWeight,
+      CompletionMilestone.listCleared.flourishWeight
+    )
+    XCTAssertEqual(CompletionMilestone.listCleared.flourishWeight, 1.0)
+  }
+
+  /// Only the occasions carrying a number get words — the other two are legible
+  /// as motion, and an empty list announces itself.
+  func testOnlyCountedOccasionsCarryACaption() {
+    XCTAssertEqual(CompletionMilestone.dailyStreak(days: 5).caption, "5 day streak")
+    XCTAssertEqual(CompletionMilestone.dailyTally(count: 20).caption, "20 today")
+    XCTAssertNil(CompletionMilestone.listCleared.caption)
+    XCTAssertNil(CompletionMilestone.dailyTicked.caption)
+    XCTAssertNil(CompletionMilestone.ordinary.caption)
   }
 
   func testKindReportsWhetherItIsADaily() {

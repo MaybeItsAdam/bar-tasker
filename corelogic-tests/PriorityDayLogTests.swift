@@ -382,3 +382,144 @@ final class DayLogFileStoreTests: XCTestCase {
     XCTAssertEqual(store.loadAll().map(\.taskId), [1, 2])
   }
 }
+
+/// The streak behind `CompletionMilestone.dailyStreak`.
+///
+/// Today is excluded on purpose, which is the only subtle thing here: the task
+/// completion path classifies its milestone *before* the close is recorded and
+/// the daily path *after*, so a streak that counted today would come out a day
+/// apart depending on which funnel asked. Callers add the day they are in the
+/// middle of earning.
+final class DayLogStreakTests: XCTestCase {
+
+  private var calendar: Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    calendar.locale = Locale(identifier: "en_US_POSIX")
+    return calendar
+  }
+
+  private var boundary: DayBoundary {
+    DayBoundary(rolloverHour: 4, calendar: calendar)
+  }
+
+  private func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 10) -> Date {
+    calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+  }
+
+  func testNoHistoryIsNoStreak() {
+    XCTAssertEqual(
+      DayLogAggregator.priorCompletionStreak(
+        events: [], boundary: boundary, now: date(2026, 8, 19)),
+      0
+    )
+  }
+
+  func testConsecutiveDaysAccumulate() {
+    let events: [DayLogEvent] = [
+      .completed(taskId: 1, title: "A", at: date(2026, 8, 16)),
+      .completed(taskId: 2, title: "B", at: date(2026, 8, 17)),
+      .completed(taskId: 3, title: "C", at: date(2026, 8, 18)),
+    ]
+    XCTAssertEqual(
+      DayLogAggregator.priorCompletionStreak(
+        events: events, boundary: boundary, now: date(2026, 8, 19)),
+      3
+    )
+  }
+
+  /// The whole point of a streak is that it can be lost.
+  func testAGapEndsTheStreak() {
+    let events: [DayLogEvent] = [
+      .completed(taskId: 1, title: "A", at: date(2026, 8, 15)),
+      // Nothing on the 16th.
+      .completed(taskId: 2, title: "B", at: date(2026, 8, 17)),
+      .completed(taskId: 3, title: "C", at: date(2026, 8, 18)),
+    ]
+    XCTAssertEqual(
+      DayLogAggregator.priorCompletionStreak(
+        events: events, boundary: boundary, now: date(2026, 8, 19)),
+      2
+    )
+  }
+
+  /// Today is deliberately not counted — see the type's doc comment.
+  func testTodaysOwnCompletionsAreExcluded() {
+    let events: [DayLogEvent] = [
+      .completed(taskId: 1, title: "A", at: date(2026, 8, 19)),
+    ]
+    XCTAssertEqual(
+      DayLogAggregator.priorCompletionStreak(
+        events: events, boundary: boundary, now: date(2026, 8, 19, 22)),
+      0
+    )
+  }
+
+  /// A day spent entirely on recurring intentions is still a day you showed up.
+  func testDailyTicksKeepAStreakAlive() {
+    let events: [DayLogEvent] = [
+      .completed(taskId: 1, title: "A", at: date(2026, 8, 17)),
+      .dailyCompleted(dailyId: "habit", title: "Read", at: date(2026, 8, 18)),
+    ]
+    XCTAssertEqual(
+      DayLogAggregator.priorCompletionStreak(
+        events: events, boundary: boundary, now: date(2026, 8, 19)),
+      2
+    )
+  }
+
+  /// A tick taken back the same day leaves the day empty, so it must not prop
+  /// the streak up.
+  func testAnUnTickedDailyDoesNotCountAsADay() {
+    let events: [DayLogEvent] = [
+      .dailyCompleted(dailyId: "habit", title: "Read", at: date(2026, 8, 18, 9)),
+      .dailyUncompleted(dailyId: "habit", title: "Read", at: date(2026, 8, 18, 11)),
+    ]
+    XCTAssertEqual(
+      DayLogAggregator.priorCompletionStreak(
+        events: events, boundary: boundary, now: date(2026, 8, 19)),
+      0
+    )
+  }
+
+  /// A completion undone on a later day retroactively empties the day it was
+  /// made on, exactly as it does in the chart.
+  func testAReopenedTaskCannotHoldADayOpen() {
+    let events: [DayLogEvent] = [
+      .completed(taskId: 1, title: "A", at: date(2026, 8, 18)),
+      .reopened(taskId: 1, title: "A", at: date(2026, 8, 19, 9)),
+    ]
+    XCTAssertEqual(
+      DayLogAggregator.priorCompletionStreak(
+        events: events, boundary: boundary, now: date(2026, 8, 19, 12)),
+      0
+    )
+  }
+
+  /// Work after midnight belongs to the previous logical day, so a 1am
+  /// completion must extend yesterday's streak rather than start a new one.
+  func testTheStreakFollowsTheRolloverHour() {
+    let events: [DayLogEvent] = [
+      // 1am on the 19th is still the 18th under a 4am rollover.
+      .completed(taskId: 1, title: "A", at: date(2026, 8, 19, 1)),
+    ]
+    XCTAssertEqual(
+      DayLogAggregator.priorCompletionStreak(
+        events: events, boundary: boundary, now: date(2026, 8, 19, 12)),
+      1
+    )
+  }
+
+  /// The walk is bounded by the log's own history, so a long run terminates
+  /// rather than counting back to the epoch.
+  func testALongRunTerminates() {
+    let events = (1...20).map {
+      DayLogEvent.completed(taskId: $0, title: "T\($0)", at: date(2026, 7, $0))
+    }
+    XCTAssertEqual(
+      DayLogAggregator.priorCompletionStreak(
+        events: events, boundary: boundary, now: date(2026, 7, 21)),
+      20
+    )
+  }
+}

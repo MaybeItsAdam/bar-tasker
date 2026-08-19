@@ -250,6 +250,47 @@ public enum DayLogAggregator {
     Set(events.map { boundary.dayKey(for: $0.at) }).count
   }
 
+  /// Consecutive logical days *before* `now`'s day on which something was
+  /// completed, counting back until the first day with nothing.
+  ///
+  /// Excludes today deliberately, which is what makes it usable from both
+  /// completion paths. The task path classifies its milestone *before* the
+  /// close is recorded and the daily path *after*, so a streak that counted
+  /// today would be one day apart depending on which funnel asked. Excluding it
+  /// means the caller always adds the day it is in the middle of earning:
+  /// `streakDays = priorCompletionStreak(...) + 1`.
+  ///
+  /// Both task completions and daily ticks count. A day spent entirely on
+  /// recurring intentions is still a day you showed up, and a streak that broke
+  /// because the only thing you did was tick your dailies would be measuring
+  /// the wrong thing.
+  public static func priorCompletionStreak(
+    events: [DayLogEvent],
+    boundary: DayBoundary,
+    now: Date
+  ) -> Int {
+    guard !events.isEmpty else { return 0 }
+    // Tasks net across days — a reopen last week cancels last week's bar — so
+    // they come from `netCompletions`. Dailies net *within* a day, which is
+    // what `completedDailyIds` already knows, so they are asked per day below
+    // rather than folded in here.
+    let taskDays = Set(netCompletions(events).map { boundary.dayKey(for: $0.at) })
+
+    var streak = 0
+    // Bounded rather than `while true`: a log cannot outrun its own history, and
+    // an unbounded walk over a corrupt date would not terminate.
+    let horizon = max(1, recordedDayCount(events: events, boundary: boundary)) + 1
+    for offset in 1...horizon {
+      let day = boundary.day(offsetBy: -offset, from: now)
+      let hasTask = taskDays.contains(boundary.dayKey(for: day))
+      let hasDaily =
+        hasTask || !completedDailyIds(events: events, boundary: boundary, on: day).isEmpty
+      guard hasTask || hasDaily else { break }
+      streak += 1
+    }
+    return streak
+  }
+
   /// The earliest logical day in the log — the "collecting since" date the empty
   /// state shows while history builds up.
   public static func firstRecordedDay(events: [DayLogEvent], boundary: DayBoundary) -> Date? {
