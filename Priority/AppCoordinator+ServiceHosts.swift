@@ -164,14 +164,25 @@ extension AppCoordinator: TaskMutationHost {
   /// reason the celebration is split in two — see
   /// `CompletionMilestonePolicy.inlineBudget`.
   func runTaskCompletionFeedback(taskId: Int) async -> Bool {
-    NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+    // `.drawCompleted` rather than `.now`: it defers the tap until the frame
+    // the row's first movement is actually on screen, so the two land together
+    // instead of the haptic arriving a frame or two ahead of anything visible.
+    // A tap that precedes its own animation reads as a stray click.
+    NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .drawCompleted)
     let event = completionEvent(for: .task(id: taskId), alreadyRecorded: false)
 
     guard await celebration.runInline(event) else { return false }
 
-    NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+    NSHapticFeedbackManager.defaultPerformer.perform(
+      .levelChange, performanceTime: .drawCompleted)
     celebration.presentFlourish(for: event)
     return true
+  }
+
+  func withListSettleAnimation(_ body: () -> Void) {
+    withAnimation(CelebrationMotion.listSettle(reduceMotion: celebration.prefersReducedMotion)) {
+      body()
+    }
   }
 
   /// Classifies a completion against the day's log and the current list.
@@ -185,12 +196,18 @@ extension AppCoordinator: TaskMutationHost {
   ///   close; true on the daily path, where the tick is local and lands first.
   func completionEvent(for kind: CompletionKind, alreadyRecorded: Bool) -> CompletionEvent {
     let ordinal = dailyLog.completedTodayCount() + (alreadyRecorded ? 0 : 1)
+    // Days *before* today, plus the one being earned right now. The aggregator
+    // excludes today deliberately: the task path classifies before its close is
+    // recorded and the daily path after, so a streak that counted today would
+    // come out a day apart depending on which funnel asked.
+    let streakDays = dailyLog.priorCompletionStreak() + 1
     return CompletionEvent(
       kind: kind,
       milestone: CompletionMilestonePolicy.milestone(
         for: kind,
         remainingVisibleTaskCount: taskListViewModel.visibleTasks.count,
-        ordinal: ordinal
+        ordinal: ordinal,
+        streakDays: streakDays
       ),
       ordinal: ordinal
     )

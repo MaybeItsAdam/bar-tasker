@@ -245,11 +245,11 @@ private struct KanbanTaskCard: View {
     manager.preferences.themeColor(for: token)
   }
 
-  private var isCompleting: Bool { manager.quickEntry.completingTaskId == task.id }
+  private var kind: CompletionKind { .task(id: task.id) }
 
-  /// Cards take the tint/scale/fade half of the preset but not the collapse:
-  /// a kanban column is a fixed grid of cards, and folding one shut mid-column
-  /// shuffles every card below it.
+  /// Cards take everything the preset offers except the collapse: a kanban
+  /// column is a fixed grid of cards, and folding one shut mid-column shuffles
+  /// every card below it.
   private var treatment: CelebrationRowTreatment { manager.celebration.rowTreatment }
 
   private func showInAllView() {
@@ -274,6 +274,18 @@ private struct KanbanTaskCard: View {
             )
             .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
+            .overlay(alignment: .center) {
+              // Cards used to be the one surface that dropped the strike
+              // entirely, so completing from the board looked like a different
+              // app's animation to completing from the list.
+              if treatment.drawsStrikethrough {
+                CelebrationStrike(
+                  isDrawn: manager.celebration.phase(for: kind) == .celebrating,
+                  color: themeColor(.success).opacity(0.65),
+                  reduceMotion: manager.celebration.prefersReducedMotion
+                )
+              }
+            }
 
           metadataRow
         }
@@ -307,27 +319,17 @@ private struct KanbanTaskCard: View {
     }
     .onHover { isHovered = $0 }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .opacity(isCompleting && treatment.fades ? 0 : 1)
-    .scaleEffect(isCompleting ? treatment.scale : 1.0)
-    .animation(.spring(response: 0.3, dampingFraction: 0.5), value: isCompleting)
-    .background(
-      isCompleting && treatment.tintOpacity > 0
-        ? themeColor(.success).opacity(treatment.tintOpacity)
-        : isSelected
-          ? themeColor(.selectionBackground)
-          : themeColor(.panelBackground)
+    // A card is opaque, so its resting fill goes in as the layer the tint
+    // washes over rather than as a separate `.background` — which would sit
+    // *behind* the modifier's and hide both the selection and the tint.
+    .celebrating(
+      kind,
+      selectionBackground: isSelected
+        ? themeColor(.selectionBackground)
+        : themeColor(.panelBackground),
+      selectionBar: isSelected ? themeColor(.selectionForeground) : nil,
+      allowsCollapse: false
     )
-    .overlay(alignment: .leading) {
-      if (isCompleting && treatment != .none) || isSelected {
-        Rectangle()
-          .fill(
-            isCompleting && treatment != .none
-              ? themeColor(.success)
-              : themeColor(.selectionForeground)
-          )
-          .frame(width: 3)
-      }
-    }
   }
 
   @ViewBuilder

@@ -15,57 +15,65 @@ final class FoldCelebrationPlugin: CompletionCelebrationPlugin {
   let celebrationIconSystemName = "arrow.down.right.and.arrow.up.left"
   let rowTreatment = CelebrationRowTreatment.fold
 
-  /// Longer than `Strike`'s lead-in: a collapse needs a beat at full height to
-  /// read as a fold rather than a jump cut. Still inside the inline budget.
+  /// A beat at full height before the collapse, so it reads as a fold rather
+  /// than a jump cut. Longer than `Strike`'s wind-up for that reason.
   private static let settle: TimeInterval = 0.04
   private static let collapse: TimeInterval = 0.13
 
-  func runInline(_ event: CompletionEvent, stage: any CelebrationStage) async -> Bool {
-    let reduceMotion = stage.prefersReducedMotion
-    func step(_ requested: TimeInterval) -> TimeInterval {
-      CompletionMilestonePolicy.clampedDuration(
-        requested,
-        budget: CompletionMilestonePolicy.inlineBudget,
-        reduceMotion: reduceMotion
-      )
-    }
+  func inlineScript(for event: CompletionEvent, reduceMotion: Bool) -> CelebrationScript {
+    CelebrationScript.fitting(
+      [
+        .init(phase: .anticipating, duration: Self.settle),
+        .init(phase: .celebrating, duration: Self.collapse),
+      ],
+      budget: CompletionMilestonePolicy.inlineBudget,
+      reduceMotion: reduceMotion
+    )
+  }
 
-    do {
-      try await Task.sleep(for: .seconds(step(Self.settle)))
-      withAnimation(.easeIn(duration: step(Self.collapse))) {
-        stage.setCompleting(event.kind)
-      }
-      try await Task.sleep(for: .seconds(step(Self.collapse)))
-    } catch {
-      withAnimation { stage.setCompleting(nil) }
-      return false
-    }
-    withAnimation { stage.setCompleting(nil) }
-    return true
+  func celebrationSound(for event: CompletionEvent) -> CelebrationSound? {
+    event.milestone.earnsFlourish ? .milestone : .soft
   }
 
   func makeFlourish(_ event: CompletionEvent) -> AnyView? {
     guard event.milestone.earnsFlourish else { return nil }
-    return AnyView(FoldFlourish())
+    return AnyView(FoldFlourish(milestone: event.milestone))
   }
 }
 
 /// A soft wash that settles down the panel, echoing the row's collapse at the
 /// scale of the whole list.
 private struct FoldFlourish: View {
+  let milestone: CompletionMilestone
   @Environment(AppCoordinator.self) private var manager
   @State private var settled = false
 
   var body: some View {
     let tint = manager.preferences.themeColor(for: .success)
-    LinearGradient(
-      colors: [tint.opacity(settled ? 0 : 0.18), .clear],
-      startPoint: .top,
-      endPoint: .bottom
-    )
+    // Scaled by the occasion rather than fixed: a daily tick gets a hint, a
+    // cleared list gets something you would notice from across the desk.
+    let peak = 0.10 + 0.22 * milestone.flourishWeight
+
+    ZStack {
+      LinearGradient(
+        colors: [tint.opacity(settled ? 0 : peak), .clear],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      if let caption = milestone.caption {
+        VStack {
+          Spacer(minLength: 0)
+          Text(caption.uppercased())
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .tracking(1.5)
+            .foregroundColor(tint)
+          Spacer(minLength: 0)
+        }
+      }
+    }
     .opacity(settled ? 0 : 1)
     .onAppear {
-      withAnimation(.easeOut(duration: CompletionMilestonePolicy.flourishBudget)) {
+      withAnimation(CelebrationMotion.flourish(reduceMotion: manager.celebration.prefersReducedMotion)) {
         settled = true
       }
     }

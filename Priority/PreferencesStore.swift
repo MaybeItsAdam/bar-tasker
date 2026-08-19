@@ -65,6 +65,10 @@ final class PreferencesStore {
     /// unrecognised falls back to whatever `PluginRegistry.nativeFirst()`
     /// activated.
     case completionCelebrationIdentifier
+    /// Whether the active celebration preset's tick is audible. Off unless the
+    /// user asks: see `CelebrationSound`, which exists because the haptic
+    /// reaches only Force Touch trackpads.
+    case completionSoundEnabled
   }
 
   private let defaults: UserDefaults

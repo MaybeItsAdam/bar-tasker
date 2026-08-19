@@ -7,6 +7,9 @@ import SwiftUI
 /// they sit outside the celebration protocol. This is the preset for someone
 /// who wants completing a task to cost zero milliseconds, and it is the only
 /// one that genuinely adds no latency to the close.
+///
+/// Silent too, and not by omission: a preset whose whole point is that nothing
+/// happens should not start making noise when the sound preference goes on.
 @MainActor
 final class NoneCelebrationPlugin: CompletionCelebrationPlugin {
   let pluginIdentifier = "native.celebration.none"
@@ -15,7 +18,9 @@ final class NoneCelebrationPlugin: CompletionCelebrationPlugin {
   let celebrationIconSystemName = "circle.slash"
   let rowTreatment = CelebrationRowTreatment.none
 
-  func runInline(_ event: CompletionEvent, stage: any CelebrationStage) async -> Bool {
-    true
+  /// An empty script, which the default `runInline` returns from immediately
+  /// without so much as a zero-length sleep.
+  func inlineScript(for event: CompletionEvent, reduceMotion: Bool) -> CelebrationScript {
+    .empty
   }
 }

@@ -141,26 +141,53 @@ deliberate:
   plugin sidebar for what is one setting.
 - **It excludes itself from `PriorityPlugins`** — the whole `Native/Celebration/`
   folder plus its contract — for a variant of the `DailyLog` reason: celebrations
-  are motion, motion is SwiftUI, and the SPM target can't have it. The logic
-  worth testing (`CompletionMilestonePolicy`, `CelebrationRowTreatment`) lives in
-  `Sources/PriorityCore/` and is covered by `corelogic-tests`.
+  are motion, motion is SwiftUI, and the SPM target can't have it. Everything
+  worth testing therefore has to live in `Sources/PriorityCore/`, which is why a
+  preset expresses its *timing* as a `CelebrationScript` rather than as a
+  sequence of `Task.sleep` calls: `CompletionMilestonePolicy`,
+  `CelebrationRowTreatment` and `CelebrationScript` are all covered by
+  `corelogic-tests`, and the SwiftUI half is reduced to playing a schedule
+  somebody else checked.
+
+What a new preset actually implements:
+
+- **`rowTreatment`** — what the row looks like at each `CelebrationPhase`, as
+  data. Read it through the `for phase:` accessors; every surface applies it via
+  the shared `.celebrating(_:)` modifier in `CelebrationRowView.swift`, so a
+  preset never draws a row itself and a new surface gets the whole treatment for
+  one line.
+- **`inlineScript(for:reduceMotion:)`** — the blocking half's timing. Build it
+  with `CelebrationScript.fitting`, which applies the reduced-motion scale and
+  the budget *to the total* rather than to each step. A preset can still override
+  `runInline` for something a schedule can't express, but
+  `CompletionCelebrationManager` stops waiting on it at
+  `inlineBudget` + a small grace either way, so a slow preset costs the app its
+  animation rather than the user their task.
+- **`celebrationSound(for:)`** — optional, off unless the user turns sound on in
+  Settings → Theme. It exists because `NSHapticFeedbackManager` reaches only a
+  Force Touch trackpad, and only while a finger is on it, so for most
+  completions of a keyboard-first app the "tactile" confirmation reaches nobody.
+- **`makeFlourish(_:)` / `makeRowAccent(for:)`** — optional decoration. The
+  flourish runs *after* the mutation is dispatched and so may be showier; scale
+  it by `CompletionMilestone.flourishWeight` rather than drawing every occasion
+  identically.
 
 Two constraints a new preset must respect:
 
-- **Motion only.** Haptics fire outside the protocol, for every completion,
-  including under the "None" preset — they are confirmation that the keypress
-  registered, not celebration, and turning the animation off shouldn't cost you
-  them. Sound and menu-bar reactions are not part of this seam.
+- **Haptics are not yours.** They fire outside the protocol, for every
+  completion, including under the "None" preset — they are confirmation that the
+  keypress registered, not celebration, and turning the animation off shouldn't
+  cost you them.
 - **`runInline` blocks the close.** `TaskMutationService.markCurrentTaskDone`
   awaits it *before* sending the request and abandons the close if it returns
-  `false`, so anything slow here makes completing tasks feel slower. Stay inside
-  `CompletionMilestonePolicy.inlineBudget` and route durations through
-  `clampedDuration`, which also applies the reduced-motion scale. Showy work
-  belongs in `makeFlourish`, which runs after the mutation is already on its way.
+  `false`. That cancellation is real, not decorative: `NavigationState`
+  reports movement to `CompletionCelebrationManager.cancelInFlight()`, so a user
+  who fires a completion and immediately arrows away calls it off. Let
+  `CancellationError` out of your sleeps — the default `runInline` does.
 
 `CompletionMilestonePolicy` decides the *occasion* — ordinary, list cleared,
-daily ticked, or every tenth completion of the day. Presets choose how to render
-an occasion, never which occasion it is.
+daily ticked, a run of consecutive days, or every tenth completion of the day.
+Presets choose how to render an occasion, never which occasion it is.
 
 ## Verification
 

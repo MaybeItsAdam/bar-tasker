@@ -205,7 +205,7 @@ struct DailyView: View {
 
   @ViewBuilder
   private func dailyRow(_ daily: Daily, isDone: Bool, isSelected: Bool) -> some View {
-    let isCompleting = manager.celebration.completingDailyId == daily.id
+    let kind = CompletionKind.daily(id: daily.id)
     let isEditing = dailyLog.editingDailyId == daily.id
     // The tint/scale/strike half of the active preset only. A ticked daily
     // *stays* in the list, unlike a completed task, so the collapse-and-fade
@@ -216,17 +216,7 @@ struct DailyView: View {
     HStack(alignment: .center, spacing: PopoverLayout.rowContentSpacing) {
       // Fixed-width icon slot, so titles line up with each other and with the
       // task rows in the other views rather than shifting with the glyph.
-      Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
-        .font(.system(size: 14))
-        .foregroundColor(isDone ? themeColor(.success) : themeColor(.textMuted))
-        // The glyph swap is the moment a tick is actually felt, so it gets a
-        // transition rather than a cut — and a pop on top of it while the
-        // celebration runs. See `CelebrationRowTreatment.iconPop` for why the
-        // emphasis lives here rather than on the row.
-        .contentTransition(.symbolEffect(.replace))
-        .scaleEffect(isCompleting ? treatment.iconPop : 1.0)
-        .animation(CelebrationMotion.icon(reduceMotion: reduceMotion), value: isCompleting)
-        .frame(width: PopoverLayout.rowIconWidth)
+      CelebrationStatusGlyph(isDone: isDone, kind: kind)
 
       if isEditing {
         editDailyField
@@ -252,21 +242,20 @@ struct DailyView: View {
             // `.strikethrough` — a modifier SwiftUI cannot interpolate, and so
             // cannot animate. Presets that say removal is the effect opt out.
             //
-            // Driven by `isDone`, not by `isCompleting`: on a daily the strike
-            // is the *lasting* state, not a flourish that plays over one. Tying
-            // it to the celebration flag meant it drew in and then wound itself
-            // back out 180ms later. `.animation(_:value:)` still animates the
-            // draw, because `isDone` is what changes when the row is ticked.
+            // Driven by `isDone`, not by the celebration phase: on a daily the
+            // strike is the *lasting* state, not a flourish that plays over
+            // one. Tying it to the celebration flag meant it drew in and then
+            // wound itself back out 180ms later. `.animation(_:value:)` still
+            // animates the draw, because `isDone` is what changes when the row
+            // is ticked.
             if treatment.drawsStrikethrough {
-              Rectangle()
-                .fill(
-                  isCompleting
-                    ? themeColor(.success).opacity(0.65)
-                    : themeColor(.textMuted)
-                )
-                .frame(height: 1.5)
-                .scaleEffect(x: isDone ? 1.0 : 0.001, y: 1, anchor: .leading)
-                .animation(CelebrationMotion.strike(reduceMotion: reduceMotion), value: isDone)
+              CelebrationStrike(
+                isDrawn: isDone,
+                color: manager.celebration.phase(for: kind) == .celebrating
+                  ? themeColor(.success).opacity(0.65)
+                  : themeColor(.textMuted),
+                reduceMotion: reduceMotion
+              )
             }
           }
       }
@@ -293,40 +282,14 @@ struct DailyView: View {
     // and the list stops landing on a clean grid.
     .frame(height: Layout.rowHeight)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .scaleEffect(isCompleting ? treatment.scale : 1.0)
-    .background {
-      // Layered, not swapped. The tint used to *replace* the selection
-      // highlight for the length of the celebration, so ticking the row you
-      // were sitting on made the cursor appear to leave and come back.
-      ZStack {
-        if isSelected { themeColor(.selectionBackground).opacity(0.7) }
-        if isCompleting && treatment.tintOpacity > 0 {
-          themeColor(.success).opacity(treatment.tintOpacity)
-        }
-      }
-    }
-    .overlay(alignment: .leading) {
-      Rectangle()
-        .fill(
-          isCompleting && treatment != .none
-            ? themeColor(.success)
-            : isSelected ? themeColor(.selectionForeground) : Color.clear
-        )
-        .frame(width: 3)
-    }
-    // Below the background and the leading bar, deliberately: `.animation`
-    // only covers what is already applied above it. Attached where it used to
-    // be — directly under `scaleEffect` — it left the tint and the bar outside
-    // its scope, so those snapped on and off while the row sprang, which is
-    // most of why the effect read as a twitch.
-    .animation(CelebrationMotion.row(reduceMotion: reduceMotion), value: isCompleting)
-    .overlay {
-      if isCompleting, let accent = manager.celebration.rowAccent(for: .daily(id: daily.id)) {
-        accent
-          .id(daily.id)
-          .allowsHitTesting(false)
-      }
-    }
+    // A ticked daily stays in the list, so it never folds shut — the collapse
+    // would spring straight back the moment the celebration ended.
+    .celebrating(
+      kind,
+      selectionBackground: isSelected ? themeColor(.selectionBackground).opacity(0.7) : nil,
+      selectionBar: isSelected ? themeColor(.selectionForeground) : nil,
+      allowsCollapse: false
+    )
     .contentShape(Rectangle())
     // Click selects *and* ticks, because a daily has nothing else you'd click
     // it for — unlike a task row, where selection and completion are distinct.

@@ -6,21 +6,23 @@ import SwiftUI
 ///
 /// The timings started as a faithful port of the sequence that shipped inline
 /// in `AppCoordinator+ServiceHosts` (30ms / 100ms / 80ms) and have since been
-/// retuned. Three things were wrong with the originals, all of them about the
-/// *shape* of the sequence rather than its length:
+/// retuned twice. The first pass fixed the *shape*:
 ///
 /// - The 30ms lead-in bought nothing. It was there so the strike "doesn't race
 ///   the keypress", but a completion that visibly waits before acknowledging
-///   you is the one thing this sequence must never do. Responding on the frame
-///   the key lands is what makes it feel direct.
+///   you is the one thing this sequence must never do.
 /// - The strike drew for 100ms and then held for 80ms. Reversed emphasis: the
 ///   draw is the part carrying the meaning, so it got the extra time and the
 ///   hold was cut to the shortest beat that still registers as a pause.
 /// - The whole thing ran on a 280ms spring inside a 210ms window, so the
-///   animation was interrupted in both directions and never resolved. Curves
-///   now come from `CelebrationMotion`, which is sized to fit the budget.
+///   animation was interrupted in both directions and never resolved.
 ///
-/// Net: 180ms rather than 210ms, and more happens inside it.
+/// The second pass put a *shorter* lead-in back, for the opposite reason to the
+/// one that was removed. `anticipating` is not a delay before acknowledging the
+/// keypress — the row moves on the first frame, it just moves the other way
+/// first. 25ms of squash is what gives the pop somewhere to come from, and it
+/// is the difference between a 180ms effect that reads as deliberate and one
+/// that reads as a flicker.
 @MainActor
 final class StrikeCelebrationPlugin: CompletionCelebrationPlugin {
   let pluginIdentifier = "native.celebration.strike"
@@ -29,41 +31,28 @@ final class StrikeCelebrationPlugin: CompletionCelebrationPlugin {
   let celebrationIconSystemName = "strikethrough"
   let rowTreatment = CelebrationRowTreatment.strike
 
-  /// Roughly how long the strikethrough takes to draw across the row. The
-  /// sequence opens on it — there is no lead-in, deliberately.
-  private static let strikeDraw: TimeInterval = 0.12
+  /// Wind-up. Motion only — no tint, no rule.
+  private static let anticipate: TimeInterval = 0.025
+  /// Roughly how long the strikethrough takes to draw across the row.
+  private static let strikeDraw: TimeInterval = 0.115
   /// Hold so the struck state is perceptible before the row is removed. Just
   /// long enough to register as a beat; any longer and it reads as lag.
-  private static let hold: TimeInterval = 0.06
+  private static let hold: TimeInterval = 0.055
 
-  func runInline(_ event: CompletionEvent, stage: any CelebrationStage) async -> Bool {
-    let reduceMotion = stage.prefersReducedMotion
-    func step(_ requested: TimeInterval) -> TimeInterval {
-      CompletionMilestonePolicy.clampedDuration(
-        requested,
-        budget: CompletionMilestonePolicy.inlineBudget,
-        reduceMotion: reduceMotion
-      )
-    }
+  func inlineScript(for event: CompletionEvent, reduceMotion: Bool) -> CelebrationScript {
+    CelebrationScript.fitting(
+      [
+        .init(phase: .anticipating, duration: Self.anticipate),
+        .init(phase: .celebrating, duration: Self.strikeDraw),
+        .init(phase: .celebrating, duration: Self.hold),
+      ],
+      budget: CompletionMilestonePolicy.inlineBudget,
+      reduceMotion: reduceMotion
+    )
+  }
 
-    do {
-      withAnimation(CelebrationMotion.row(reduceMotion: reduceMotion)) {
-        stage.setCompleting(event.kind)
-      }
-      try await Task.sleep(for: .seconds(step(Self.strikeDraw)))
-      try await Task.sleep(for: .seconds(step(Self.hold)))
-    } catch {
-      // Cancellation means the user moved on mid-animation. Clear the row flag
-      // and report it, so the caller drops the close instead of firing it late.
-      withAnimation(CelebrationMotion.row(reduceMotion: reduceMotion)) {
-        stage.setCompleting(nil)
-      }
-      return false
-    }
-    withAnimation(CelebrationMotion.row(reduceMotion: reduceMotion)) {
-      stage.setCompleting(nil)
-    }
-    return true
+  func celebrationSound(for event: CompletionEvent) -> CelebrationSound? {
+    event.milestone.earnsFlourish ? .milestone : .tick
   }
 
   func makeFlourish(_ event: CompletionEvent) -> AnyView? {
@@ -74,8 +63,11 @@ final class StrikeCelebrationPlugin: CompletionCelebrationPlugin {
 
 /// The milestone half: a rule sweeps across the panel and fades.
 ///
-/// Deliberately restrained — it is the same gesture as the row's strikethrough,
-/// scaled up to the width of the list, rather than a different idiom bolted on.
+/// Deliberately the same gesture as the row's strikethrough, scaled up to the
+/// width of the list, rather than a different idiom bolted on — but scaled by
+/// `flourishWeight` rather than drawn identically for every occasion. Clearing
+/// your entire list used to get the same 1.5pt hairline as ticking one daily,
+/// which made the rarest event in the app quieter than the row that caused it.
 private struct StrikeFlourish: View {
   let milestone: CompletionMilestone
   @Environment(AppCoordinator.self) private var manager
@@ -85,19 +77,39 @@ private struct StrikeFlourish: View {
     manager.preferences.themeColor(for: .success)
   }
 
+  /// 1.5pt for a daily tick up to 4pt for a cleared list.
+  private var thickness: CGFloat {
+    1.5 + 2.5 * milestone.flourishWeight
+  }
+
   var body: some View {
-    VStack {
-      Spacer(minLength: 0)
-      Rectangle()
-        .fill(tint.opacity(0.55))
-        .frame(height: 1.5)
-        .scaleEffect(x: progress, y: 1, anchor: .leading)
-        .opacity(1 - progress * 0.6)
-      Spacer(minLength: 0)
+    ZStack {
+      // A wash behind the rule, and only for the occasions that have earned
+      // one: below half weight this is fully transparent and the flourish is
+      // the rule alone, exactly as it was.
+      tint
+        .opacity(max(0, milestone.flourishWeight - 0.5) * 0.24 * (1 - progress))
+
+      VStack(spacing: 10) {
+        Spacer(minLength: 0)
+        Rectangle()
+          .fill(tint.opacity(0.55))
+          .frame(height: thickness)
+          .scaleEffect(x: progress, y: 1, anchor: .leading)
+          .opacity(1 - progress * 0.6)
+        if let caption = milestone.caption {
+          Text(caption.uppercased())
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .tracking(1.5)
+            .foregroundColor(tint)
+            .opacity(progress < 0.15 ? 0 : 1 - progress * 0.5)
+        }
+        Spacer(minLength: 0)
+      }
     }
     .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
     .onAppear {
-      withAnimation(.easeOut(duration: CompletionMilestonePolicy.flourishBudget)) {
+      withAnimation(CelebrationMotion.flourish(reduceMotion: manager.celebration.prefersReducedMotion)) {
         progress = 1
       }
     }

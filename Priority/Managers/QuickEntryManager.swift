@@ -14,7 +14,10 @@ import PriorityCore
   var isQuickEntryFocused: Bool = false
   var editCursorAtEnd: Bool = true  // true = append (a), false = insert (i)
   var pendingDeleteConfirmation: Bool = false
-  var completingTaskId: Int?
+  // `completingTaskId` used to live here, which made the celebration's state
+  // span two managers — this one for tasks, `CompletionCelebrationManager` for
+  // dailies — and every surface had to know which. It is now owned entirely by
+  // the latter, as `completingKind` + `phase`, read through `phase(for:)`.
   var commandSuggestionIndex: Int = 0
   var keyBuffer: String = ""
 

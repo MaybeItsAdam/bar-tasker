@@ -439,6 +439,7 @@ protocol DailyLogDataSource: AnyObject {
 
   @ObservationIgnored private var cachedSummary: (key: String, value: DayLogAggregator.DaySummary)?
   @ObservationIgnored private var cachedBuckets: (key: String, value: [DayLogAggregator.Bucket])?
+  @ObservationIgnored private var cachedStreak: (key: String, value: Int)?
 
   func summary(on date: Date = Date()) -> DayLogAggregator.DaySummary {
     let key = "\(revision)|\(plugin.boundary.dayKey(for: date))"
@@ -456,6 +457,29 @@ protocol DailyLogDataSource: AnyObject {
   /// completion path.
   func completedTodayCount(on date: Date = Date()) -> Int {
     summary(on: date).completedCount + completedDailyIds(on: date).count
+  }
+
+  /// Consecutive days *before* today on which something was completed.
+  ///
+  /// Today is excluded by the aggregator on purpose, so the two completion
+  /// funnels agree: the task path classifies its milestone before the close is
+  /// recorded and the daily path after it, and a streak that counted today
+  /// would come out a day apart depending on which asked. Callers add the day
+  /// they are in the middle of earning.
+  ///
+  /// Memoised on the log's revision, like the rest of this file's projections:
+  /// it walks a day at a time and stops at the first gap, but the completion
+  /// path is not the place to re-derive it per keystroke.
+  func priorCompletionStreak(now: Date = Date()) -> Int {
+    let key = "\(revision)|\(plugin.boundary.dayKey(for: now))"
+    if let cachedStreak, cachedStreak.key == key { return cachedStreak.value }
+    let value = DayLogAggregator.priorCompletionStreak(
+      events: plugin.events,
+      boundary: plugin.boundary,
+      now: now
+    )
+    cachedStreak = (key, value)
+    return value
   }
 
   func chartBuckets(now: Date = Date()) -> [DayLogAggregator.Bucket] {

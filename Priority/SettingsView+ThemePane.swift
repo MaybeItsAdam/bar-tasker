@@ -239,6 +239,23 @@ extension SettingsView {
       )
       .font(.caption)
       .foregroundColor(themeColor(.textSecondary))
+
+      Toggle(
+        "Play a sound",
+        isOn: Binding(
+          get: { celebration.soundEnabled },
+          set: { celebration.soundEnabled = $0 }
+        )
+      )
+      .padding(.top, 2)
+
+      // Worth saying plainly, because the obvious assumption — that the haptic
+      // already covers this — is wrong for most of the people reading it.
+      Text(
+        "Haptics only reach a Force Touch trackpad, and only while you are touching it. On a keyboard and mouse, a sound is the only feedback you can feel."
+      )
+      .font(.caption)
+      .foregroundColor(themeColor(.textSecondary))
     }
   }
 }

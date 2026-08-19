@@ -34,10 +34,11 @@ extension PopoverView {
     let listFocusIsActive = navigationState.rootScopeFocusLevel == 0
     let showsSelectedStyling = isSelected && !showsInlineComposer && listFocusIsActive
     let showsInactiveSelection = isSelected && !showsInlineComposer && !listFocusIsActive
-    let isCompleting = manager.quickEntry.completingTaskId == task.id
     // The active celebration preset decides what "completing" looks like; the
     // row just applies it, so all four presets share one layout.
+    let kind = CompletionKind.task(id: task.id)
     let treatment = manager.celebration.rowTreatment
+    let phase = manager.celebration.phase(for: kind)
     let reduceMotion = manager.celebration.prefersReducedMotion
     let hasObsidianNoteLink = manager.integrations.hasObsidianSyncedNote(task: task, tasks: repository.tasks)
     let hasGoogleCalendarLink = manager.integrations.hasGoogleCalendarEventLink(taskId: task.id, listId: repository.listId)
@@ -49,6 +50,11 @@ extension PopoverView {
       if depth > 0 {
         Color.clear.frame(width: CGFloat(depth) * PopoverLayout.outlineIndentWidth, height: 1)
       }
+      // The status glyph, matching the Daily checklist's — whose own comment
+      // already claimed the two lined up. They now do, and more to the point
+      // the task list finally has the small shape `iconPop` was written for.
+      CelebrationStatusGlyph(isDone: false, kind: kind)
+        .padding(.top, 1)
       VStack(alignment: .leading, spacing: 3) {
         if taskListViewModel.shouldShowBreadcrumbPath(for: task, depth: depth) {
           let includeCurrentParent =
@@ -81,6 +87,20 @@ extension PopoverView {
         } else {
           HStack(alignment: .center, spacing: 6) {
             fadedTaskTitle(task: task)
+              .overlay(alignment: .center) {
+                // Struck across the *title*, not the whole text column. Anchored
+                // to the column it spanned badges and empty space, so the rule's
+                // length said nothing about the task — and gave
+                // `CelebrationMotion.strike` a constant width to size itself
+                // from, which is the same as having no width at all.
+                if treatment.drawsStrikethrough {
+                  CelebrationStrike(
+                    isDrawn: phase == .celebrating,
+                    color: themeColor(.success).opacity(0.65),
+                    reduceMotion: reduceMotion
+                  )
+                }
+              }
             taskInlineMetadata(task: task, elapsed: elapsed)
             if task.hasNotes {
               Image(systemName: "text.alignleft")
@@ -128,17 +148,6 @@ extension PopoverView {
         }
       }
       .layoutPriority(1)
-      .overlay(alignment: .center) {
-        // Strikethrough line that draws left-to-right when completing. Presets
-        // that say the removal itself is the effect (Fold) opt out of it.
-        if treatment.drawsStrikethrough {
-          Rectangle()
-            .fill(themeColor(.success).opacity(0.65))
-            .frame(height: 1.5)
-            .scaleEffect(x: isCompleting ? 1.0 : 0.001, y: 1, anchor: .leading)
-            .animation(CelebrationMotion.strike(reduceMotion: reduceMotion), value: isCompleting)
-        }
-      }
 
       if childCount > 0 {
         disclosureButton(task: task, index: index, childCount: childCount)
@@ -146,44 +155,13 @@ extension PopoverView {
     }
     .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
     .padding(.vertical, PopoverLayout.rowVerticalPadding)
-    .opacity(isCompleting && treatment.fades ? 0 : 1)
-    .scaleEffect(isCompleting ? treatment.scale : 1.0)
-    // Collapsing is a vertical scale about the top edge rather than a height
-    // animation: the rows below slide up to meet it, and SwiftUI doesn't have to
-    // remeasure a row whose badges are mid-fade.
-    .scaleEffect(
-      x: 1, y: isCompleting && treatment.collapses ? 0.001 : 1.0, anchor: .top
+    .celebrating(
+      kind,
+      selectionBackground: showsSelectedStyling
+        ? themeColor(.selectionBackground).opacity(0.7)
+        : showsInactiveSelection ? themeColor(.selectionBackground).opacity(0.28) : nil,
+      selectionBar: showsSelectedStyling ? themeColor(.selectionForeground) : nil
     )
-    .background {
-      rowBackground(
-        isCompleting: isCompleting,
-        treatment: treatment,
-        showsSelectedStyling: showsSelectedStyling,
-        showsInactiveSelection: showsInactiveSelection
-      )
-    }
-    .overlay(alignment: .leading) {
-      rowLeadingBar(
-        isCompleting: isCompleting,
-        treatment: treatment,
-        showsSelectedStyling: showsSelectedStyling
-      )
-    }
-    // Below the background and the leading bar, deliberately: `.animation` only
-    // covers what is already applied above it. Attached where it used to be —
-    // directly under the scale effects — it left the tint and the bar outside
-    // its scope, so those snapped while the row sprang.
-    .animation(CelebrationMotion.row(reduceMotion: reduceMotion), value: isCompleting)
-    .overlay {
-      // Preset-specific decoration (Spark's particles). Rebuilt per completion
-      // via `.id` so a second completion re-runs the burst rather than reusing
-      // the finished one.
-      if isCompleting, let accent = manager.celebration.rowAccent(for: .task(id: task.id)) {
-        accent
-          .id(task.id)
-          .allowsHitTesting(false)
-      }
-    }
     .contentShape(Rectangle())
     .onTapGesture {
       navigationState.rootScopeFocusLevel = 0
@@ -475,46 +453,6 @@ extension PopoverView {
     return resultText
   }
   // swiftlint:enable shorthand_operator
-
-  /// Selection and completion tint, layered rather than swapped.
-  ///
-  /// The tint used to *replace* the selection highlight for the length of the
-  /// celebration, so completing the row you were sitting on made the cursor
-  /// appear to leave and come back.
-  @ViewBuilder
-  private func rowBackground(
-    isCompleting: Bool,
-    treatment: CelebrationRowTreatment,
-    showsSelectedStyling: Bool,
-    showsInactiveSelection: Bool
-  ) -> some View {
-    ZStack {
-      if showsSelectedStyling {
-        themeColor(.selectionBackground).opacity(0.7)
-      } else if showsInactiveSelection {
-        themeColor(.selectionBackground).opacity(0.28)
-      }
-      if isCompleting && treatment.tintOpacity > 0 {
-        themeColor(.success).opacity(treatment.tintOpacity)
-      }
-    }
-  }
-
-  /// The 3pt edge marker: success while completing, selection otherwise.
-  @ViewBuilder
-  private func rowLeadingBar(
-    isCompleting: Bool,
-    treatment: CelebrationRowTreatment,
-    showsSelectedStyling: Bool
-  ) -> some View {
-    Rectangle()
-      .fill(
-        isCompleting && treatment != .none
-          ? themeColor(.success)
-          : showsSelectedStyling ? themeColor(.selectionForeground) : Color.clear
-      )
-      .frame(width: 3)
-  }
 
   /// The child count and its chevron. Click expands in place; Shift-click zooms
   /// the list into the subtree, matching what Shift+→ does from the keyboard.

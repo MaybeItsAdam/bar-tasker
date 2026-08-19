@@ -248,11 +248,18 @@ import SwiftUI
     // Retains the registry, unlike the other capabilities: the celebration
     // preset is switchable from Settings, so resolving it once here would pin
     // whatever was active at launch.
-    self.celebration = CompletionCelebrationManager(
+    let celebration = CompletionCelebrationManager(
       preferencesStore: preferencesStore,
-      registry: pluginRegistry,
-      quickEntry: quickEntry
+      registry: pluginRegistry
     )
+    self.celebration = celebration
+    // The other half of the cancellation contract. `runInline` has always
+    // promised to return false when the user moved on mid-animation, and every
+    // preset carried a `catch` for it, but nothing in the app ever cancelled
+    // the work — so the promise was unreachable. This is what fires it.
+    navigationState.onNavigationChanged = { [weak celebration] in
+      celebration?.cancelInFlight()
+    }
     let integrations = IntegrationCoordinator(
       preferencesStore: preferencesStore,
       obsidianPlugin: resolvedObsidianPlugin,
@@ -326,7 +333,8 @@ import SwiftUI
     // is no request to abandon, the tick has already landed locally.
     dailyLog.onDailyTicked = { [weak self] daily in
       guard let self else { return }
-      NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+      NSHapticFeedbackManager.defaultPerformer.perform(
+        .generic, performanceTime: .drawCompleted)
       let event = self.completionEvent(for: .daily(id: daily.id), alreadyRecorded: true)
       Task { @MainActor in
         _ = await self.celebration.runInline(event)

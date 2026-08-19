@@ -1,3 +1,4 @@
+import PriorityCore
 import SwiftUI
 
 struct EisenhowerMatrixView: View {
@@ -173,14 +174,40 @@ struct TaskDotView: View {
     manager.preferences.themeColor(for: token)
   }
 
+  /// The matrix is the one root view that used to show nothing at all when a
+  /// task was completed — the dot simply vanished on the next redraw, because
+  /// giving it a celebration meant copying the task row's twenty lines of
+  /// treatment plumbing a fourth time.
+  ///
+  /// It gets the preset's *small-shape* half rather than the row modifier: a
+  /// 6pt dot has no room for a tint wash or a 3pt leading bar, but `iconPop`
+  /// was written for exactly this case — a small mark the eye is already fixed
+  /// on, where a proportional change reads as a pop. Same treatment, same
+  /// curve, expressed in the vocabulary this surface has.
   var body: some View {
+    let kind = CompletionKind.task(id: task.id)
+    let treatment = manager.celebration.rowTreatment
+    let phase = manager.celebration.phase(for: kind)
+    let reduceMotion = manager.celebration.prefersReducedMotion
+    let isCelebrating = phase == .celebrating
+    let emphasised = isSelected || isHovered
+
     Circle()
-      .fill(isSelected ? themeColor(.link) : (isHovered ? themeColor(.textPrimary) : themeColor(.textSecondary).opacity(0.6)))
-      .frame(width: isSelected || isHovered ? 10 : 6, height: isSelected || isHovered ? 10 : 6)
+      .fill(
+        isCelebrating && treatment != .none
+          ? themeColor(.success)
+          : isSelected
+            ? themeColor(.link)
+            : (isHovered ? themeColor(.textPrimary) : themeColor(.textSecondary).opacity(0.6))
+      )
+      .frame(width: emphasised ? 10 : 6, height: emphasised ? 10 : 6)
       .overlay(
         Circle()
-          .stroke(Color.white, lineWidth: isSelected || isHovered ? 2 : 0)
+          .stroke(Color.white, lineWidth: emphasised ? 2 : 0)
       )
-      .animation(.spring(response: 0.2), value: isSelected || isHovered)
+      .scaleEffect(treatment.iconScale(for: phase))
+      .opacity(treatment.fades(at: phase) ? 0 : 1)
+      .animation(.spring(response: 0.2), value: emphasised)
+      .animation(CelebrationMotion.icon(reduceMotion: reduceMotion), value: phase)
   }
 }
