@@ -63,12 +63,12 @@ final class CommandExecutor {
         manager.repository.errorMessage = "No list matching \"\(query)\"."
         return
       }
-      manager.repository.listId = "\(found.id)"
-      manager.navigationState.currentParentId = 0
-      manager.navigationState.currentSiblingIndex = 0
       manager.quickEntry.searchText = ""
       manager.quickEntry.quickEntryText = ""
-      await manager.syncService.fetchTopTask()
+      // One switch path. Hand-rolling the reset here used to skip the offline
+      // queue and the kanban scope, so a list switched from the palette carried
+      // the previous list's pending work and column filter into the new one.
+      await manager.syncService.switchCheckvistList(to: "\(found.id)")
       return
     case .undo:
       await manager.undoService.undo()
