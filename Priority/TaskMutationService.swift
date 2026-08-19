@@ -762,12 +762,19 @@ final class TaskMutationService {
       timerByTaskId: host.timerElapsedByTaskId,
       pendingObsidianSyncTaskIds: host.pendingObsidianSyncTaskIds
     )
-    repository.tasks.removeSubrange(removingRange)
-    repository.removeTasksFromPriorityQueue(snapshot.removedTaskIds)
-    // A fetch issued before this point answers with the task still open, so
-    // hide it from any such response until a newer fetch confirms the close.
-    repository.suppressLocallyCompletedTasks(snapshot.removedTaskIds)
-    host.clampSelectionToVisibleRange()
+    // Animated as one transaction so the rows below rise to close the gap.
+    // Nothing used to move after a completion: the celebration played, the
+    // subtree went, and the rest of the list jumped up on the next frame — so
+    // the last thing the user saw was a cut. This costs the inline budget
+    // nothing, because by here the close request is already on its way.
+    host.withListSettleAnimation {
+      repository.tasks.removeSubrange(removingRange)
+      repository.removeTasksFromPriorityQueue(snapshot.removedTaskIds)
+      // A fetch issued before this point answers with the task still open, so
+      // hide it from any such response until a newer fetch confirms the close.
+      repository.suppressLocallyCompletedTasks(snapshot.removedTaskIds)
+      host.clampSelectionToVisibleRange()
+    }
     return snapshot
   }
 

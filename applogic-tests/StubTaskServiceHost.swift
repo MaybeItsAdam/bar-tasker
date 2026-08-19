@@ -175,6 +175,16 @@ final class StubTaskServiceHost: TaskMutationHost, SyncHost {
     return completionFeedbackSucceeds
   }
 
+  /// Production wraps this in `withAnimation` so the rows settle over the gap.
+  /// Headless, there is no transaction to open — but the body still has to run,
+  /// because it is what actually removes the subtree.
+  private(set) var listSettleAnimationCallCount = 0
+
+  func withListSettleAnimation(_ body: () -> Void) {
+    listSettleAnimationCallCount += 1
+    body()
+  }
+
   // MARK: SyncHost
 
   var taskMoveMode: TaskMoveMode = .siblingPosition

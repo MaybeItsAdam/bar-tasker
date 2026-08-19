@@ -111,6 +111,15 @@ protocol TaskMutationHost: TaskServiceHost {
   /// Returns `false` when the sequence was cancelled (the user navigated away
   /// mid-animation), in which case the close must not be sent.
   func runTaskCompletionFeedback(taskId: Int) async -> Bool
+
+  /// Runs a list mutation inside the animation the remaining rows settle on.
+  ///
+  /// The host supplies the transaction because the animation is SwiftUI's and
+  /// this module can't import it. Scoped to the mutation rather than declared
+  /// on the list, deliberately: an `.animation(_:value:)` watching the visible
+  /// tasks would also fire on every search keystroke and every root-view
+  /// switch, animating rows in and out of a list the user is typing to filter.
+  func withListSettleAnimation(_ body: () -> Void)
 }
 
 // MARK: - SyncService

@@ -162,6 +162,23 @@ final class TaskMutationServiceTests: XCTestCase {
     XCTAssertEqual(repository.tasks.map(\.id), [1], "the task stays put")
   }
 
+  /// The removal has to happen inside the host's transaction, not beside it.
+  /// Outside it the rows below snap up on the next frame — which is what the
+  /// list used to do, and the reason a completion ended on a cut rather than on
+  /// the list closing over the gap.
+  func testTheOptimisticRemovalRunsInsideTheListSettleTransaction() async {
+    repository.tasks = [
+      makeTask(id: 1, content: "parent"),
+      makeTask(id: 2, content: "unrelated"),
+    ]
+    host.currentTask = repository.tasks[0]
+
+    await service.markCurrentTaskDone()
+
+    XCTAssertEqual(host.listSettleAnimationCallCount, 1)
+    XCTAssertEqual(repository.tasks.map(\.id), [2], "and the body actually ran")
+  }
+
   func testTaskActionRestoresTheSubtreeWhenTheServerRejectsTheClose() async {
     repository.tasks = [
       makeTask(id: 1, content: "parent"),

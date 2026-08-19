@@ -1355,6 +1355,13 @@ struct PopoverView: View {
                   depth: taskListViewModel.outlineDepth(atVisibleIndex: index)
                 )
                 .id(task.id)
+                // How the row leaves, when it is removed inside
+                // `TaskMutationHost.withListSettleAnimation` — which is only
+                // ever an optimistic completion. Without a transaction around
+                // the mutation this is inert, which is the point: a search
+                // keystroke rebuilds this list too, and rows sliding out on
+                // every character is not the same event at all.
+                .transition(.move(edge: .top).combined(with: .opacity))
 
                 if navigationState.currentSiblingIndex == index,
                   manager.quickEntry.quickEntryMode == .addSibling
