@@ -6,7 +6,7 @@ import Foundation
 /// genuinely different things stored in different files — a task id comes from
 /// Checkvist, a daily id from `dailies.json`. Folding the identifier into the
 /// case keeps the two from being mixed up by a caller holding the wrong one.
-public enum CompletionKind: Equatable, Sendable {
+public enum CompletionKind: Equatable, Hashable, Sendable {
   case task(id: Int)
   case daily(id: String)
 
@@ -121,8 +121,23 @@ public enum CompletionMilestonePolicy {
     reduceMotion ? 0.25 : 1.0
   }
 
+  /// How long a flourish may run, reduced-motion scale applied.
+  ///
+  /// The inline half went through `clampedDuration` from the day it shipped;
+  /// the flourish half read `flourishBudget` raw. So Reduce Motion collapsed
+  /// the row's 180ms and then let a half-second particle burst play over the
+  /// top of it — the loudest motion in the app was the one piece of it that
+  /// ignored the setting. Every flourish takes its duration from here.
+  public static func flourishDuration(reduceMotion: Bool) -> TimeInterval {
+    clampedDuration(flourishBudget, budget: flourishBudget, reduceMotion: reduceMotion)
+  }
+
   /// Clamps a preset's requested duration to the budget for its phase, after
   /// applying the reduced-motion scale. A plugin cannot opt out of this.
+  ///
+  /// Prefer `CelebrationScript.fitting` for a *sequence*: this clamps one
+  /// duration in isolation, so a preset calling it per step can satisfy every
+  /// clamp and still overrun the budget several times over.
   public static func clampedDuration(
     _ requested: TimeInterval,
     budget: TimeInterval,
