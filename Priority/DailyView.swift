@@ -37,17 +37,16 @@ struct DailyView: View {
     // `let _ =`, not `_ =`: inside a ViewBuilder the latter is parsed as a
     // view expression and fails to compile. swiftlint:disable:next redundant_discardable_let
     let _ = dailyLog.revision
-    let summary = dailyLog.summary()
 
     // No horizontal padding on the container: the dailies rows are full-bleed
     // like the task rows elsewhere, so their selection highlight reaches the
     // panel edge instead of floating in an inset box. Everything else insets
     // itself to the same `rowHorizontalPadding`.
     VStack(alignment: .leading, spacing: 10) {
-      headline(summary)
-        .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
-      // Above the chart on purpose: this is the part you act on, the chart is
-      // the part you look at. Acting comes first.
+      // The checklist starts the view. A running "N done today" line with its
+      // focused/dailies/left chips used to sit above it, and it was a
+      // scoreboard for a question the rows underneath already answer one by
+      // one — it spent the top of a 400pt panel restating them.
       dailiesSection
       // Hidden from the dock's graph button, which makes this a plain
       // checklist for days you're only ticking things off.
@@ -62,7 +61,7 @@ struct DailyView: View {
       // checklist look like a footnote to it.
       if PopoverLayout.dailyShowsCompletions(for: manager) {
         Divider()
-        completionsList(summary)
+        completionsList(dailyLog.summary())
           .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
       }
     }
@@ -72,35 +71,6 @@ struct DailyView: View {
     // dock that no amount of sizing the list differently could remove.
     .padding(.top, 10)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-  }
-
-  // MARK: - Headline
-
-  /// The numbers stay visible as text at all times. Hover is an enhancement on
-  /// the chart, never the only way to read a value.
-  @ViewBuilder
-  private func headline(_ summary: DayLogAggregator.DaySummary) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 6) {
-      Text("\(summary.completedCount)")
-        .font(.system(size: 26, weight: .semibold))
-        .foregroundColor(themeColor(.textPrimary))
-      Text("done today")
-        .font(.system(size: 13))
-        .foregroundColor(themeColor(.textSecondary))
-      Spacer()
-      if summary.focusSeconds > 0 {
-        statChip(
-          value: DayLogFormatting.focusDuration(seconds: summary.focusSeconds),
-          label: "focused"
-        )
-      }
-      if let progress = dailyLog.dailyProgress {
-        statChip(value: "\(progress.done)/\(progress.total)", label: "dailies")
-      }
-      if summary.plannedCount > 0 {
-        statChip(value: "\(summary.unfinishedCount)", label: "left")
-      }
-    }
   }
 
   // MARK: - Dailies
@@ -432,18 +402,6 @@ struct DailyView: View {
     .help("How often the new daily repeats")
   }
 
-  @ViewBuilder
-  private func statChip(value: String, label: String) -> some View {
-    VStack(alignment: .trailing, spacing: 0) {
-      Text(value)
-        .font(.system(size: 15, weight: .semibold))
-        .foregroundColor(themeColor(.textPrimary))
-      Text(label)
-        .font(.system(size: 11))
-        .foregroundColor(themeColor(.textSecondary))
-    }
-  }
-
   // MARK: - Chart
 
   /// Always drawn, from the first day.
@@ -501,56 +459,71 @@ struct DailyView: View {
     }
   }
 
-  /// Columns, one per bucket. Not a line: completions are discrete counts with
-  /// a lot of zeros, and a line would draw a slope through days nothing
-  /// happened on. A day with no completions has to read as an absent bar.
+  /// A plot: one marker per bucket, joined by a hairline.
   ///
-  /// One hue for every bar — height already encodes magnitude, so shading
-  /// taller bars darker would double-encode it and spend the only free channel
-  /// on information the chart already shows. That channel goes to emphasis
-  /// instead: today is the accent, every prior bucket is recessive, because the
-  /// question is "today versus my normal".
+  /// Columns before this, on the reasoning that a line slopes through days
+  /// nothing happened on. It does — and that is what a run of days *is*. Bars
+  /// at the 90-day range are a picket fence a point wide, where the shape of
+  /// the trend is exactly what you are looking at the chart for; markers on a
+  /// line keep that shape legible at every range, and a zero still reads as a
+  /// marker sitting on the baseline rather than as a gap in the fence.
+  ///
+  /// One hue for every marker — position already encodes magnitude, so shading
+  /// higher points darker would double-encode it and spend the only free
+  /// channel on information the chart already shows. That channel goes to
+  /// emphasis instead: today is the accent, every prior bucket is recessive,
+  /// because the question is "today versus my normal".
   @ViewBuilder
   private func chart(buckets: [DayLogAggregator.Bucket]) -> some View {
     let maxCount = max(buckets.map(\.completed).max() ?? 0, 1)
 
     GeometryReader { proxy in
-      let gap: CGFloat = 2
+      // Inset by the largest marker, so the first and last points sit inside
+      // the frame instead of being sliced in half by its edges.
+      let inset = Self.todayDotRadius
+      let plotWidth = max(1, proxy.size.width - inset * 2)
+      let plotHeight = max(1, proxy.size.height - inset * 2)
       let count = max(buckets.count, 1)
-      let barWidth = max(1, (proxy.size.width - gap * CGFloat(count - 1)) / CGFloat(count))
-      // Clamped, or the 4pt radius exceeds the bar width at the 90-day range
-      // and the columns render as lollipops.
-      let radius = min(4, barWidth / 2)
+      // A single bucket has no step to speak of and belongs in the middle
+      // rather than pinned to the left edge.
+      let step = count > 1 ? plotWidth / CGFloat(count - 1) : 0
+      let points = buckets.enumerated().map { index, bucket in
+        CGPoint(
+          x: inset + (count > 1 ? step * CGFloat(index) : plotWidth / 2),
+          y: inset + plotHeight
+            - CGFloat(bucket.completed) / CGFloat(maxCount) * plotHeight
+        )
+      }
+      let hitWidth = proxy.size.width / CGFloat(count)
 
-      HStack(alignment: .bottom, spacing: gap) {
-        ForEach(Array(buckets.enumerated()), id: \.offset) { index, bucket in
-          let isLast = index == buckets.count - 1
-          let fraction = CGFloat(bucket.completed) / CGFloat(maxCount)
-          // A bucket with work in it never rounds away to nothing.
-          let height = bucket.completed == 0 ? 0 : max(2, fraction * (proxy.size.height - 1))
+      ZStack {
+        // Under the markers, so a dot never sits on a stroke that stops halfway
+        // across it. Round joins because the series is spiky by nature and
+        // mitred corners at a 90-day range come out as spikes of their own.
+        Path { path in
+          guard let first = points.first else { return }
+          path.move(to: first)
+          for point in points.dropFirst() { path.addLine(to: point) }
+        }
+        .stroke(
+          themeColor(.textMuted).opacity(0.4),
+          style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
+        )
 
-          VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            UnevenRoundedRectangle(
-              topLeadingRadius: radius,
-              bottomLeadingRadius: 0,
-              bottomTrailingRadius: 0,
-              topTrailingRadius: radius
+        ForEach(Array(points.enumerated()), id: \.offset) { index, point in
+          let isLast = index == points.count - 1
+          let isHovered = index == hoveredBucketIndex
+          let radius = isLast || isHovered ? Self.todayDotRadius : Self.dotRadius
+          Circle()
+            .fill(
+              isLast || isHovered
+                ? themeColor(.focusRing) : themeColor(.textMuted).opacity(0.55)
             )
-            .fill(isLast ? themeColor(.focusRing) : themeColor(.textMuted).opacity(0.55))
-            .frame(width: barWidth, height: height)
-          }
-          .frame(width: barWidth, height: proxy.size.height, alignment: .bottom)
-          .contentShape(Rectangle())
-          .onHover { inside in
-            hoveredBucketIndex = inside ? index : (hoveredBucketIndex == index ? nil : hoveredBucketIndex)
-          }
-          .accessibilityLabel(
-            "\(bucketLabel(bucket)): \(DayLogFormatting.pluralised(bucket.completed, "task", "tasks"))"
-          )
+            .frame(width: radius * 2, height: radius * 2)
+            .position(point)
         }
       }
-      .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
+      .frame(width: proxy.size.width, height: proxy.size.height)
       .overlay(alignment: .bottom) {
         // Solid hairline baseline, no gridlines — at this size a grid is noise,
         // and dashing it would read as a threshold that isn't there.
@@ -558,9 +531,35 @@ struct DailyView: View {
           .fill(themeColor(.panelDivider))
           .frame(height: 1)
       }
+      // Full-height hit columns rather than the markers themselves: a 5pt dot
+      // is not something you can reliably put a pointer on, and at the 90-day
+      // range the gaps between them would swallow most of the row.
+      .overlay {
+        HStack(spacing: 0) {
+          ForEach(Array(buckets.enumerated()), id: \.offset) { index, bucket in
+            Color.clear
+              .frame(width: hitWidth)
+              .contentShape(Rectangle())
+              .onHover { inside in
+                hoveredBucketIndex =
+                  inside ? index : (hoveredBucketIndex == index ? nil : hoveredBucketIndex)
+              }
+              .accessibilityLabel(
+                "\(bucketLabel(bucket)): \(DayLogFormatting.pluralised(bucket.completed, "task", "tasks"))"
+              )
+          }
+        }
+      }
     }
     .frame(height: Layout.chartHeight)
   }
+
+  /// Small enough that ninety of them don't merge into a rule, large enough to
+  /// read as a plotted point rather than as noise on the line.
+  private static let dotRadius: CGFloat = 2
+  /// Today, and whatever the pointer is on — the one marker you're meant to
+  /// find without reading the label.
+  private static let todayDotRadius: CGFloat = 3.5
 
   private var hoverLabel: String? {
     guard let index = hoveredBucketIndex else { return nil }

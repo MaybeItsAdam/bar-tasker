@@ -170,15 +170,6 @@ protocol DailyLogDataSource: AnyObject {
     return value
   }
 
-  /// "3/5" for the headline chip. Nil when there are no dailies today, so the
-  /// chip disappears rather than reading "0/0".
-  var dailyProgress: (done: Int, total: Int)? {
-    let today = todaysDailies
-    guard !today.isEmpty else { return nil }
-    let completed = completedDailyIds()
-    return (today.filter { completed.contains($0.id) }.count, today.count)
-  }
-
   func toggleDaily(_ daily: Daily, now: Date = Date()) {
     let isDone = completedDailyIds(on: now).contains(daily.id)
     plugin.setDaily(id: daily.id, completed: !isDone, now: now)

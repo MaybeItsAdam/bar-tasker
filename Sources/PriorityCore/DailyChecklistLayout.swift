@@ -30,9 +30,10 @@ public enum DailyChecklistLayout {
   public static let rowHeight: CGFloat = 34
   /// "DAILIES" + its 8pt top and 5pt bottom padding.
   public static let headerHeight: CGFloat = 28
-  /// The view's top padding, the "N done today" line, and the 10pt stack
-  /// spacing under it.
-  public static let headlineBlockHeight: CGFloat = 10 + 43 + 10
+  /// The view's top padding, and nothing else. It used to carry a "N done
+  /// today" headline and the stack spacing under it as well; the checklist now
+  /// starts the view, so the block is the padding alone.
+  public static let topBlockHeight: CGFloat = 10
   /// A `Divider` is a child of the stack, so it costs the 10pt spacing on
   /// *both* sides as well as its own hairline. Missing this is what made every
   /// estimate of the chart's cost 20pt short.
@@ -90,7 +91,7 @@ public enum DailyChecklistLayout {
     showsCompletions: Bool,
     isAddingDaily: Bool
   ) -> CGFloat {
-    headlineBlockHeight + headerHeight
+    topBlockHeight + headerHeight
       + (isAddingDaily ? addFieldHeight : 0)
       + chartBlockHeight(showsChart: showsChart, hasFullChartHistory: hasFullChartHistory)
       + completionsBlockHeight(showsCompletions: showsCompletions)
