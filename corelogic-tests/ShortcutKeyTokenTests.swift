@@ -24,6 +24,15 @@ final class ShortcutKeyTokenTests: XCTestCase {
 
   /// Number-row keys are named by code rather than by character so that a
   /// layout where Shift+1 reports "!" still binds as "shift+1".
+  /// The key labelled "delete" on a Mac keyboard is backspace, keyCode 51.
+  /// Only 117 — the forward delete behind fn — was mapped, so the `delete`
+  /// binding never fired for the key its own help text names, and a daily
+  /// could not be deleted at all.
+  func testBothDeleteKeysProduceTheDeleteToken() {
+    XCTAssertEqual(token(keyCode: 51, characters: "\u{8}"), "delete")
+    XCTAssertEqual(token(keyCode: 117, characters: "\u{7F}"), "delete")
+  }
+
   func testNumberRowKeysAreNamedByCodeNotByCharacter() {
     XCTAssertEqual(token(keyCode: 18, characters: "!", shift: true), "shift+1")
   }

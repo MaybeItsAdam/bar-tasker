@@ -44,6 +44,13 @@ public enum ShortcutKeyToken {
     48: "tab",
     53: "escape",
     120: "f2",
+    // Both delete keys, because the one labelled "delete" on a Mac keyboard is
+    // 51 (backspace) and 117 is the forward delete hidden behind fn. Only 117
+    // was mapped, so the `delete` binding — the only way to delete a daily —
+    // fired for nobody who pressed the key the UI names. 51 carries a
+    // non-printable character, so without an entry here it tokenised as that
+    // control character and matched nothing.
+    51: "delete",
     117: "delete",
     123: "left",
     124: "right",

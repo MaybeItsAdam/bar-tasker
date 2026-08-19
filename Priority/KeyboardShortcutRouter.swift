@@ -674,7 +674,7 @@ struct KeyboardShortcutRouter {
       return true
     }
 
-    // Del (forward delete / Fn+Backspace) - delete task.
+    // Delete (either delete key) - delete task, behind a confirmation by default.
     if claims(.deleteTask) {
       if isRepeat { return true }
       if manager.preferences.confirmBeforeDelete {
