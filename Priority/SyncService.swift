@@ -66,6 +66,7 @@ final class SyncService {
         // shape we are actually replacing.
         let previousTasks = repository.tasks
         repository.tasks = fetchedTasks
+        repository.markSyncSucceeded()
         repository.activeSyncPlugin.persistTaskCache(
           listId: repository.listId, tasks: fetchedTasks)
         repository.reconcilePriorityQueueWithOpenTasks()

@@ -15,8 +15,11 @@ struct KeyboardShortcutRouter {
   let updateTitle: () -> Void
   let closeWindow: () -> Void
 
-  func handle(event: NSEvent, popoverWindow: NSWindow?) -> Bool {
-    guard let popoverWindow, event.window === popoverWindow else { return false }
+  /// - Parameter hostWindow: the window this router speaks for. Keys are only
+  ///   claimed for events already destined for it, so the panel and the main
+  ///   window each install their own monitor and neither sees the other's keys.
+  func handle(event: NSEvent, hostWindow: NSWindow?) -> Bool {
+    guard let hostWindow, event.window === hostWindow else { return false }
 
     let shift = event.modifierFlags.contains(.shift)
     let ctrl = event.modifierFlags.contains(.control)

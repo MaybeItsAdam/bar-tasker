@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   private(set) var menuBarController: MenuBarController!
   private(set) var shortcutManager: GlobalShortcutManager!
+  private(set) var mainWindowController: MainWindowController!
 
   private var preferencesWindow: NSWindow?
   private var preferencesNavState: SettingsNavState?
@@ -49,6 +50,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     menuBarController.onShowSettings = { [weak self] in
       self?.menuSettings()
     }
+    menuBarController.onShowMainWindow = { [weak self] in
+      self?.showMainWindow()
+    }
     menuBarController.onQuit = { [weak self] in
       self?.menuQuit()
     }
@@ -61,6 +65,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       } else {
         NSSound.beep()
       }
+    }
+
+    mainWindowController = MainWindowController(manager: checkvistManager)
+    mainWindowController.onUpdateMenuBarTitle = { [weak self] in
+      self?.menuBarController.updateTitle()
+    }
+    mainWindowController.onShowSettings = { [weak self] in
+      self?.menuSettings()
+    }
+    mainWindowController.onVisibilityChanged = { [weak self] isVisible in
+      self?.applyActivationPolicy(hasOrdinaryWindow: isVisible)
     }
 
     shortcutManager = GlobalShortcutManager(manager: checkvistManager)
@@ -164,7 +179,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     window.delegate = self
     window.contentViewController = hostingController
     window.setFrameAutosaveName("PriorityPreferencesWindowV2")
-    Self.enforceMinimumContentSize(of: window)
+    WindowContentSizing.enforce(
+      on: window,
+      minContentSize: Self.preferencesMinContentSize,
+      maxContentSize: Self.preferencesMaxContentSize
+    )
     preferencesWindow = window
     return window
   }
@@ -173,43 +192,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   /// `.frame(minWidth:minHeight:)` on `SettingsView` above.
   private static let preferencesMinContentSize = NSSize(width: 720, height: 560)
   private static let preferencesMaxContentSize = NSSize(width: 1200, height: 900)
-
-  /// Converts the SwiftUI root's minimum *content* size into the window's
-  /// `minSize`, which is a *frame* measurement, and grows the window if the
-  /// autosaved frame came back smaller than that.
-  ///
-  /// These are two different quantities and the old code conflated them: it set
-  /// `minSize` to 720x560 — the content minimum — while the frame also carries a
-  /// 28pt titlebar and a 52pt preference-style toolbar. Worse, `minSize` does
-  /// nothing on a window without `.resizable` in its mask, so nothing enforced
-  /// it at all. A restored frame of 720x612 left only 532pt of content for a
-  /// view that cannot shrink below 560, and SwiftUI simply overflowed and
-  /// clipped — which is what cut the plugin sidebar's button bar off the bottom.
-  private static func enforceMinimumContentSize(of window: NSWindow) {
-    // Measured rather than hardcoded: the toolbar style, and therefore the
-    // chrome height, is not ours to predict across OS versions.
-    let chrome = window.frame.height - window.contentLayoutRect.height
-    guard chrome >= 0 else { return }
-
-    window.minSize = NSSize(
-      width: preferencesMinContentSize.width,
-      height: preferencesMinContentSize.height + chrome
-    )
-    window.maxSize = NSSize(
-      width: preferencesMaxContentSize.width,
-      height: preferencesMaxContentSize.height + chrome
-    )
-
-    var frame = window.frame
-    frame.size.width = max(frame.width, window.minSize.width)
-    frame.size.height = max(frame.height, window.minSize.height)
-    if frame.size != window.frame.size {
-      // Keep the top-left pin so the window grows downward rather than
-      // appearing to jump when a stale small frame is corrected.
-      frame.origin.y = window.frame.maxY - frame.height
-      window.setFrame(frame, display: false)
-    }
-  }
 
   func windowWillClose(_ notification: Notification) {
     guard let closingWindow = notification.object as? NSWindow else { return }
@@ -235,6 +217,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
   }
 
+  func showMainWindow() {
+    menuBarController.closeWindow()
+    mainWindowController.show()
+  }
+
+  /// The Dock icon and the app menu are process-wide, not per-window, so they
+  /// are derived from whether any ordinary window is up rather than toggled at
+  /// each call site.
+  ///
+  /// `.regular` is what gives a windowed user Cmd-Tab, Cmd-W and — the one that
+  /// bites if it is missing — the Edit menu, without which copy and paste do
+  /// nothing in the quick-entry field.
+  /// - Parameter hasOrdinaryWindow: passed in rather than re-derived from the
+  ///   window, because `windowWillClose` arrives *before* the window stops
+  ///   reporting itself visible — asking it would have left the Dock icon
+  ///   behind after every close.
+  private func applyActivationPolicy(hasOrdinaryWindow: Bool) {
+    let desired: NSApplication.ActivationPolicy = hasOrdinaryWindow ? .regular : .accessory
+    guard NSApp.activationPolicy() != desired else { return }
+    NSApp.setActivationPolicy(desired)
+    if desired == .regular {
+      NSApp.activate(ignoringOtherApps: true)
+    }
+  }
+
   func menuQuit() {
     explicitQuitRequested = true
     NSApp.terminate(nil)
@@ -248,7 +255,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    switch AppTerminationPolicy.decision(explicitQuitRequested: explicitQuitRequested) {
+    switch AppTerminationPolicy.decision(
+      explicitQuitRequested: explicitQuitRequested,
+      isRegularActivationPolicy: NSApp.activationPolicy() == .regular
+    ) {
     case .terminateNow:
       return .terminateNow
     case .cancel:

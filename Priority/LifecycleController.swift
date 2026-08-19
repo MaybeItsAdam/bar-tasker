@@ -83,6 +83,10 @@ final class LifecycleController {
     repository.onCheckvistIntegrationEnabledChanged = { [weak coordinator] in
       coordinator?.onboardingService.refreshOnboardingDialogState()
     }
+    repository.onErrorMessageSet = { [weak coordinator] message in
+      coordinator?.diagnosticsLog.record(
+        category: "Sync", message: message, isFailure: true)
+    }
 
     // Other manager callbacks (non-cache concerns only).
     coordinator.quickEntry.integrationFlagsProvider = { [weak coordinator] in
@@ -100,11 +104,19 @@ final class LifecycleController {
     coordinator.startDates.dateResolver = { [weak coordinator] input in
       coordinator?.preferences.resolveDueDate(input) ?? input
     }
+    // These are single closure slots, not multicast, so the diagnostics record
+    // has to be chained onto the existing behaviour rather than added beside it.
     coordinator.integrations.onError = { [weak coordinator] err in
       coordinator?.repository.errorMessage = err
+      if let err {
+        coordinator?.diagnosticsLog.record(
+          category: "Integrations", message: err, isFailure: true)
+      }
     }
     coordinator.integrations.onStatus = { [weak coordinator] message in
       coordinator?.statusMessage = message
+      coordinator?.diagnosticsLog.record(
+        category: "Integrations", message: message, isFailure: false)
     }
     coordinator.integrations.onCloseTasks = { [weak coordinator] taskIds in
       guard let coordinator else { return }

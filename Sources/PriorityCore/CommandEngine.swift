@@ -63,6 +63,8 @@ public enum Command: Equatable, Sendable {
   case edit
   case search
   case openPreferences
+  case openMainWindow
+  case openDiagnostics
   case reloadCheckvistLists
   case uploadOfflineTasks
   case addSibling
@@ -297,6 +299,14 @@ public enum CommandEngine {
       preview: "Open Priority preferences",
       keybind: "Cmd+,", submitImmediately: true),
     .init(
+      label: "Open main window", command: "window",
+      preview: "Open the resizable window",
+      keybind: nil, submitImmediately: true),
+    .init(
+      label: "Diagnostics", command: "diagnostics",
+      preview: "Connection, plugin health, recent problems",
+      keybind: nil, submitImmediately: true),
+    .init(
       label: "Add sibling task", command: "add sibling", preview: "Create sibling below selection",
       keybind: "Enter", submitImmediately: true),
     .init(
@@ -476,6 +486,12 @@ public enum CommandEngine {
     if cmd == "search" { return .search }
     if cmd == "preferences" || cmd == "prefs" || cmd == "settings" {
       return .openPreferences
+    }
+    if cmd == "window" || cmd == "open window" || cmd == "main window" {
+      return .openMainWindow
+    }
+    if cmd == "diagnostics" || cmd == "support" || cmd == "health" {
+      return .openDiagnostics
     }
     if cmd == "reload checkvist lists" || cmd == "reload lists" || cmd == "refresh lists" {
       return .reloadCheckvistLists

@@ -33,6 +33,7 @@ class MenuBarController: NSObject {
   private let logger = Logger(subsystem: "uk.co.maybeitsadam.priority", category: "keyboard")
 
   var onShowSettings: (() -> Void)?
+  var onShowMainWindow: (() -> Void)?
   var onQuit: (() -> Void)?
 
   init(manager: AppCoordinator) {
@@ -317,7 +318,7 @@ class MenuBarController: NSObject {
       updateTitle: { [weak self] in self?.updateTitle() },
       closeWindow: { [weak self] in self?.closeWindow() }
     )
-    return router.handle(event: event, popoverWindow: window)
+    return router.handle(event: event, hostWindow: window)
   }
 
   private func makeWindowIfNeeded() -> PriorityPanel {
@@ -386,6 +387,9 @@ class MenuBarController: NSObject {
 
   private func showStatusItemContextMenu() {
     let menu = NSMenu()
+    menu.addItem(withTitle: "Open Main Window", action: #selector(menuMainWindow), keyEquivalent: "")
+      .target = self
+    menu.addItem(.separator())
     menu.addItem(withTitle: "Preferences…", action: #selector(menuSettings), keyEquivalent: "")
       .target = self
     menu.addItem(.separator())
@@ -404,6 +408,10 @@ class MenuBarController: NSObject {
 
   @objc private func menuSettings() {
     onShowSettings?()
+  }
+
+  @objc private func menuMainWindow() {
+    onShowMainWindow?()
   }
 
   @objc private func menuQuit() {

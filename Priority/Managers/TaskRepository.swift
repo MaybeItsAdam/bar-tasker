@@ -109,9 +109,32 @@ struct PendingTaskUpdate: Sendable, Codable {
   // MARK: - UI State
 
   var isLoading: Bool = false
-  var errorMessage: String?
+  /// The last thing that went wrong, and only the last: this is overwritten by
+  /// the next failure and cleared by the next fetch that starts. Anything that
+  /// needs to *remember* a failure listens on `onErrorMessageSet` — the app
+  /// layer records those, since this target can't see the diagnostics log.
+  var errorMessage: String? {
+    didSet {
+      if let errorMessage, !errorMessage.isEmpty, errorMessage != oldValue {
+        onErrorMessageSet?(errorMessage)
+      }
+    }
+  }
+  @ObservationIgnored var onErrorMessageSet: ((String) -> Void)?
   var isNetworkReachable: Bool = true {
     didSet { cacheInvalidationBus.invalidate() }
+  }
+  /// When a fetch last replaced `tasks` without erroring.
+  ///
+  /// Deliberately in memory only. The question it answers — "is what I am
+  /// looking at current?" — is about this run of the app; a timestamp restored
+  /// from disk would claim freshness for a list fetched days ago. The on-disk
+  /// cache carries its own `fetchedAt` for the separate question of whether the
+  /// cache is stale.
+  private(set) var lastSuccessfulSyncAt: Date?
+
+  func markSyncSucceeded(at date: Date = Date()) {
+    lastSuccessfulSyncAt = date
   }
 
   // MARK: - Priority
@@ -372,6 +395,15 @@ struct PendingTaskUpdate: Sendable, Codable {
   var canAttemptLogin: Bool { hasCredentials }
   var hasListSelection: Bool {
     !listId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+  /// The selected list's name, or empty when there is no selection or the lists
+  /// haven't loaded yet.
+  ///
+  /// One source of truth: this was being re-derived at each call site that
+  /// wanted to name the current list, and the toolbar switcher would have made
+  /// that three.
+  var currentListName: String {
+    availableLists.first { String($0.id) == listId }?.name ?? ""
   }
   var checkvistConnectionState: CheckvistConnectionState {
     if !hasCredentials { return .disconnected }

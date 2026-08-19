@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import PriorityCore
 import SwiftUI
 
@@ -23,6 +24,11 @@ extension PopoverView {
 struct PopoverDockRow: View {
   @Environment(AppCoordinator.self) private var manager
   @Environment(TaskListViewModel.self) private var taskListViewModel
+  @Environment(\.shellMode) private var shellMode
+
+  private func chromeShows(_ element: ShellChromeElement) -> Bool {
+    ShellChrome.shows(element, in: shellMode)
+  }
 
   private func themeColor(_ token: AppThemeColorToken) -> Color {
     manager.preferences.themeColor(for: token)
@@ -32,6 +38,11 @@ struct PopoverDockRow: View {
     let chrome = manager.popoverChrome
 
     HStack(spacing: 2) {
+      // The window has room to say why it looks stale; the panel spends every
+      // point it has on tasks.
+      if chromeShows(.syncStatusReadout) {
+        SyncStatusReadout()
+      }
       Spacer(minLength: 0)
 
       // Only where there is a graph to toggle. A control that does nothing in
@@ -62,13 +73,28 @@ struct PopoverDockRow: View {
         }
       }
 
-      DockButton(
-        systemName: "arrow.up.and.down",
-        isActive: chrome.isResizeHandleVisible,
-        help: chrome.isResizeHandleVisible ? "Hide the resize handle" : "Resize this view",
-        accessibilityLabel: "Toggle the resize handle"
-      ) {
-        chrome.isResizeHandleVisible.toggle()
+      // A window has a resize corner and a title bar to drag. The strip exists
+      // only because the panel has neither.
+      if chromeShows(.resizeDockButton) {
+        DockButton(
+          systemName: "arrow.up.and.down",
+          isActive: chrome.isResizeHandleVisible,
+          help: chrome.isResizeHandleVisible ? "Hide the resize handle" : "Resize this view",
+          accessibilityLabel: "Toggle the resize handle"
+        ) {
+          chrome.isResizeHandleVisible.toggle()
+        }
+      }
+
+      if chromeShows(.diagnosticsDockButton) {
+        DockButton(
+          systemName: "stethoscope",
+          isActive: chrome.showsDiagnostics,
+          help: "Diagnostics",
+          accessibilityLabel: "Open diagnostics"
+        ) {
+          chrome.showsDiagnostics = true
+        }
       }
 
       if manager.repository.isLoading {
@@ -213,5 +239,57 @@ struct PopoverResizeStrip: View {
       )
       .accessibilityLabel("Resize this view")
       .accessibilityHint("Drag up or down to change the height. Double-tap to reset.")
+  }
+}
+
+// MARK: - Sync status
+
+/// The window's "is what I'm looking at current?" line.
+///
+/// Ticks on a timer rather than on data changes: the text is a statement about
+/// elapsed time, so left alone it would keep claiming "just now" for an hour.
+/// One minute is as fine-grained as `relativeDescription` ever gets.
+struct SyncStatusReadout: View {
+  @Environment(AppCoordinator.self) private var manager
+
+  @State private var now = Date()
+
+  private static let tick = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+
+  private func themeColor(_ token: AppThemeColorToken) -> Color {
+    manager.preferences.themeColor(for: token)
+  }
+
+  private var summary: SyncStatusSummary {
+    let repository = manager.repository
+    return SyncStatusFormatter.summary(
+      isLoading: repository.isLoading,
+      isNetworkReachable: repository.isNetworkReachable,
+      canSyncRemotely: repository.canSyncRemotely,
+      hasPendingOfflineWork: repository.hasPendingOfflineWork,
+      errorMessage: repository.errorMessage,
+      lastSuccessfulSyncAt: repository.lastSuccessfulSyncAt,
+      now: now
+    )
+  }
+
+  private var color: Color {
+    switch summary.severity {
+    case .ok: return themeColor(.textMuted)
+    case .warning: return themeColor(.warning)
+    case .problem: return themeColor(.danger)
+    }
+  }
+
+  var body: some View {
+    let summary = summary
+    Text(summary.text)
+      .font(.system(size: 10, weight: .medium))
+      .foregroundColor(color)
+      .lineLimit(1)
+      .truncationMode(.tail)
+      .padding(.leading, 4)
+      .help(summary.text)
+      .onReceive(Self.tick) { now = $0 }
   }
 }

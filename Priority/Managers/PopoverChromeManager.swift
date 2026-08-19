@@ -56,6 +56,12 @@ import PriorityCore
   /// morning.
   var showsShortcutReference: Bool = false
 
+  /// Whether the diagnostics sheet is up. Not persisted, for the same reason as
+  /// the reference sheet: it is something you open when something is wrong, not
+  /// a mode you work in. Only the main window can show it — a sheet needs a
+  /// titled window to attach to, and the panel is a non-activating one.
+  var showsDiagnostics: Bool = false
+
   init(preferencesStore: PreferencesStore) {
     self.preferencesStore = preferencesStore
     self.isResizeHandleVisible = preferencesStore.bool(

@@ -89,6 +89,9 @@ import SwiftUI
   let celebration: CompletionCelebrationManager
   /// Popover chrome — the dock row, the resize strip, per-view heights.
   let popoverChrome: PopoverChromeManager
+  /// What has failed this session. Nothing else in the app retains a failure
+  /// for longer than the three seconds `statusMessage` lasts.
+  let diagnosticsLog = DiagnosticsLog()
 
   let preferences: PreferencesManager
   var onboardingService: OnboardingService!

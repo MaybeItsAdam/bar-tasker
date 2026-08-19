@@ -184,3 +184,41 @@ This optimistic-then-sync-then-rollback-or-enqueue shape recurs across mutations
 `AppCoordinator.applyOptimisticMoveAndSync` and the `TaskMutationService` mutation methods.
 </content>
 </invoke>
+
+## Two shells, one set of state
+
+The menu bar panel and the main window (`MainWindowController`) host the *same*
+`PopoverView` over the *same* `AppCoordinator`. Only `\.shellMode` differs, and
+the only thing it decides is chrome — the rules live in
+`PriorityCore/ShellMode.swift` as `ShellChrome.shows(_:in:)` rather than as
+`if` statements in the views, so they can be tested without SwiftUI.
+
+**They are mirrors, not independent views, and that is a property of the state
+model rather than a decision that can be revisited cheaply.**
+`TaskListViewModel.cache` is derived from `rootTaskView`, `hideFuture`,
+`searchText` and the `NavigationState` cursor. One view model therefore cannot
+serve two surfaces showing different tabs — switching tab in the window
+switches it in the panel, by construction.
+
+Making them independent means extracting a per-window context holding
+`NavigationState`, `TaskListViewModel`, `QuickEntryManager`, the kanban and
+daily selections, `statusMessage`, and the celebration / shortcut-overlay flags,
+while `TaskRepository`, `PreferencesManager`, `TimerManager` and the
+integrations stay global. It also means multicasting `CacheInvalidationBus`,
+which today has exactly one subscriber. The host protocols in
+`TaskServiceHosts.swift` are the seam that already exists for it.
+
+Two windows on *different lists* is further still: `TaskRepository.listId` is a
+single global whose `didSet` swaps all four `ListScoped*` stores, and the
+fetch-generation arbitration assumes one list in flight.
+
+### Failure state
+
+Nothing in the app retained a failure for longer than three seconds:
+`repository.errorMessage` is overwritten by the next failure and cleared by the
+next fetch, `AppCoordinator.statusMessage` erases itself on a timer, and
+`IntegrationCoordinator.onError` dropped what it was given. `DiagnosticsLog` is
+the bounded in-memory record that closes that gap. It is fed from
+`LifecycleController`, chained onto the existing `onError` / `onStatus` /
+`onErrorMessageSet` handlers — **those are single closure slots, not multicast**,
+so anything else that wants to observe them has to chain too, not replace.

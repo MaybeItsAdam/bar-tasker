@@ -16,6 +16,15 @@ final class CommandExecutor {
     case .openPreferences:
       AppDelegate.shared.menuSettings()
       return
+    case .openMainWindow:
+      AppDelegate.shared.showMainWindow()
+      return
+    case .openDiagnostics:
+      // Diagnostics is a sheet on the main window, so opening it means opening
+      // that window first — the panel has nothing to attach a sheet to.
+      AppDelegate.shared.showMainWindow()
+      manager.popoverChrome.showsDiagnostics = true
+      return
     case .reloadCheckvistLists:
       _ = await manager.syncService.loadCheckvistLists(assignFirstIfMissing: false)
       return

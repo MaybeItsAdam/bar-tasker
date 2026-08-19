@@ -20,7 +20,7 @@ It works offline. It works from the terminal. And it exposes the whole surface t
 
 - [Install](#install) · [First run](#first-run)
 - [Keyboard flow](#keyboard-flow) · [Command palette](#command-palette)
-- [Views](#views) · [The dock row](#the-dock-row)
+- [Views](#views) · [The window](#the-window) · [Diagnostics](#diagnostics) · [The dock row](#the-dock-row)
 - [Daily log](#daily-log) · [Obsidian daily notes](#obsidian-daily-notes) · [AFFiNE](#affine)
 - [Command line](#command-line) · [MCP server](#mcp-server) · [Plugins](#plugins)
 - [Build from source](#build-from-source) · [Where your data lives](#where-your-data-lives)
@@ -180,7 +180,7 @@ Open with `:`, `;` or `Cmd+K`. Most commands accept several spellings — `unrep
 | **AFFiNE** | `sync affine`, `open affine`, `affine daily` |
 | **Calendar** | `sync google calendar`, `open google calendar` |
 | **MCP** | `mcp guide`, `mcp config`, `copy mcp config`, `refresh mcp path` |
-| **App** | `preferences`, `search`, `quick add`, `refresh lists`, `upload offline tasks` |
+| **App** | `preferences`, `search`, `quick add`, `refresh lists`, `upload offline tasks`, `window`, `diagnostics` |
 
 Due values understand natural language and times: `due today 14:30`, `due tomorrow 9am`, `due next week`, `due 4pm fri`, `due next monday morning`. The time words `morning`, `noon`, `afternoon`, `evening`, `midnight`, `eod` and `cob` all resolve to configurable named times.
 
@@ -198,16 +198,65 @@ Due values understand natural language and times: `due today 14:30`, `due tomorr
 
 Kanban cards show the task text with tags stripped, a `P1`–`P9` priority badge, the due date with overdue/today highlighting, inline tags, and a subtask count. Columns are configured in Preferences and reorder by drag.
 
+## The window
+
+The menu bar panel is the point of this app, but it dismisses on any outside
+click and it is 400pt wide — which is right for a glance and wrong for half an
+hour of reorganising, and leaves nowhere to look when something breaks. So the
+same seven views also open in an ordinary window.
+
+Open it from **the status item's right-click menu → Open Main Window**, from the
+command palette (`window`), or with `Cmd+0` once it is up. It is resizable,
+survives clicking away, remembers its frame, and every keybinding works in it
+exactly as it does in the panel — `Esc` cancels what you are typing but leaves
+the window alone.
+
+**Everything is shared.** One list, one cursor, one selected view, in both
+places at once: change tab in the window and the panel changes too. That is a
+deliberate limit rather than an oversight — the visible task list is derived
+from the tab, the cursor and the search text, so two surfaces showing different
+tabs would need two of everything underneath.
+
+**A Dock icon appears while the window is open** and goes again when you close
+it. That is what buys you `Cmd-Tab`, `Cmd-W`, `Cmd-Q` and — the one you notice
+if it is missing — an Edit menu, without which copy and paste do nothing in the
+quick-add field.
+
+The toolbar carries a **list switcher**: the current list by name, every list
+you have, the offline workspace, and a Refresh. Switching here does the same
+full switch `Shift+L` and `list <name>` do — the cursor resets, the kanban
+filter clears, and the pending offline queue for the list you left is not
+carried into the one you arrived at.
+
+## Diagnostics
+
+`⚕` in the window's toolbar or its dock row, `diagnostics` in the palette, or
+**View → Diagnostics**. It answers "why does this look wrong?":
+
+- **Status** — connection, current list, network, sync age, open task count, and whether anything is queued offline.
+- **Health** — a green tick or an orange triangle per integration, with the detail underneath. The AFFiNE row lists every path it searched for the helper; the MCP row shows the resolved command; the Google Calendar row shows its auth state.
+- **Recent problems** — every failure this session, timestamped. Worth having because nothing else keeps one: the error line is overwritten by the next thing that fails, the status message erases itself after three seconds, and integration errors were not retained at all. Not written to disk — it covers this run of the app, not last fortnight's.
+- **Data** — where everything lives, with a Reveal button each, including `~/.config/priority/config.json`, which belongs to the CLI rather than the app and is a recurring source of confusion.
+
+**Copy Report** and **Export Report…** produce plain text you can paste into an
+issue. Both run it through a redactor first: anything labelled like a
+credential, and any bare token-shaped run, comes out as `<redacted>`. Check it
+before you post it anyway.
+
 ## The dock row
 
-A narrow strip along the bottom of the popover, in every view. Right to left:
+A narrow strip along the bottom, in every view. Right to left:
 
 | Button | Does |
 | --- | --- |
 | ⚙︎ Gear | Preferences |
 | ↻ Refresh | Re-fetch from Checkvist, with a spinner while it runs |
-| ↕ Resize | Reveal the drag strip |
+| ↕ Resize | Reveal the drag strip — **panel only**, a window has a resize corner |
+| ⚕ Diagnostics | Open the diagnostics sheet — **window only** |
 | ▁▃▅ Graph | Show/hide the Daily chart — **Daily view only** |
+
+In the window the row also carries a sync readout on the left — "Synced 4m ago",
+"Offline · changes queued", or whatever last failed.
 
 **Each root view remembers its own height.** The Daily view stacks a checklist, a chart and a completions list where the All view is a single list, so one shared height would be wrong for one of them at all times. Drag the strip to set a height; double-click it to go back to sizing from the content.
 

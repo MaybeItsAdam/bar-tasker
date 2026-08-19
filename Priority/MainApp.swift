@@ -1,3 +1,4 @@
+import PriorityCore
 import SwiftUI
 
 /// The real entry point, so `--mcp-server` is handled before AppKit starts.
@@ -29,6 +30,34 @@ struct MainApp: App {
           AppDelegate.shared.menuSettings()
         }
         .keyboardShortcut(",", modifiers: .command)
+      }
+      // Only visible once the main window puts the app in `.regular` — an
+      // accessory app has no menu bar to hang these off. They exist so a
+      // windowed user has a discoverable route to everything the keyboard
+      // already does, and so the window can be reopened after it is closed.
+      CommandGroup(after: .windowList) {
+        Button("Priority") {
+          AppDelegate.shared.showMainWindow()
+        }
+        .keyboardShortcut("0", modifiers: .command)
+      }
+      CommandMenu("View") {
+        // Same order the tab strip uses, so the menu and the strip cannot
+        // disagree about what the tabs are or which order they are in.
+        ForEach(AppDelegate.shared.checkvistManager.orderedRootTaskViews, id: \.rawValue) { scope in
+          Button(scope.title) {
+            AppDelegate.shared.checkvistManager.taskNavigationService.setRootTaskView(scope)
+          }
+        }
+        Divider()
+        Button("Refresh") {
+          Task { await AppDelegate.shared.checkvistManager.syncService.fetchTopTask() }
+        }
+        .keyboardShortcut("r", modifiers: .command)
+        Button("Diagnostics") {
+          AppDelegate.shared.showMainWindow()
+          AppDelegate.shared.checkvistManager.popoverChrome.showsDiagnostics = true
+        }
       }
     }
   }

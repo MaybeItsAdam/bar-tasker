@@ -89,13 +89,30 @@ final class CoreLogicRegressionTests: XCTestCase {
     XCTAssertEqual(reset.currentSiblingIndex, 0)
   }
 
-  func testAppTerminationPolicyRequiresExplicitQuit() {
+  func testAppTerminationPolicyRequiresExplicitQuitWhileAnAgent() {
     XCTAssertEqual(
-      AppTerminationPolicy.decision(explicitQuitRequested: false),
+      AppTerminationPolicy.decision(
+        explicitQuitRequested: false, isRegularActivationPolicy: false),
       .cancel
     )
     XCTAssertEqual(
-      AppTerminationPolicy.decision(explicitQuitRequested: true),
+      AppTerminationPolicy.decision(
+        explicitQuitRequested: true, isRegularActivationPolicy: false),
+      .terminateNow
+    )
+  }
+
+  func testAppTerminationPolicyHonoursQuitOnceTheAppHasADockIcon() {
+    // Cmd-Q from the app menu never sets the explicit flag, so without this the
+    // shortcut would silently do nothing in windowed mode.
+    XCTAssertEqual(
+      AppTerminationPolicy.decision(
+        explicitQuitRequested: false, isRegularActivationPolicy: true),
+      .terminateNow
+    )
+    XCTAssertEqual(
+      AppTerminationPolicy.decision(
+        explicitQuitRequested: true, isRegularActivationPolicy: true),
       .terminateNow
     )
   }
