@@ -43,10 +43,13 @@ struct DailyView: View {
     // panel edge instead of floating in an inset box. Everything else insets
     // itself to the same `rowHorizontalPadding`.
     VStack(alignment: .leading, spacing: 10) {
-      // The checklist starts the view. A running "N done today" line with its
-      // focused/dailies/left chips used to sit above it, and it was a
-      // scoreboard for a question the rows underneath already answer one by
-      // one — it spent the top of a 400pt panel restating them.
+      // The checklist starts the view — the first thing in the panel is a row
+      // you can tick. Two things used to sit above it and neither survived: a
+      // running "N done today" line with its focused/dailies/left chips, which
+      // was a scoreboard for a question the rows underneath already answer one
+      // by one, and a "DAILIES" header strip, which captioned a view the dock
+      // has already named and put the only add button somewhere the keyboard
+      // never goes. Adding is Return, which is where the empty hint points.
       dailiesSection
       // Hidden from the dock's graph button, which makes this a plain
       // checklist for days you're only ticking things off.
@@ -88,8 +91,6 @@ struct DailyView: View {
     let completed = dailyLog.completedDailyIds()
 
     VStack(alignment: .leading, spacing: 0) {
-      dailiesHeader
-
       if dailies.isEmpty && !dailyLog.isAddingDaily {
         emptyDailiesHint
       } else {
@@ -135,42 +136,6 @@ struct DailyView: View {
         addDailyField
       }
     }
-  }
-
-  /// Matches `PopoverView.dueSectionHeader`: uppercased, 10pt semibold, on the
-  /// panel surface so it reads as a section rule rather than as content.
-  @ViewBuilder
-  private var dailiesHeader: some View {
-    HStack(spacing: 6) {
-      Text("DAILIES")
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundColor(themeColor(.textSecondary))
-      Spacer(minLength: 0)
-      // Toggles rather than only opening: a button that does nothing when the
-      // field is already showing is a button that looks broken.
-      Button {
-        if dailyLog.isAddingDaily {
-          dailyLog.cancelAddingDaily()
-        } else {
-          dailyLog.isAddingDaily = true
-        }
-      } label: {
-        Image(systemName: dailyLog.isAddingDaily ? "xmark.circle.fill" : "plus.circle.fill")
-          .font(.system(size: 13))
-          .foregroundColor(themeColor(.textSecondary))
-      }
-      .buttonStyle(.plain)
-      .help(
-        dailyLog.isAddingDaily
-          ? "Stop adding (Esc)"
-          : "Add a daily (Return). Rename with a, delete with Delete."
-      )
-      .accessibilityLabel(dailyLog.isAddingDaily ? "Stop adding a daily" : "Add a daily")
-    }
-    .padding(.horizontal, PopoverLayout.rowHorizontalPadding)
-    .padding(.top, 8)
-    .padding(.bottom, 5)
-    .background(themeColor(.panelSurface).opacity(0.7))
   }
 
   @ViewBuilder

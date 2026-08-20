@@ -25,18 +25,19 @@ final class DailyChecklistLayoutTests: XCTestCase {
   /// up what the code looks like it should produce.
   ///
   /// With the popover at these numbers the Daily view came back as exactly
-  /// `10 top + 28 header + 240 list = 278`, and with the chart on,
+  /// `10 top + 240 list = 250` — the 28pt "DAILIES" header that used to sit
+  /// between them is gone — and with the chart on,
   /// `+ 10 + 1 divider + 10 + 130 chart`. An estimate that is a
   /// few points under leaves the last row sliced through the middle; a few
   /// points over leaves a strip of bare panel under the list. Both were shipped
   /// before these were measured.
   func testTheReservedHeightsMatchWhatTheViewActuallyRenders() {
-    XCTAssertEqual(bareReserved, 38)
+    XCTAssertEqual(bareReserved, 10)
     XCTAssertEqual(
       DailyChecklistLayout.reservedHeight(
         showsChart: true, hasFullChartHistory: false,
         showsCompletions: false, isAddingDaily: false),
-      189
+      161
     )
   }
 

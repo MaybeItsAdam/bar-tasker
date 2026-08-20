@@ -28,11 +28,9 @@ public enum DailyChecklistLayout {
   /// point taller than a bare title, so padded rows come out 34 or 35 depending
   /// on their content and the list stops landing on a clean grid.
   public static let rowHeight: CGFloat = 34
-  /// "DAILIES" + its 8pt top and 5pt bottom padding.
-  public static let headerHeight: CGFloat = 28
   /// The view's top padding, and nothing else. It used to carry a "N done
-  /// today" headline and the stack spacing under it as well; the checklist now
-  /// starts the view, so the block is the padding alone.
+  /// today" headline, and then a 28pt "DAILIES" header strip after that; the
+  /// checklist now starts the view, so the block is the padding alone.
   public static let topBlockHeight: CGFloat = 10
   /// A `Divider` is a child of the stack, so it costs the 10pt spacing on
   /// *both* sides as well as its own hairline. Missing this is what made every
@@ -91,7 +89,7 @@ public enum DailyChecklistLayout {
     showsCompletions: Bool,
     isAddingDaily: Bool
   ) -> CGFloat {
-    topBlockHeight + headerHeight
+    topBlockHeight
       + (isAddingDaily ? addFieldHeight : 0)
       + chartBlockHeight(showsChart: showsChart, hasFullChartHistory: hasFullChartHistory)
       + completionsBlockHeight(showsCompletions: showsCompletions)
