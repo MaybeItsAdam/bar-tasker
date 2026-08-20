@@ -5,10 +5,19 @@ import PriorityCore
 
 /// Writes Priority's MCP entry into the config files of clients that keep one.
 ///
-/// Release builds are sandboxed (`Priority.release.entitlements`), so nothing
-/// outside the container is readable until the user hands it over through an
-/// open panel. The granted directory is bookmarked, so that happens once per
-/// client rather than once per install.
+/// The app currently ships unsandboxed — `Priority.release.entitlements` sets
+/// `com.apple.security.app-sandbox` to false and explains why — so a client's
+/// config file under the real home directory is simply readable and writable,
+/// and installing is a plain merge-and-write.
+///
+/// Everything below the "Sandbox access" mark is therefore dormant: the open
+/// panel, the security-scoped bookmark and `withSecurityScope` never run in a
+/// shipping build. It is kept because turning the sandbox back on is a live
+/// possibility (it only wants a provisioning profile and a keychain access
+/// group), and under the sandbox nothing outside the container is reachable
+/// until the user hands a directory over through an open panel. Bookmarking
+/// the granted directory makes that once per client rather than once per
+/// install. Rewriting it later would cost more than keeping it.
 @MainActor
 final class MCPClientInstaller {
   enum InstallResult: Equatable {
@@ -17,6 +26,14 @@ final class MCPClientInstaller {
   }
 
   enum InstallError: LocalizedError {
+    /// The client's config folder isn't there.
+    ///
+    /// A client is detected from an installed bundle or a home-relative
+    /// marker, never from its config file, so a client that has been installed
+    /// but never opened is detected with no folder to write into. Launching it
+    /// once is what creates the folder; we won't create it ourselves, because
+    /// a config sitting somewhere the client has never looked is worse than a
+    /// message saying what to do.
     case configDirectoryMissing(client: String, directory: String)
 
     var errorDescription: String? {
@@ -48,6 +65,7 @@ final class MCPClientInstaller {
     return FileManager.default.homeDirectoryForCurrentUser
   }
 
+  /// False in every shipping build today; see the note on the type.
   private static var isSandboxed: Bool {
     ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
   }
@@ -69,21 +87,25 @@ final class MCPClientInstaller {
     let configURL = configURL(for: client)
     let directoryURL = configURL.deletingLastPathComponent()
 
+    // Every path checks the folder first, including the bookmarked one: a
+    // bookmark outlives what it points at, so a client the user has since
+    // removed resolves to a directory that is no longer there. Without this
+    // the write fails somewhere in Foundation and the user gets a file-system
+    // error instead of the one sentence that tells them what to do.
     if let bookmarked = resolvedBookmarkURL(for: client) {
       return .wrote(
         try withSecurityScope(bookmarked) {
-          try mergeAndWrite(entry: entry, client: client, configURL: configURL)
+          try requireConfigDirectory(directoryURL, client: client)
+          return try mergeAndWrite(entry: entry, client: client, configURL: configURL)
         })
     }
+
+    try requireConfigDirectory(directoryURL, client: client)
 
     guard Self.isSandboxed else {
       return .wrote(try mergeAndWrite(entry: entry, client: client, configURL: configURL))
     }
 
-    guard FileManager.default.fileExists(atPath: directoryURL.path) else {
-      throw InstallError.configDirectoryMissing(
-        client: client.displayName, directory: directoryURL.path)
-    }
     guard let granted = try requestAccess(to: directoryURL, client: client) else {
       return .cancelled
     }
@@ -91,6 +113,15 @@ final class MCPClientInstaller {
       try withSecurityScope(granted) {
         try mergeAndWrite(entry: entry, client: client, configURL: configURL)
       })
+  }
+
+  /// Throws unless the client's config folder already exists. Never creates it
+  /// — see `InstallError.configDirectoryMissing`.
+  private func requireConfigDirectory(_ directoryURL: URL, client: MCPClientDescriptor) throws {
+    guard FileManager.default.fileExists(atPath: directoryURL.path) else {
+      throw InstallError.configDirectoryMissing(
+        client: client.displayName, directory: directoryURL.path)
+    }
   }
 
   private func mergeAndWrite(
@@ -112,6 +143,25 @@ final class MCPClientInstaller {
     guard merged.outcome != .unchanged else { return .unchanged }
 
     try merged.contents.write(to: configURL, atomically: true, encoding: .utf8)
+
+    // A config we created ourselves lands at whatever the umask allows —
+    // usually 0644 — and these files can hold credentials, so tighten it to
+    // 0600 the way the CLI does with its own config. Only when we created it:
+    // a file that was already there has a mode its owner chose, and quietly
+    // clamping another app's config is not this code's business.
+    if existing == nil {
+      do {
+        try FileManager.default.setAttributes(
+          [.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+      } catch {
+        // The entry is written and usable; a wider mode than we'd like is not
+        // worth failing the install over, so say so and carry on.
+        logger.warning(
+          "Could not restrict permissions on \(configURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+        )
+      }
+    }
+
     logger.info(
       "Wrote MCP entry for \(client.id, privacy: .public): \(String(describing: merged.outcome), privacy: .public)"
     )
