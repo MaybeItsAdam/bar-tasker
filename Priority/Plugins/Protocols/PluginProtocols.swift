@@ -205,11 +205,9 @@ protocol MCPIntegrationPlugin: Plugin {
   /// The resolved command, so callers can assemble a client entry themselves
   /// rather than parsing one back out of `makeClientConfigurationJSON`.
   func serverInvocation() -> MCPServerInvocation
-  /// Credentials the server process needs, in MCP `env` form.
-  func serverEnvironment(credentials: CheckvistCredentials, listId: String) -> [String: String]
-  func makeClientConfigurationJSON(
-    credentials: CheckvistCredentials,
-    listId: String,
-    redactSecrets: Bool
-  ) -> String
+  /// The non-secret settings the server process needs, in MCP `env` form.
+  /// Credentials are deliberately not among them — the server reads those from
+  /// its own store, which the app seeds. See the implementation.
+  func serverEnvironment(listId: String) -> [String: String]
+  func makeClientConfigurationJSON(listId: String) -> String
 }

@@ -3,7 +3,9 @@ import Foundation
 private struct MCPClientServerConfig: Encodable {
   let command: String
   let args: [String]
-  let env: [String: String]
+  /// Omitted entirely when there is nothing to put in it, rather than written
+  /// as `{}` — an empty block invites someone to fill it back in with a key.
+  let env: [String: String]?
 }
 
 private struct MCPClientConfigRoot: Encodable {
@@ -49,61 +51,31 @@ final class NativeMCPIntegrationPlugin: MCPIntegrationPlugin {
     return MCPServerInvocation(command: resolved.command, args: resolved.args)
   }
 
-  func serverEnvironment(
-    credentials: CheckvistCredentials,
-    listId: String
-  ) -> [String: String] {
-    serverEnvironment(credentials: credentials, listId: listId, redactSecrets: false)
-  }
-
-  private func serverEnvironment(
-    credentials: CheckvistCredentials,
-    listId: String,
-    redactSecrets: Bool
-  ) -> [String: String] {
-    let usernameValue: String
-    let remoteKeyValue: String
-    if redactSecrets {
-      usernameValue = "<set-checkvist-username>"
-      remoteKeyValue = "<set-checkvist-remote-key>"
-    } else {
-      usernameValue =
-        credentials.normalizedUsername.isEmpty
-        ? "you@example.com" : credentials.normalizedUsername
-      remoteKeyValue =
-        credentials.normalizedRemoteKey.isEmpty
-        ? "your-remote-key" : credentials.normalizedRemoteKey
-    }
-
+  /// Deliberately credential-free.
+  ///
+  /// The CLI's precedence is environment-beats-file, and it does not read the
+  /// file at all for a variable the environment already sets — so a
+  /// `CHECKVIST_REMOTE_KEY` here would both pin the key at install time (a
+  /// rotation then 401s every configured client, silently) and permanently
+  /// shut out `~/.config/priority/config.json`, which is the store the app
+  /// seeds. The list id is neither a secret nor a credential, and overriding it
+  /// per client is the point of having it here.
+  func serverEnvironment(listId: String) -> [String: String] {
     let trimmedListId = listId.trimmingCharacters(in: .whitespacesAndNewlines)
-    var env: [String: String] = [
-      "CHECKVIST_USERNAME": usernameValue,
-      "CHECKVIST_REMOTE_KEY": remoteKeyValue,
-    ]
-    if !trimmedListId.isEmpty {
-      env["CHECKVIST_LIST_ID"] = trimmedListId
-    }
-    return env
+    guard !trimmedListId.isEmpty else { return [:] }
+    return ["CHECKVIST_LIST_ID": trimmedListId]
   }
 
-  func makeClientConfigurationJSON(
-    credentials: CheckvistCredentials,
-    listId: String,
-    redactSecrets: Bool
-  ) -> String {
+  func makeClientConfigurationJSON(listId: String) -> String {
     let command = resolvedMCPCommand()
-    let env = serverEnvironment(
-      credentials: credentials,
-      listId: listId,
-      redactSecrets: redactSecrets
-    )
+    let env = serverEnvironment(listId: listId)
 
     let config = MCPClientConfigRoot(
       mcpServers: [
         "priority": MCPClientServerConfig(
           command: command.command,
           args: command.args,
-          env: env
+          env: env.isEmpty ? nil : env
         )
       ]
     )

@@ -55,6 +55,8 @@ private struct MCPIntegrationPluginSettingsView: View {
         ok: true,
         title: "Checkvist connected",
         detail: manager.repository.activeCredentials.normalizedUsername
+          + " — setting up a client copies this login into ~/.config/priority/config.json, "
+          + "where the server reads it. Nothing below carries your key."
       )
     } else {
       stepRow(
@@ -177,21 +179,22 @@ private struct MCPIntegrationPluginSettingsView: View {
 
       DisclosureGroup("Show config JSON", isExpanded: $showsRawConfiguration) {
         ScrollView {
-          Text(
-            integrations.mcpClientConfigurationPreview(
-              credentials: manager.repository.activeCredentials,
-              listId: manager.repository.listId
-            )
-          )
-          .font(.system(.caption, design: .monospaced))
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
+          Text(integrations.mcpClientConfigurationPreview(listId: manager.repository.listId))
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(minHeight: 120, maxHeight: 180)
 
-        Text("Preview is redacted. Copied and installed configs carry your real credentials.")
-          .foregroundColor(.secondary)
-          .font(.caption)
+        // Nothing is redacted any more because there is nothing to redact —
+        // which is worth saying, since the old copy promised the opposite.
+        Text(
+          "This is exactly what gets copied and installed. No credentials in it: "
+            + "the server reads those from the priority CLI's own config, which Priority writes "
+            + "when you set up a client. Rotate your remote key in Priority and set up again."
+        )
+        .foregroundColor(.secondary)
+        .font(.caption)
       }
       .font(.caption)
     }

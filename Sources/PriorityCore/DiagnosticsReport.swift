@@ -92,8 +92,9 @@ public enum DiagnosticsReport {
   /// Belt and braces over the snapshot never being handed a secret in the first
   /// place. A report is something the user is invited to post in public, so the
   /// cost of one leak is far higher than the cost of over-redacting a path that
-  /// happened to contain a long hex string. Mirrors the existing
-  /// `redactSecrets:` flag on the MCP client configuration.
+  /// happened to contain a long hex string. The MCP client configuration no
+  /// longer carries credentials at all, but a report sweeps up whatever the
+  /// user pasted into it, so the patterns stay.
   private static let secretPatterns: [String] = [
     // key=value / "key": "value" for anything named like a credential. The
     // optional quote before the separator is what makes this work on JSON,

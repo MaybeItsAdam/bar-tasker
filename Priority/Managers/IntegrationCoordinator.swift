@@ -353,13 +353,19 @@ protocol IntegrationDataSource: AnyObject {
 
     refreshMCPServerCommandPath()
 
-    let config = mcpIntegrationPlugin.makeClientConfigurationJSON(
-      credentials: ds.activeCredentials,
-      listId: ds.listId,
-      redactSecrets: false
-    )
-    NSPasteboard.general.clearContents()
-    _ = NSPasteboard.general.setString(config, forType: .string)
+    // The copied config carries no credentials, so the server will look for
+    // them in the CLI's own store. Seed that first, or the paste produces a
+    // client that connects and then fails every tool call.
+    do {
+      try seedPriorityCLICredentials(credentials: ds.activeCredentials, listId: ds.listId)
+    } catch {
+      logger.error("Seeding the priority CLI's credentials failed: \(error)")
+      onError?(error.localizedDescription)
+      return
+    }
+
+    let config = mcpIntegrationPlugin.makeClientConfigurationJSON(listId: ds.listId)
+    copyToPasteboard(config)
 
     if mcpServerCommandPath.isEmpty {
       onError?(
@@ -383,18 +389,15 @@ protocol IntegrationDataSource: AnyObject {
     onError?(nil)
   }
 
-  func mcpClientConfigurationPreview(credentials: CheckvistCredentials, listId: String) -> String {
-    mcpIntegrationPlugin.makeClientConfigurationJSON(
-      credentials: credentials,
-      listId: listId,
-      redactSecrets: true
-    )
+  /// Exactly what gets copied and installed — there is nothing left to redact.
+  func mcpClientConfigurationPreview(listId: String) -> String {
+    mcpIntegrationPlugin.makeClientConfigurationJSON(listId: listId)
   }
 
   // MARK: - MCP client setup
 
-  /// True once Checkvist credentials exist. Without them the generated config
-  /// carries `you@example.com` placeholders and every tool call fails on the
+  /// True once Checkvist credentials exist. Without them there is nothing to
+  /// seed into the CLI's credential store, and every tool call fails on the
   /// client's side, which is a confusing way to discover a missing login.
   var hasMCPCredentials: Bool {
     guard let ds = dataSource else { return false }
@@ -419,8 +422,26 @@ protocol IntegrationDataSource: AnyObject {
       setMCPSetupStatus("Enable MCP integration first.", isError: true)
       return
     }
-    guard let entry = makeMCPServerEntry(requiresTransportType: client.requiresTransportType) else {
+    // `+Settings.swift` disables the button without credentials, but a config
+    // file is not the place to discover that a UI guard was the only one.
+    guard hasMCPCredentials else {
+      setMCPSetupStatus("Connect Checkvist first.", isError: true)
+      return
+    }
+    guard let ds = dataSource,
+      let entry = makeMCPServerEntry(requiresTransportType: client.requiresTransportType)
+    else {
       setMCPSetupStatus("Internal error: no data source.", isError: true)
+      return
+    }
+
+    // The entry carries no credentials, so the server reads them from the CLI's
+    // own store. Seed it before writing anything a client will act on.
+    do {
+      try seedPriorityCLICredentials(credentials: ds.activeCredentials, listId: ds.listId)
+    } catch {
+      logger.error("Seeding the priority CLI's credentials failed: \(error)")
+      setMCPSetupStatus(error.localizedDescription, isError: true)
       return
     }
 
@@ -468,11 +489,69 @@ protocol IntegrationDataSource: AnyObject {
     return MCPServerEntry(
       command: invocation.command,
       args: invocation.args,
-      env: mcpIntegrationPlugin.serverEnvironment(
-        credentials: ds.activeCredentials,
-        listId: ds.listId
-      ),
+      env: mcpIntegrationPlugin.serverEnvironment(listId: ds.listId),
       transportType: requiresTransportType ? "stdio" : nil
+    )
+  }
+
+  /// Hands the app's Checkvist login down to the `priority` CLI, which is the
+  /// MCP server and cannot read the app's keychain item — that would depend on
+  /// the app's code signature. Nothing in a generated client config carries a
+  /// secret any more, so this file is where the server gets its credentials.
+  private func seedPriorityCLICredentials(
+    credentials: CheckvistCredentials,
+    listId: String
+  ) throws {
+    let home = MCPClientInstaller.realHomeDirectory.path
+    let configPath = PriorityCLIConfigWriter.defaultConfigPath(inHomeDirectory: home)
+    let configURL = URL(fileURLWithPath: configPath)
+    let directoryURL = configURL.deletingLastPathComponent()
+    let fileManager = FileManager.default
+
+    var existing: String?
+    if fileManager.fileExists(atPath: configURL.path) {
+      existing = try String(contentsOf: configURL, encoding: .utf8)
+    }
+
+    let seeded = try PriorityCLIConfigWriter.seeded(
+      credentials: PriorityCLICredentials(
+        username: credentials.username,
+        remoteKey: credentials.remoteKey,
+        listId: listId
+      ),
+      into: existing,
+      configPath: configPath
+    )
+
+    // Don't touch the file when nothing would change — the CLI may be mid-read
+    // and there is no reason to bump the modification date to say so.
+    guard seeded.outcome != .unchanged else { return }
+
+    try fileManager.createDirectory(
+      at: directoryURL,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+
+    // Created with the mode rather than written and then chmod-ed: the gap
+    // between the two is a window in which the remote key sits world-readable.
+    // This is why it isn't an atomic write — that lands a fresh inode at
+    // whatever the umask allows. Mirrors `Config::save` in `cli/src/config.rs`.
+    guard
+      fileManager.createFile(
+        atPath: configURL.path,
+        contents: Data(seeded.contents.utf8),
+        attributes: [.posixPermissions: 0o600]
+      )
+    else {
+      throw PriorityCLIConfigError.writeFailed(path: configPath)
+    }
+    // `createFile` leaves an existing file's mode alone, and one written before
+    // this code existed may be wider than 0600.
+    try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+
+    logger.info(
+      "Seeded the priority CLI's credentials: \(String(describing: seeded.outcome), privacy: .public)"
     )
   }
 
@@ -481,9 +560,16 @@ protocol IntegrationDataSource: AnyObject {
     mcpSetupStatusIsError = isError
   }
 
+  /// `org.nspasteboard.ConcealedType` is the convention clipboard-history
+  /// managers honour to mean "don't archive this" — it is what password
+  /// managers mark a copied password with. These payloads no longer carry a
+  /// remote key, but they do carry a username and the shape of the user's
+  /// setup, and a config snippet has no business outliving the paste.
   private func copyToPasteboard(_ value: String) {
     NSPasteboard.general.clearContents()
     _ = NSPasteboard.general.setString(value, forType: .string)
+    _ = NSPasteboard.general.setString(
+      "", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
   }
 
   // MARK: - Obsidian

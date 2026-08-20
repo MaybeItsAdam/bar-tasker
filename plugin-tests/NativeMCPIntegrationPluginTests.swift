@@ -5,38 +5,38 @@ import XCTest
 
 @MainActor
 final class NativeMCPIntegrationPluginTests: XCTestCase {
-  func testMakeClientConfigurationJSONIncludesProvidedCredentials() throws {
+  func testMakeClientConfigurationJSONCarriesTheListIdOverride() throws {
     let plugin = NativeMCPIntegrationPlugin()
-    let credentials = CheckvistCredentials(username: " user@example.com ", remoteKey: " rkey ")
 
-    let json = plugin.makeClientConfigurationJSON(
-      credentials: credentials,
-      listId: " 123 ",
-      redactSecrets: false
-    )
+    let json = plugin.makeClientConfigurationJSON(listId: " 123 ")
     let root = try decodeJSON(json)
 
     let env = try XCTUnwrap(root["env"] as? [String: Any])
-    XCTAssertEqual(env["CHECKVIST_USERNAME"] as? String, "user@example.com")
-    XCTAssertEqual(env["CHECKVIST_REMOTE_KEY"] as? String, "rkey")
     XCTAssertEqual(env["CHECKVIST_LIST_ID"] as? String, "123")
   }
 
-  func testMakeClientConfigurationJSONRedactsSecrets() throws {
+  /// The env block must never pin credentials: the CLI reads its config file
+  /// only for variables the environment doesn't set, so a key here would both
+  /// go stale on rotation and shut out the store the app seeds.
+  func testMakeClientConfigurationJSONCarriesNoCredentials() throws {
     let plugin = NativeMCPIntegrationPlugin()
-    let credentials = CheckvistCredentials(username: "real@example.com", remoteKey: "secret")
 
-    let json = plugin.makeClientConfigurationJSON(
-      credentials: credentials,
-      listId: "",
-      redactSecrets: true
-    )
-    let root = try decodeJSON(json)
+    let json = plugin.makeClientConfigurationJSON(listId: "123")
+    XCTAssertFalse(json.contains("CHECKVIST_USERNAME"))
+    XCTAssertFalse(json.contains("CHECKVIST_REMOTE_KEY"))
 
-    let env = try XCTUnwrap(root["env"] as? [String: Any])
-    XCTAssertEqual(env["CHECKVIST_USERNAME"] as? String, "<set-checkvist-username>")
-    XCTAssertEqual(env["CHECKVIST_REMOTE_KEY"] as? String, "<set-checkvist-remote-key>")
-    XCTAssertNil(env["CHECKVIST_LIST_ID"])
+    let env = try XCTUnwrap(try decodeJSON(json)["env"] as? [String: Any])
+    XCTAssertEqual(Set(env.keys), ["CHECKVIST_LIST_ID"])
+  }
+
+  /// An empty `env` is omitted rather than written as `{}` — there is nothing
+  /// the server needs from it when there is no list override.
+  func testMakeClientConfigurationJSONOmitsAnEmptyEnvironment() throws {
+    let plugin = NativeMCPIntegrationPlugin()
+
+    let root = try decodeJSON(plugin.makeClientConfigurationJSON(listId: "  "))
+    XCTAssertNil(root["env"])
+    XCTAssertNotNil(root["command"])
   }
 
   private func decodeJSON(_ json: String) throws -> [String: Any] {
