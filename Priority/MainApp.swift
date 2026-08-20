@@ -44,7 +44,14 @@ struct MainApp: App {
       CommandMenu("View") {
         // Same order the tab strip uses, so the menu and the strip cannot
         // disagree about what the tabs are or which order they are in.
-        ForEach(AppDelegate.shared.checkvistManager.orderedRootTaskViews, id: \.rawValue) { scope in
+        //
+        // Read from the static rather than through `AppDelegate.shared`: this
+        // list is built while SwiftUI evaluates `body`, and the adaptor has not
+        // made the delegate by then — `shared` is still nil and the implicit
+        // unwrap trapped every launch. The *actions* below may reach through it
+        // freely, because a click cannot happen before the app has finished
+        // starting.
+        ForEach(AppCoordinator.storedRootTaskViewOrder, id: \.rawValue) { scope in
           Button(scope.title) {
             AppDelegate.shared.checkvistManager.taskNavigationService.setRootTaskView(scope)
           }
