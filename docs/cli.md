@@ -113,12 +113,21 @@ spot a truncated paste.
 
 ### These credentials are the CLI's own
 
-Signing in here does not sign you in to the Priority app, and signing in to
-the app does not sign in the CLI. That is deliberate. The app keeps its remote
-key in the login keychain, where it is reachable only by something carrying the
-app's code signature; a CLI that depended on it would work or not depending on
-how the app happened to be built and signed that day. Its own file is
-predictable, portable, and works on a machine with no app installed.
+Signing in here does not sign you in to the Priority app. The invariant runs
+one way: the CLI never reads the app's keychain. That is deliberate. The app
+keeps its remote key in the login keychain, where it is reachable only by
+something carrying the app's code signature; a CLI that depended on it would
+work or not depending on how the app happened to be built and signed that day.
+Its own file is predictable, portable, and works on a machine with no app
+installed.
+
+The other direction is allowed, and is how the app sets up an MCP client: it
+writes its credentials *into* this file, then generates a client config that
+carries no secret at all. Nothing about that makes the CLI depend on the app —
+the file it reads is the same one `auth login` writes, whoever put it there. If
+you signed in here as a different account, setting up an MCP client from the
+app will overwrite `username` and `remote_key`; that only happens on an
+explicit action in the app's settings. See `docs/mcp-server.md`.
 
 The trade is that the key sits in a plain file rather than the keychain, as CLI
 credential files conventionally do. It is created mode 0600 from the moment it

@@ -132,8 +132,8 @@ CLI and turning that path into a shim removed the reason, so:
 - and existing configurations keep working untouched, because the CLI already
   accepted the bare `--mcp-server` flag (`cli/src/main.rs`) and already reads
   credentials from the environment ahead of its own config file
-  (`cli/src/config.rs`) — which is exactly where a client configuration puts
-  them.
+  (`cli/src/config.rs`) — which is exactly where a client configuration written
+  back then put them.
 
 `cargo test` covers the server. `scripts/mcp_smoke_check.py` covers the seam:
 
@@ -152,9 +152,12 @@ needs no Checkvist credentials.
 walks three steps:
 
 1. **Checkvist connected** — the server signs in with your Checkvist credentials,
-   so setup is blocked until they exist. Without them the generated config carries
-   `you@example.com` placeholders and every tool call fails inside your AI client,
-   a long way from the app.
+   so setup is blocked until they exist: the client buttons are disabled without
+   them, and the coordinator refuses as well rather than trusting a UI guard.
+   There would be nothing to hand the server, and every tool call would fail
+   inside your AI client, a long way from the app. Once they exist, setting up a
+   client copies that login down into the CLI's own store — see
+   [Configuration](#configuration).
 2. **Server command found** — the path to the executable an MCP client launches.
    Press Refresh after moving the app.
 3. **Add to an AI client** — one button per client detected on this machine.
@@ -175,28 +178,84 @@ it. Keys come back sorted, so expect the file to be reformatted once.
 
 Config writes go straight to the client's file — release builds are not
 sandboxed (see `Priority.release.entitlements` for why), so no folder-access
-prompt is involved and credential changes re-install silently.
+prompt is involved. A client config Priority creates from scratch is tightened
+to mode 0600; one that already existed keeps the mode its owner chose.
+
+Before it writes or copies anything, setup seeds the CLI's credential store: it
+merges your username and remote key into `~/.config/priority/config.json`,
+creating `~/.config/priority` at mode 0700 and the file at 0600. It merges
+rather than replaces, so a `base_url` you set by hand for a self-hosted
+Checkvist survives, and it only fills `list_id` when that key is absent — the
+generated MCP entry already names the default list per client, so the CLI's own
+default for terminal use is left alone. Nothing happens to the file when it
+already says this.
 
 If nothing is detected, use **Copy Client Config** and paste it in by hand — the
 rest of this guide covers that.
 
 ## Configuration
 
-Set these environment variables for the MCP process (in your MCP client config):
+The server signs in to Checkvist itself, so it needs a username and a remote
+key. They can come from a file or from the environment, and the order is the
+conventional one: **the environment beats the file, and a variable set in the
+environment means the file is not consulted for that value at all**
+(`cli/src/config.rs`).
 
-- `CHECKVIST_USERNAME` (required)
-- `CHECKVIST_REMOTE_KEY` (required)
-- `CHECKVIST_LIST_ID` (optional default list)
-- `CHECKVIST_BASE_URL` (optional, defaults to `https://checkvist.com`)
+### Credentials in the CLI's own store (recommended)
 
-The server falls back to the CLI's own config file
-(`~/.config/priority/config.json`, written by `priority auth login`) when these
-are unset, so a client config can omit the `env` block entirely. The environment
-still wins where it is set — which is what makes a configuration written before
-the migration, with credentials in `env`, keep behaving exactly as it did. See
-`docs/cli.md`.
+Keep them in `~/.config/priority/config.json` and leave the client config
+credential-free. Two ways to put them there, and they write the same file:
 
-If `CHECKVIST_LIST_ID` is not set, pass `list_id` in tool calls that need a list.
+- **From Priority.** Setting up a client, or pressing **Copy Client Config**,
+  seeds the file first and then hands the client an entry with no secret in it.
+- **From the terminal.** `priority auth login` prompts for both, checks them
+  against the API before writing, and creates the file at mode 0600. See
+  `docs/cli.md` for that command and its `auth status` / `auth set-list`
+  siblings.
+
+Either way there is one copy of the key on this machine, and every client that
+launches the server reads it — which is the point.
+
+### Environment variables (the override)
+
+Set on the MCP process, usually through an `env` block in a client config:
+
+- `CHECKVIST_USERNAME`
+- `CHECKVIST_REMOTE_KEY`
+- `CHECKVIST_LIST_ID` (default list)
+- `CHECKVIST_BASE_URL` (defaults to `https://checkvist.com`)
+
+Setting one of these means the config file is **not read for that value** — not
+merged with, not fallen back to. That is right for a one-off override, for CI,
+and for `scripts/mcp_smoke_check.py`, which drives the server with credentials
+in the environment precisely so it cannot pick up whatever the developer
+happens to have configured. `PRIORITY_CONFIG_PATH` (or `XDG_CONFIG_HOME`) moves
+the file itself, for the same reason.
+
+It is the wrong tool for a client config you intend to keep, because that pins
+the key: see below.
+
+### Rotating your remote key
+
+A remote key baked into a client's `env` block is a second copy of it, and the
+client goes on presenting the old one until someone edits that file by hand —
+as a 401 from inside the AI client, with nothing in Priority saying why.
+
+With credentials in the CLI's store there is one copy, so rotation is: change
+the key in Priority and set the client up once more (which re-seeds the file),
+or run `priority auth login` again. Every configured client follows, because
+they all read the one file. If any client config still carries the key in
+`env`, that entry keeps using the pinned value until you replace it — setting
+that client up again from Priority rewrites the entry into the credential-free
+form.
+
+### Choosing a list
+
+If `CHECKVIST_LIST_ID` is not set — by the client entry Priority generates, by
+your own `env` block, or by `list_id` in the config file — pass `list_id` in
+tool calls that need a list.
+
+### Finding the server command
 
 Command resolution priority, used both by the settings pane when it generates a
 config and by `MCPServerShim` when `--mcp-server` looks for something to run:
@@ -219,6 +278,15 @@ Extra control env vars:
 
 ## Run Manually
 
+Once credentials are in place — `priority auth login`, or any client set up from
+Priority's settings:
+
+```bash
+'/Applications/Priority.app/Contents/Helpers/priority' mcp
+```
+
+To override them for one run, without touching the stored ones:
+
 ```bash
 CHECKVIST_USERNAME="you@example.com" \
 CHECKVIST_REMOTE_KEY="your-remote-key" \
@@ -230,7 +298,8 @@ It will wait for an MCP client to connect over stdio.
 
 ## Client Config Example
 
-Most MCP clients accept a JSON config similar to this:
+Most MCP clients accept a JSON config similar to this — which is what Priority
+generates now, carrying a default list and no credentials:
 
 ```json
 {
@@ -239,8 +308,6 @@ Most MCP clients accept a JSON config similar to this:
       "command": "/Applications/Priority.app/Contents/Helpers/priority",
       "args": ["mcp"],
       "env": {
-        "CHECKVIST_USERNAME": "you@example.com",
-        "CHECKVIST_REMOTE_KEY": "your-remote-key",
         "CHECKVIST_LIST_ID": "123456"
       }
     }
@@ -248,9 +315,27 @@ Most MCP clients accept a JSON config similar to this:
 }
 ```
 
-Use your own app path and credentials.
+With no default list set, the `env` block is omitted entirely rather than
+written empty:
 
-A configuration written before the CLI was bundled names the app binary instead:
+```json
+{
+  "mcpServers": {
+    "priority": {
+      "command": "/Applications/Priority.app/Contents/Helpers/priority",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Use your own app path. If you are writing this by hand rather than letting
+Priority write it, run `priority auth login` first — there is nothing in the
+config that would sign the server in.
+
+A configuration written before the CLI was bundled names the app binary
+instead, and one written before credentials moved out of `env` carries them
+inline:
 
 ```json
 {
@@ -268,8 +353,12 @@ A configuration written before the CLI was bundled names the app binary instead:
 }
 ```
 
-That still works — the app hands the process to the bundled helper — so there is
-nothing you have to change.
+That still works in both respects, so there is nothing you have to change: the
+app hands the process to the bundled helper, and the environment still beats the
+file, so those inline credentials are the ones the server uses. The one thing to
+know is that they are pinned — rotating your remote key means editing this file
+too, or setting the client up again from Priority, which regenerates the whole
+entry in the credential-free form above.
 
 A separately installed CLI works too, if you have run `scripts/install_cli.sh`:
 

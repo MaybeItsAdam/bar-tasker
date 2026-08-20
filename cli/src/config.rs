@@ -13,10 +13,10 @@
 //! untouched, and a one-off `CHECKVIST_LIST_ID=... priority tasks` overrides
 //! the stored default without editing anything.
 //!
-//! The file is *not* read when the corresponding environment variable is set,
-//! which is also what keeps `scripts/mcp_parity_check.py` honest: it drives all
-//! three servers with the credentials in the environment, so this file cannot
-//! make the Rust one behave differently from the other two.
+//! The file is *not* read when the corresponding environment variable is set.
+//! That is what lets `scripts/mcp_smoke_check.py` drive the server against a
+//! throwaway `HOME` with fake credentials in the environment, and be sure this
+//! file is not quietly answering instead.
 
 use crate::error::{Result, ToolError};
 use serde_json::{Map, Value, json};
