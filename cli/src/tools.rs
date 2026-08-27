@@ -214,6 +214,34 @@ impl Tools {
                 ))
             }
 
+            "task_matrix_set" => {
+                let list_id = list_id()?;
+                let entries = arguments
+                    .get("placements")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| ToolError::new("placements must be an array."))?;
+                let mut placements = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let number = |key: &str| entry.get(key).and_then(Value::as_f64);
+                    let task_id = entry
+                        .get("task_id")
+                        .and_then(Value::as_i64)
+                        .ok_or_else(|| ToolError::new("each placement needs a task_id."))?;
+                    let (Some(urgency), Some(importance)) =
+                        (number("urgency"), number("importance"))
+                    else {
+                        return Err(ToolError::new(
+                            "each placement needs urgency and importance.",
+                        ));
+                    };
+                    placements.push((task_id, urgency, importance));
+                }
+                Ok(outcome(
+                    "Matrix updated",
+                    self.local.set_eisenhower_levels(&list_id, &placements)?,
+                ))
+            }
+
             "daily_add" => {
                 let title = required_string(arguments, "title")?;
                 let weekdays = as_optional_weekdays(arguments.get("active_weekdays"))?;

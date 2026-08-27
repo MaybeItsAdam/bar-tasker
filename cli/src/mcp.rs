@@ -484,6 +484,32 @@ pub fn tool_definitions() -> Vec<Value> {
             },
         }),
         json!({
+            "name": "task_matrix_set",
+            "description": "Place tasks on the Eisenhower matrix (urgency and importance, each -9 to 9; 0,0 removes a placement). Local to Priority. Requires Priority to be closed - a running app overwrites these on its next save.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "list_id": list_id(),
+                    "placements": {
+                        "type": "array",
+                        "description": "One entry per task.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "task_id": { "type": "integer" },
+                                "urgency": { "type": "number", "minimum": -9, "maximum": 9 },
+                                "importance": { "type": "number", "minimum": -9, "maximum": 9 },
+                            },
+                            "required": ["task_id", "urgency", "importance"],
+                            "additionalProperties": false,
+                        },
+                    },
+                },
+                "required": ["placements"],
+                "additionalProperties": false,
+            },
+        }),
+        json!({
             "name": "daily_add",
             "description": "Create a daily (a habit that resets each day, not a task). Local to Priority.",
             "inputSchema": {

@@ -727,7 +727,7 @@ fn every_advertised_tool_is_actually_implemented() {
 }
 
 #[test]
-fn the_tool_surface_is_nineteen_uniquely_named_tools() {
+fn the_tool_surface_is_twenty_uniquely_named_tools() {
     let definitions = tool_definitions();
     let mut names: Vec<&str> = definitions
         .iter()
@@ -737,7 +737,7 @@ fn the_tool_surface_is_nineteen_uniquely_named_tools() {
     names.sort_unstable();
     names.dedup();
     assert_eq!(names.len(), total, "duplicate tool name");
-    assert_eq!(total, 19);
+    assert_eq!(total, 20);
 
     for definition in &definitions {
         assert!(
@@ -1058,4 +1058,25 @@ fn the_lock_file_is_a_sibling_of_the_file_it_protects() {
     })
     .expect("lock");
     assert_eq!(held, Some(true));
+}
+
+/// The matrix write refuses while Priority is running, because macOS keeps a
+/// running app's `UserDefaults` in memory and the app rewrites the whole blob
+/// on its next save. Writing anyway looks like it worked and is discarded the
+/// moment the user drags one card.
+#[test]
+fn the_matrix_write_is_declared_as_needing_the_app_closed() {
+    let definition = tool_definitions()
+        .into_iter()
+        .find(|tool| tool["name"] == "task_matrix_set")
+        .expect("task_matrix_set should be in the tool surface");
+    let description = definition["description"].as_str().unwrap();
+    assert!(
+        description.contains("closed"),
+        "the description must say the app has to be closed: {description}"
+    );
+    let placements = &definition["inputSchema"]["properties"]["placements"];
+    assert_eq!(placements["type"], "array");
+    let required = definition["inputSchema"]["required"].as_array().unwrap();
+    assert!(required.iter().any(|value| value == "placements"));
 }

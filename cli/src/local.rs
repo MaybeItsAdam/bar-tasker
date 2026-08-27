@@ -57,6 +57,116 @@ impl LocalState {
         }
     }
 
+    /// Whether Priority.app is currently running.
+    ///
+    /// The guard on every write into the app's preferences. macOS keeps a
+    /// running app's `UserDefaults` in memory via `cfprefsd`, and Priority
+    /// rewrites the whole `eisenhowerLevelsByTaskIdByListId` blob on its next
+    /// placement — so anything written here while it is running is discarded
+    /// without a word the moment the user drags one card. Refusing is the only
+    /// honest behaviour; the alternative looks like it worked.
+    fn app_is_running(&self) -> bool {
+        std::process::Command::new("/usr/bin/pgrep")
+            .args(["-x", "Priority"])
+            .output()
+            .is_ok_and(|output| output.status.success() && !output.stdout.is_empty())
+    }
+
+    /// Write matrix coordinates for a batch of tasks.
+    ///
+    /// Goes through `defaults write` rather than writing the plist file
+    /// directly, so `cfprefsd` stays the single owner of the store — a direct
+    /// file write is invisible to it and is overwritten by its cached copy.
+    ///
+    /// `(0, 0)` removes a placement, matching the app: the store drops the
+    /// sentinel on save, and `m00` spells the same thing on the keyboard.
+    pub fn set_eisenhower_levels(
+        &self,
+        list_id: &str,
+        placements: &[(i64, f64, f64)],
+    ) -> Result<Value> {
+        if self.app_is_running() {
+            return Err(ToolError::new(
+                "Priority is running, and it would overwrite this the next time it saves. \
+                 Quit Priority, run this again, then reopen it.",
+            ));
+        }
+
+        let scope = if list_id.is_empty() {
+            "__offline__"
+        } else {
+            list_id
+        };
+
+        // Read-modify-write of the whole blob, because that is the granularity
+        // the app stores it at.
+        let prefs = self.prefs();
+        let mut all = match prefs.get("eisenhowerLevelsByTaskIdByListId") {
+            Some(plist::Value::Data(bytes)) => {
+                serde_json::from_slice::<Value>(bytes).unwrap_or_else(|_| json!({}))
+            }
+            _ => json!({}),
+        };
+        if !all.is_object() {
+            all = json!({});
+        }
+        let by_scope = all
+            .as_object_mut()
+            .expect("just ensured object")
+            .entry(scope.to_string())
+            .or_insert_with(|| json!({}));
+        if !by_scope.is_object() {
+            *by_scope = json!({});
+        }
+        let by_task = by_scope.as_object_mut().expect("just ensured object");
+
+        let mut written = 0_usize;
+        let mut cleared = 0_usize;
+        for (task_id, urgency, importance) in placements {
+            let key = task_id.to_string();
+            if *urgency == 0.0 && *importance == 0.0 {
+                if by_task.remove(&key).is_some() {
+                    cleared += 1;
+                }
+                continue;
+            }
+            let clamp = |value: f64| value.clamp(-9.0, 9.0);
+            by_task.insert(
+                key,
+                json!({ "urgency": clamp(*urgency), "importance": clamp(*importance) }),
+            );
+            written += 1;
+        }
+        if by_task.is_empty() {
+            all.as_object_mut()
+                .expect("just ensured object")
+                .remove(scope);
+        }
+
+        let encoded = serde_json::to_vec(&all)
+            .map_err(|err| ToolError::new(format!("Could not encode placements: {err}")))?;
+        let status = std::process::Command::new("/usr/bin/defaults")
+            .args([
+                "write",
+                BUNDLE_ID,
+                "eisenhowerLevelsByTaskIdByListId",
+                "-data",
+                &hex_encode(&encoded),
+            ])
+            .status()
+            .map_err(|err| ToolError::new(format!("Could not run `defaults`: {err}")))?;
+        if !status.success() {
+            return Err(ToolError::new("`defaults write` failed."));
+        }
+
+        Ok(json!({
+            "list_id": list_id,
+            "placed": written,
+            "cleared": cleared,
+            "note": "Reopen Priority to see these.",
+        }))
+    }
+
     /// A damaged line costs that event, not the whole history — the same
     /// tolerance as `DayLogFileStore.loadAll`.
     fn events(&self) -> Vec<Value> {
@@ -1019,4 +1129,16 @@ fn plist_to_json(value: &plist::Value) -> Value {
         plist::Value::Date(date) => json!(date.to_xml_format()),
         _ => Value::Null,
     }
+}
+
+/// `defaults write -data` takes hex, which is the only encoding it accepts for
+/// a binary default.
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }

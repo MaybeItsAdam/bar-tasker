@@ -12,7 +12,7 @@ Priority ships an MCP stdio server so an AI assistant can work directly with you
 
 ## What It Can Do
 
-The server exposes 19 MCP tools, in two groups.
+The server exposes 20 MCP tools, in two groups.
 
 **Checkvist tools** — these reach the Checkvist API directly, so they work
 whether or not the app is running:
@@ -41,6 +41,7 @@ Checkvist has no representation for:
 | `daily_log_fetch` | What happened on recent days: completions, focus time, unfinished/deferred tasks, daily ticks | read |
 | `dailies_list` | Configured dailies with today's schedule and tick state | read |
 | `task_metadata` | Priority ranks (scoped and absolute), recurrence rules, start dates, Eisenhower urgency/importance, kanban columns | read |
+| `task_matrix_set` | Eisenhower urgency/importance, in batches | write, **only while the app is closed** |
 | `daily_add` | Create a daily | write |
 | `daily_update` | Rename, reschedule, archive/unarchive a daily | write |
 | `daily_tick` | Tick or un-tick a daily for today | write |
@@ -58,6 +59,18 @@ Notes:
   rewrites on its own schedule — there is no equivalent of the file lock below
   that would let an external write survive. Setting those has to go through the
   app.
+- `task_matrix_set` is the one narrow exception, and it does not disprove the
+  rule above so much as work around it. It refuses outright while Priority is
+  running (`pgrep -x Priority`), and writes through `defaults write` rather than
+  the plist file, so `cfprefsd` stays the single owner of the store. Both halves
+  are load-bearing: a direct file write is invisible to `cfprefsd` and gets
+  overwritten by its cached copy, and a write of any kind made while the app is
+  running is discarded the moment the user places one task by hand.
+
+  It exists because the alternative was placing two hundred tasks by hand. A
+  bulk first pass from an assistant, corrected afterwards in the app, is a
+  different job from "set this one task's urgency" — which still goes through
+  the app, as above.
 
 ### How the daily writes stay safe
 
