@@ -26,10 +26,24 @@ struct EisenhowerMatrixView: View {
     TaskScopeResolver.mode(showChildrenInMenus: taskListViewModel.showChildrenInMenus)
   }
 
-  private var scopedTasks: [CheckvistTask] {
+  /// Everything both halves of this view need, resolved in one pass.
+  ///
+  /// It used to be two computed properties that each called the other's inputs:
+  /// `plot` and `unplacedRail` both asked for the scope *and* the levels, and
+  /// resolving the levels asked for the scope again. Four scope passes and two
+  /// inheritance resolutions per render, each walking every task's ancestor
+  /// chain — and `onContinuousHover` re-renders on every pointer move, so the
+  /// whole lot ran at mouse-move frequency. That is the lag.
+  private struct Snapshot {
+    var placed: [CheckvistTask] = []
+    var unplaced: [CheckvistTask] = []
+    var levels: [Int: EffectiveEisenhowerLevel] = [:]
+  }
+
+  private var snapshot: Snapshot {
     let scopeId = navigationState.currentParentId
     let open = repository.tasks.filter { $0.status == 0 }
-    return TaskScopeResolver.scoped(
+    let scoped = TaskScopeResolver.scoped(
       open,
       currentLevelTasks: open.filter { ($0.parentId ?? 0) == scopeId },
       parentId: scopeId,
@@ -38,21 +52,24 @@ struct EisenhowerMatrixView: View {
         taskListViewModel.isDescendant(task, of: parentId)
       }
     )
-  }
-
-  /// Coordinates for the current scope, including the ones tasks inherit from
-  /// a placed ancestor. Resolved once per render rather than per task, since
-  /// the single-task form re-walks the same chains.
-  private var effectiveLevels: [Int: EffectiveEisenhowerLevel] {
-    let levels = repository.taskEisenhowerLevels
-    return EisenhowerInheritance.effectiveLevels(
-      for: scopedTasks,
+    let stored = repository.taskEisenhowerLevels
+    let levels = EisenhowerInheritance.effectiveLevels(
+      for: scoped,
       taskById: taskListViewModel.cache.taskById,
       ownLevel: { taskId in
-        guard let level = levels[taskId] else { return nil }
+        guard let level = stored[taskId] else { return nil }
         return (urgency: level.urgency, importance: level.importance)
       }
     )
+    var snapshot = Snapshot(levels: levels)
+    for task in scoped {
+      if levels[task.id] == nil {
+        snapshot.unplaced.append(task)
+      } else {
+        snapshot.placed.append(task)
+      }
+    }
+    return snapshot
   }
 
   /// Commit a coordinate. Both axes are written together because a drop names
@@ -68,10 +85,11 @@ struct EisenhowerMatrixView: View {
   }
 
   var body: some View {
-    HStack(spacing: 0) {
-      plot
+    let snapshot = snapshot
+    return HStack(spacing: 0) {
+      plot(snapshot)
       Divider()
-      unplacedRail
+      unplacedRail(snapshot)
         .frame(width: 190)
     }
     .background(themeColor(.panelSurface))
@@ -79,9 +97,9 @@ struct EisenhowerMatrixView: View {
 
   // MARK: - The plot
 
-  private var plot: some View {
-    let levels = effectiveLevels
-    let placed = scopedTasks.filter { levels[$0.id] != nil }
+  private func plot(_ snapshot: Snapshot) -> some View {
+    let levels = snapshot.levels
+    let placed = snapshot.placed
     let currentSelectedId = taskListViewModel.currentTask?.id
 
     return GeometryReader { proxy in
@@ -154,9 +172,13 @@ struct EisenhowerMatrixView: View {
       .onContinuousHover { phase in
         switch phase {
         case .active(let location):
-          hoveredTaskId = nearestTaskId(to: location, in: plotPoints)
+          // Only when the answer actually changes. Writing the same id back on
+          // every pointer move re-renders the view for no visible difference,
+          // which is most of what the pointer does inside one dot's catchment.
+          let nearest = nearestTaskId(to: location, in: plotPoints)
+          if nearest != hoveredTaskId { hoveredTaskId = nearest }
         case .ended:
-          hoveredTaskId = nil
+          if hoveredTaskId != nil { hoveredTaskId = nil }
         }
       }
       // The whole point of the rewrite: where you drop a card *is* its
@@ -191,11 +213,10 @@ struct EisenhowerMatrixView: View {
   /// What is left to sort, and the thing you drag from. Also the honest answer
   /// to "is this view doing anything" — an empty matrix with 200 unplaced
   /// tasks now says so, rather than rendering a blank grid.
-  private var unplacedRail: some View {
-    let levels = effectiveLevels
+  private func unplacedRail(_ snapshot: Snapshot) -> some View {
     // Inherited counts as placed. Place the seven goals and this empties,
     // which is the honest report: everything below them is now classified.
-    let unplaced = scopedTasks.filter { levels[$0.id] == nil }
+    let unplaced = snapshot.unplaced
 
     return VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 6) {
