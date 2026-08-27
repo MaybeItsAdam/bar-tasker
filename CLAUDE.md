@@ -109,3 +109,46 @@ python3 scripts/mcp_smoke_check.py
 ```
 
 There used to be two implementations of the same MCP server — one in Swift inside the app, one in the CLI — held equal from the outside by `scripts/mcp_parity_check.py`, because neither could import the other. The Swift one is gone: the app bundles the CLI and `--mcp-server` execs it, so there is one implementation to be right instead of two to keep equal. `cargo test` covers the server; the smoke check covers the seam, and specifically that a client configuration written before that change — naming `Priority --mcp-server`, with credentials in `env` — still reaches a working server. Needs a Debug app build; reads no real data and needs no credentials.
+
+## Working Loop
+
+Two things happen on every piece of work here without being asked for.
+
+**Commit as you go, straight onto `main`.** Not one commit at the end — one per
+coherent change, each of them green. This is a deliberate override of the
+global "commit only when asked; branch first on the default branch" rule:
+`main` is the working branch in this repo. Match the existing subject style —
+conventional prefix, lowercase, a sentence saying what changed, no trailing
+period; `git log` is the reference. A change whose gates don't pass isn't a
+commit, so run *Verifying Changes* above first, plus the Rust and MCP gates
+when they apply.
+
+Where the work splits into several commits, order them so each one's tree
+builds on its own — a history you can't bisect is a history you can only read.
+`git worktree add` on a candidate commit checks that without disturbing the
+working tree.
+
+**Reinstall after anything under `cli/`.**
+
+```bash
+./scripts/install_cli.sh
+```
+
+The installed command is a *symlink* at `~/.local/bin/priority` pointing into
+`cli/target/release/`, so what actually matters is that a **release** build is
+current — the symlink then updates for free. Two consequences:
+
+- `cargo build` (debug) refreshes neither the installed command nor the helper
+  the app ships: `scripts/bundle_cli.sh` copies the *release* binary into
+  `Contents/Helpers/priority`. A debug-only build leaves both stale while every
+  test still passes, which is exactly how a stale MCP server goes unnoticed.
+- `rm -rf cli/target` breaks the installed command rather than leaving an old
+  copy behind.
+
+A new entry in `cli/src/tools.rs` needs a front end on **each** side that can
+express it — a `Command` case and `resolve` arm in `cli.rs` as well as the
+declaration in `mcp.rs` — because the point of the shared tool table is that a
+terminal can reach anything an assistant can. It also needs
+`EXPECTED_TOOL_COUNT` in `scripts/mcp_smoke_check.py` and the count in
+`docs/mcp-server.md` updating; the smoke check fails on the number, which is
+the intended reminder.
