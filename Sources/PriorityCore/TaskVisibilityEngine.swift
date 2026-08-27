@@ -116,18 +116,18 @@ public struct TaskVisibilityEngine {
           // The "main list" stays scoped to current-level siblings regardless of
           // the show-children toggle; users rely on it for hierarchical navigation.
           baseTasks = context.currentLevelTasks
-        case .due, .tags:
-          baseTasks =
-            context.showChildrenInMenus
-            ? context.tasks.filter { context.isDescendant($0, context.currentParentId) }
-            : context.currentLevelTasks
-        case .priority:
-          // Priority view surfaces prioritised subtasks from anywhere in the list
-          // when the show-children toggle is on; otherwise restricts to siblings.
-          baseTasks =
-            context.showChildrenInMenus
-            ? context.tasks
-            : context.currentLevelTasks
+        case .due, .tags, .priority:
+          // One rule for all three. Priority used to answer the toggle with
+          // `context.tasks` — the *entire list*, scope ignored — so a sibling
+          // branch showed up in a view the user had deliberately scoped, and
+          // the same toggle meant two different things depending on the tab.
+          baseTasks = TaskScopeResolver.scoped(
+            context.tasks,
+            currentLevelTasks: context.currentLevelTasks,
+            parentId: context.currentParentId,
+            mode: TaskScopeResolver.mode(showChildrenInMenus: context.showChildrenInMenus),
+            isDescendant: context.isDescendant
+          )
         case .kanban, .eisenhower, .daily:
           // These render their own surface rather than the task list — kanban
           // has per-column lists via tasksForKanbanColumn, and Daily reads the
@@ -140,10 +140,13 @@ public struct TaskVisibilityEngine {
         case .all:
           baseTasks = context.currentLevelTasks
         case .due, .tags, .priority, .kanban, .eisenhower, .daily:
-          baseTasks =
-            context.showChildrenInMenus
-            ? context.tasks.filter { context.isDescendant($0, context.currentParentId) }
-            : context.currentLevelTasks
+          baseTasks = TaskScopeResolver.scoped(
+            context.tasks,
+            currentLevelTasks: context.currentLevelTasks,
+            parentId: context.currentParentId,
+            mode: TaskScopeResolver.mode(showChildrenInMenus: context.showChildrenInMenus),
+            isDescendant: context.isDescendant
+          )
         }
       }
     } else {

@@ -855,8 +855,49 @@ struct PopoverView: View {
           }
         }
       }
+      Spacer(minLength: 6)
+      scopeModeChip
     }
     .padding(.horizontal, 14).padding(.vertical, 6)
+  }
+
+  /// Which of the two answers the current view is giving to "what am I looking
+  /// at". State, not a command, so it earns its permanent place: with cards
+  /// now draggable between views, dropping one into a view whose scope you
+  /// cannot see is how a task goes missing.
+  ///
+  /// Hidden on All, which is the navigator that *sets* the scope rather than a
+  /// view that reads it, and so is always strictly parented.
+  @ViewBuilder
+  var scopeModeChip: some View {
+    if taskListViewModel.rootTaskView != .all {
+      let mode = TaskScopeResolver.mode(
+        showChildrenInMenus: taskListViewModel.showChildrenInMenus)
+      Button {
+        taskListViewModel.showChildrenInMenus.toggle()
+      } label: {
+        Text(mode.title.uppercased())
+          .font(.system(size: 10, weight: .bold))
+          .tracking(1.5)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 2)
+          .background(
+            mode == .wholeSubtree
+              ? themeColor(.link).opacity(0.12) : themeColor(.panelSurface)
+          )
+          .foregroundColor(
+            mode == .wholeSubtree ? themeColor(.link) : themeColor(.textSecondary)
+          )
+          .overlay(
+            Capsule().stroke(
+              mode == .wholeSubtree ? themeColor(.link).opacity(0.4) : themeColor(.panelDivider),
+              lineWidth: 1)
+          )
+          .clipShape(Capsule())
+      }
+      .buttonStyle(PlainButtonStyle())
+      .help("Whether this view shows only this level or everything below it")
+    }
   }
 
   var hideFutureChip: some View {
