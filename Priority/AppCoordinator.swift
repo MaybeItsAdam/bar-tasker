@@ -416,7 +416,24 @@ extension AppCoordinator {
     apply(outcome)
   }
 
-  @MainActor func moveTask(id taskId: Int, toColumn targetColumn: KanbanColumn) {
+  /// A drop on the board. `insertBefore` is the slot within the target column
+  /// the card was released over, or nil for a move with no position — the
+  /// keyboard's column change, which leaves ordering to the column's sort.
+  ///
+  /// The overlay is written *before* the condition change, because
+  /// `moveTaskInColumn` reads the column's current contents to anchor the new
+  /// order and the condition change is precisely what alters them. Writing it
+  /// second would anchor to a column the card had already moved into.
+  @MainActor func moveTask(
+    id taskId: Int, toColumn targetColumn: KanbanColumn, insertBefore visibleIndex: Int? = nil
+  ) {
+    if let visibleIndex {
+      kanban.moveTaskInColumn(
+        taskId: taskId, in: targetColumn, toPositionBefore: visibleIndex)
+    }
+    // Nil means the card already satisfies the column — a reorder within it.
+    // The overlay write above was the whole point of the drop, so that is not
+    // a failure and nothing more is needed.
     guard let outcome = kanban.computeMoveTask(id: taskId, toColumn: targetColumn) else { return }
     apply(outcome)
   }
@@ -428,6 +445,12 @@ extension AppCoordinator {
     case .update(let task, let newContent, let newDue):
       taskMutationService.applyOptimisticUpdate(
         task: task, content: newContent, due: newDue)
+    case .place(let task, let urgency, let importance):
+      repository.setUrgency(taskId: task.id, level: urgency)
+      repository.setImportance(taskId: task.id, level: importance)
+      statusMessage =
+        "\(task.content.strippingTags) → "
+        + MatrixGeometry.quadrant(urgency: urgency, importance: importance).title
     }
   }
 

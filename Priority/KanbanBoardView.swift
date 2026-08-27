@@ -18,32 +18,111 @@ struct KanbanBoardView: View {
   }
 
   var body: some View {
-    let columns = manager.kanban.kanbanColumns
-    let childCounts = taskListViewModel.childCountByTaskId()
-    let effectiveSelectedId = manager.kanban.currentKanbanTask?.id
     VStack(spacing: 0) {
       if isFilterActive {
         kanbanFilterBar
         Divider()
       }
-      HStack(alignment: .top, spacing: 0) {
-        ForEach(Array(columns.enumerated().reversed()), id: \.element.id) { colIndex, column in
-          let tasks = manager.kanban.tasksForKanbanColumn(column, allColumns: columns)
-          let isFocused = colIndex == manager.kanban.kanbanFocusedColumnIndex
-          KanbanColumnView(
-            column: column,
-            tasks: tasks,
-            columnIndex: colIndex,
-            isFocused: isFocused,
-            childCounts: childCounts,
-            effectiveSelectedId: effectiveSelectedId
-          )
-          if colIndex > 0 {
+      if manager.kanban.swimlanesByGoal {
+        swimlaneBoard
+      } else {
+        flatBoard
+      }
+    }
+  }
+
+  /// One row of columns. What the board has always been.
+  private var flatBoard: some View {
+    let columns = manager.kanban.kanbanColumns
+    return columnRow(columns: columns, restrictedTo: nil)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  /// A row per top-level goal.
+  ///
+  /// Each lane draws the *full* set of columns, including its empty ones —
+  /// that emptiness is the comparison the layout exists to make, showing at a
+  /// glance which goal has everything stuck in one state.
+  private var swimlaneBoard: some View {
+    let columns = manager.kanban.kanbanColumns
+    let lanes = manager.kanban.swimlanes()
+    return ScrollView(.vertical) {
+      LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+        if lanes.isEmpty {
+          Text("No tasks match any column.")
+            .font(.system(size: 11))
+            .foregroundColor(themeColor(.textSecondary))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
+        }
+        ForEach(lanes) { lane in
+          Section {
+            columnRow(columns: columns, restrictedTo: Set(lane.tasks.map(\.id)))
+              .frame(height: laneHeight(taskCount: lane.tasks.count))
             Divider()
+          } header: {
+            laneHeader(lane)
           }
         }
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private func laneHeader(_ lane: KanbanSwimlane<CheckvistTask>) -> some View {
+    HStack(spacing: 6) {
+      Text(lane.title.strippingTags.uppercased())
+        .font(.system(size: 10, weight: .bold))
+        .tracking(1.5)
+        .foregroundColor(themeColor(.textSecondary))
+        .lineLimit(1)
+      Spacer()
+      Text("\(lane.tasks.count)")
+        .font(.system(size: 10, weight: .bold, design: .monospaced))
+        .foregroundColor(themeColor(.textSecondary))
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 6)
+    .frame(maxWidth: .infinity)
+    .background(themeColor(.panelBackground))
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(themeColor(.panelDivider)).frame(height: 1)
+    }
+  }
+
+  /// Lanes are given room for their busiest column rather than a fixed height,
+  /// so a goal with two tasks does not reserve the same band as one with forty.
+  private func laneHeight(taskCount: Int) -> CGFloat {
+    let columnCount = max(1, manager.kanban.kanbanColumns.count)
+    let perColumn = max(1, Int(ceil(Double(taskCount) / Double(columnCount))))
+    return min(360, max(120, CGFloat(perColumn) * 46 + 44))
+  }
+
+  /// The columns, optionally narrowed to one lane's tasks.
+  ///
+  /// `restrictedTo` filters what a column already claimed rather than changing
+  /// how it claims — membership stays the column's business, so a task cannot
+  /// land in a different column just because the board is grouped.
+  private func columnRow(columns: [KanbanColumn], restrictedTo laneTaskIds: Set<Int>?) -> some View {
+    let childCounts = taskListViewModel.childCountByTaskId()
+    let effectiveSelectedId = manager.kanban.currentKanbanTask?.id
+    return HStack(alignment: .top, spacing: 0) {
+      ForEach(Array(columns.enumerated().reversed()), id: \.element.id) { colIndex, column in
+        let all = manager.kanban.tasksForKanbanColumn(column, allColumns: columns)
+        let tasks = laneTaskIds.map { ids in all.filter { ids.contains($0.id) } } ?? all
+        let isFocused = colIndex == manager.kanban.kanbanFocusedColumnIndex
+        KanbanColumnView(
+          column: column,
+          tasks: tasks,
+          columnIndex: colIndex,
+          isFocused: isFocused,
+          childCounts: childCounts,
+          effectiveSelectedId: effectiveSelectedId
+        )
+        if colIndex > 0 {
+          Divider()
+        }
+      }
     }
   }
 
@@ -99,6 +178,10 @@ private struct KanbanColumnView: View {
   @Environment(AppCoordinator.self) var manager
   @Environment(NavigationState.self) var navigationState
   @FocusState private var addFieldFocused: Bool
+  /// Where a card currently hovering over this column would be inserted, as
+  /// an index into `tasks`. `tasks.count` is the append zone past the last
+  /// card. Nil when nothing is being dragged over this column.
+  @State private var dropTargetIndex: Int?
   let column: KanbanColumn
   let tasks: [CheckvistTask]
   let columnIndex: Int
@@ -121,11 +204,31 @@ private struct KanbanColumnView: View {
   }
 
   private var columnHeader: some View {
-    HStack(spacing: 6) {
+    let load = column.load(count: tasks.count)
+    return HStack(spacing: 6) {
       Text(column.name)
         .font(.system(size: 12, weight: .semibold))
         .foregroundColor(isFocused ? themeColor(.selectionForeground) : themeColor(.textPrimary))
       Spacer()
+      // The count was the cheapest thing missing from this board: a column
+      // header that says only its name cannot tell you a column is empty
+      // without you counting, or overloaded at all.
+      Text(countLabel)
+        .font(.system(size: 10, weight: .bold, design: .monospaced))
+        .foregroundColor(loadColor(load))
+        .padding(.horizontal, load == .unlimited ? 0 : 5)
+        .padding(.vertical, load == .unlimited ? 0 : 1)
+        .background(
+          load == .unlimited
+            ? Color.clear
+            : loadColor(load).opacity(0.12)
+        )
+        .overlay(
+          load == .unlimited
+            ? nil
+            : Capsule().stroke(loadColor(load).opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(Capsule())
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
@@ -134,6 +237,21 @@ private struct KanbanColumnView: View {
         ? themeColor(.selectionBackground).opacity(0.18)
         : themeColor(.panelBackground)
     )
+  }
+
+  private var countLabel: String {
+    guard let limit = column.wipLimit, limit > 0 else { return "\(tasks.count)" }
+    return "\(tasks.count)/\(limit)"
+  }
+
+  /// Over a limit is a warning, not an error: nothing was rejected, the column
+  /// is simply carrying more than you said it should.
+  private func loadColor(_ load: KanbanColumn.Load) -> Color {
+    switch load {
+    case .unlimited, .within: return themeColor(.textSecondary)
+    case .atLimit: return themeColor(.link)
+    case .over: return themeColor(.warning)
+    }
   }
 
   private var taskListArea: some View {
@@ -147,22 +265,31 @@ private struct KanbanColumnView: View {
           Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .dropDestination(for: String.self) { ids, _ in
-          guard let idStr = ids.first, let taskId = Int(idStr) else { return false }
-          manager.moveTask(id: taskId, toColumn: column)
+        .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+          guard let payload = payloads.first else { return false }
+          manager.moveTask(id: payload.taskId, toColumn: column, insertBefore: 0)
           return true
+        } isTargeted: { targeted in
+          dropTargetIndex = targeted ? 0 : nil
         }
+        .background(
+          dropTargetIndex != nil
+            ? themeColor(.selectionBackground).opacity(0.18) : Color.clear
+        )
       } else {
         ScrollViewReader { proxy in
           ScrollView {
             VStack(spacing: 0) {
               ForEach(Array(tasks.enumerated()), id: \.element.id) { taskIndex, task in
                 let isSelected = task.id == effectiveSelectedId
-                KanbanTaskCard(
-                  task: task,
-                  isSelected: isSelected,
-                  childCount: childCounts[task.id, default: 0]
-                )
+                VStack(spacing: 0) {
+                  dropIndicator(active: dropTargetIndex == taskIndex)
+                  KanbanTaskCard(
+                    task: task,
+                    isSelected: isSelected,
+                    childCount: childCounts[task.id, default: 0]
+                  )
+                }
                 .id(task.id)
                 .onTapGesture {
                   manager.kanban.kanbanFocusedColumnIndex = columnIndex
@@ -170,10 +297,50 @@ private struct KanbanColumnView: View {
                   navigationState.currentSiblingIndex = taskIndex
                   navigationState.rootScopeFocusLevel = 0
                 }
-                .draggable(String(task.id))
+                .draggable(
+                  TaskDragPayload(taskId: task.id, sourceColumnId: column.id.uuidString)
+                )
+                // Dropping *on* a card always means "put it before this one".
+                // The alternative — top half before, bottom half after — needs
+                // the card's height at drop time and reads as a coin flip near
+                // the middle. The trailing zone below covers "put it last".
+                .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+                  guard let payload = payloads.first else { return false }
+                  dropTargetIndex = nil
+                  manager.moveTask(id: payload.taskId, toColumn: column, insertBefore: taskIndex)
+                  return true
+                } isTargeted: { targeted in
+                  if targeted {
+                    dropTargetIndex = taskIndex
+                  } else if dropTargetIndex == taskIndex {
+                    dropTargetIndex = nil
+                  }
+                }
               }
-              inlineAddField
-                .id("kanban-add-field")
+
+              // The append zone. Without it the last slot in a column is
+              // unreachable by mouse, because every card means "before me".
+              VStack(spacing: 0) {
+                dropIndicator(active: dropTargetIndex == tasks.count)
+                inlineAddField
+                  .id("kanban-add-field")
+                Color.clear
+                  .frame(height: 44)
+                  .contentShape(Rectangle())
+              }
+              .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+                guard let payload = payloads.first else { return false }
+                dropTargetIndex = nil
+                manager.moveTask(
+                  id: payload.taskId, toColumn: column, insertBefore: tasks.count)
+                return true
+              } isTargeted: { targeted in
+                if targeted {
+                  dropTargetIndex = tasks.count
+                } else if dropTargetIndex == tasks.count {
+                  dropTargetIndex = nil
+                }
+              }
             }
           }
           .onChange(of: manager.kanban.kanbanSelectedTaskId) { _, selectedId in
@@ -185,15 +352,22 @@ private struct KanbanColumnView: View {
               proxy.scrollTo("kanban-add-field", anchor: .bottom)
             }
           }
-          .dropDestination(for: String.self) { ids, _ in
-            guard let idStr = ids.first, let taskId = Int(idStr) else { return false }
-            manager.moveTask(id: taskId, toColumn: column)
-            return true
-          }
         }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+  }
+
+  /// A hairline where the card would land. Separation in this app is borders,
+  /// not elevation, so the insertion point is a rule rather than a gap that
+  /// opens up — which also means the column does not reflow under the cursor
+  /// while the drag is still in flight.
+  private func dropIndicator(active: Bool) -> some View {
+    Rectangle()
+      .fill(active ? themeColor(.link) : Color.clear)
+      .frame(height: 2)
+      .padding(.horizontal, 6)
+      .animation(.easeOut(duration: 0.12), value: active)
   }
 
   private var isAddingHere: Bool {

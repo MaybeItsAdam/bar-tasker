@@ -10,6 +10,10 @@ protocol KanbanTaskDataSource: AnyObject {
   var tasks: [CheckvistTask] { get }
   var currentParentId: Int { get set }
   var hideFuture: Bool { get }
+  /// The global scope toggle. The board used to ignore it entirely and read
+  /// the whole tree, which is why the same key meant different things on
+  /// this tab than on Due or Tags.
+  var showChildrenInMenus: Bool { get }
   var currentSiblingIndex: Int { get set }
   var rootTaskView: RootTaskView { get }
   var cache: CacheState { get }
@@ -18,11 +22,18 @@ protocol KanbanTaskDataSource: AnyObject {
   func absolutePriorityRank(for task: CheckvistTask) -> Int?
   func priorityRank(for task: CheckvistTask) -> Int?
   func priorityPath(for task: CheckvistTask) -> String?
+  /// `nil` when the task has no coordinate. Needed by quadrant columns and
+  /// by the board's own matrix inbox.
+  func eisenhowerCoordinate(for task: CheckvistTask) -> (urgency: Double, importance: Double)?
+  func childCountByTaskId() -> [Int: Int]
 }
 
 /// Describes the outcome of a kanban move so the coordinator can apply the actual task mutation.
 enum KanbanMoveOutcome {
   case update(task: CheckvistTask, newContent: String?, newDue: String?)
+  /// A drop into a quadrant column. The board writes the same axis the
+  /// matrix view writes, so the two surfaces cannot disagree.
+  case place(task: CheckvistTask, urgency: Double, importance: Double)
   case error(String)
 }
 
@@ -57,6 +68,17 @@ enum KanbanMoveOutcome {
     didSet { cacheInvalidationBus.invalidate() }
   }
   /// Column ID currently showing the inline add field (nil = none).
+  /// Rows per top-level goal, columns per state.
+  ///
+  /// A single row of columns says what state a task is in but never what it is
+  /// for, which is the wrong trade for a tree that is mostly goal structure.
+  var swimlanesByGoal: Bool {
+    didSet {
+      preferencesStore.set(swimlanesByGoal, for: .kanbanSwimlanesByGoal)
+      cacheInvalidationBus.invalidate()
+    }
+  }
+
   var addingToColumnId: UUID?
   /// Text for the inline add field.
   var addText: String = ""
@@ -97,6 +119,8 @@ enum KanbanMoveOutcome {
       self.kanbanColumns = KanbanColumn.defaults
     }
 
+    self.swimlanesByGoal = preferencesStore.bool(.kanbanSwimlanesByGoal, default: false)
+
     let storedManualOrdersJson = preferencesStore.string(.kanbanManualOrderByColumnId)
     if !storedManualOrdersJson.isEmpty,
       let data = storedManualOrdersJson.data(using: .utf8),
@@ -129,8 +153,19 @@ enum KanbanMoveOutcome {
     } else if kanbanFilterSubtasks && ds.currentParentId != 0 {
       pool = subtreeTasks(in: ds.tasks, rootId: ds.currentParentId, taskById: ds.cache.taskById)
     } else {
-      // Root kanban scope shows all tasks in the tree; column rules decide visibility.
-      pool = ds.tasks
+      // The board honours the same global toggle as every other view. It used
+      // to read `ds.tasks` unconditionally — the whole tree, scope ignored —
+      // so drilling into a goal changed the list, the matrix and the due view
+      // but left the board showing everything.
+      pool = TaskScopeResolver.scoped(
+        ds.tasks,
+        currentLevelTasks: ds.tasks.filter { ($0.parentId ?? 0) == ds.currentParentId },
+        parentId: ds.currentParentId,
+        mode: TaskScopeResolver.mode(showChildrenInMenus: ds.showChildrenInMenus),
+        isDescendant: { task, parentId in
+          TaskFilterEngine.isDescendant(task, of: parentId, taskById: ds.cache.taskById)
+        }
+      )
     }
 
     // Discriminate: exclude completed tasks
@@ -150,27 +185,35 @@ enum KanbanMoveOutcome {
     return applyManualOrder(naturallySorted, column: column)
   }
 
+  /// The board's rows. Empty when swimlanes are off, which is how the view
+  /// tells the two layouts apart without asking twice.
+  ///
+  /// Built from every task the current scope covers rather than per column, so
+  /// a lane exists whenever the goal has *any* work — a lane whose cards all
+  /// sit in one column still shows its other columns as empty, which is the
+  /// comparison the layout is for.
+  func swimlanes() -> [KanbanSwimlane<CheckvistTask>] {
+    guard swimlanesByGoal, let ds = dataSource else { return [] }
+    ds.ensureVisibleTasksCacheValid()
+    let columns = kanbanColumns
+    let placed = ds.tasks.filter { task in
+      task.status == 0 && columnForTask(task, in: columns) != nil
+    }
+    return KanbanSwimlanes.lanes(
+      for: placed,
+      taskById: ds.cache.taskById,
+      unassignedTitle: "No goal"
+    )
+  }
+
   /// Reorders `tasks` so any task listed in the column's manual override comes
   /// first in the order specified there. Tasks not present in the override
   /// retain the natural-sort order they came in with.
   private func applyManualOrder(_ tasks: [CheckvistTask], column: KanbanColumn)
     -> [CheckvistTask]
   {
-    let key = column.id.uuidString
-    guard let order = manualOrderByColumnId[key], !order.isEmpty else { return tasks }
-    var rankById: [Int: Int] = [:]
-    for (idx, id) in order.enumerated() { rankById[id] = idx }
-    var ranked: [CheckvistTask] = []
-    var unranked: [CheckvistTask] = []
-    for task in tasks {
-      if rankById[task.id] != nil {
-        ranked.append(task)
-      } else {
-        unranked.append(task)
-      }
-    }
-    ranked.sort { (rankById[$0.id] ?? .max) < (rankById[$1.id] ?? .max) }
-    return ranked + unranked
+    guard let order = manualOrderByColumnId[column.id.uuidString] else { return tasks }
+    return KanbanManualOrder.apply(order, to: tasks, id: \.id)
   }
 
   /// Move `taskId` one slot up or down in the column's manual order. The task
@@ -178,37 +221,43 @@ enum KanbanMoveOutcome {
   /// position as the starting rank. No underlying task attribute is changed —
   /// this is purely a per-user, per-column display preference.
   @MainActor func nudgeTaskInColumn(taskId: Int, in column: KanbanColumn, direction: Int) {
-    guard direction == -1 || direction == 1 else { return }
-    let key = column.id.uuidString
-    let columnTasks = tasksForKanbanColumn(column, allColumns: kanbanColumns)
-    guard let visibleIdx = columnTasks.firstIndex(where: { $0.id == taskId }) else { return }
-    let newIdx = visibleIdx + direction
-    guard columnTasks.indices.contains(newIdx) else { return }
-    // Anchor the manual order to the current visible order so the override
-    // mirrors what the user sees right before the move.
-    var order = columnTasks.map(\.id)
-    order.swapAt(visibleIdx, newIdx)
-    manualOrderByColumnId[key] = order
+    // Anchor the override to the current visible order, so it mirrors what the
+    // user could see immediately before the move.
+    let visible = tasksForKanbanColumn(column, allColumns: kanbanColumns).map(\.id)
+    guard
+      let order = KanbanManualOrder.nudgingTask(
+        taskId, direction: direction, inVisibleOrder: visible)
+    else { return }
+    manualOrderByColumnId[column.id.uuidString] = order
+  }
+
+  /// Place `taskId` immediately before whatever currently sits at
+  /// `visibleIndex` in `column` — the mouse's half of the manual order, where
+  /// `nudgeTaskInColumn` is the keyboard's.
+  ///
+  /// A drag inserts; a nudge only ever swaps a neighbouring pair. Both write
+  /// nothing but the overlay, so a card moved inside a column keeps its due
+  /// date, priority and position untouched.
+  ///
+  /// The task need not already be in the column: a card dragged in from
+  /// another one is inserted at the requested slot, so the overlay is already
+  /// correct by the time the condition write lands it here.
+  @MainActor func moveTaskInColumn(
+    taskId: Int, in column: KanbanColumn, toPositionBefore visibleIndex: Int
+  ) {
+    let visible = tasksForKanbanColumn(column, allColumns: kanbanColumns).map(\.id)
+    let order = KanbanManualOrder.movingTask(
+      taskId, toPositionBefore: visibleIndex, inVisibleOrder: visible)
+    guard order != visible else { return }
+    manualOrderByColumnId[column.id.uuidString] = order
   }
 
   /// Drop a task from every column's manual order. Used when a task is
   /// completed/deleted so stale IDs don't accumulate.
   @MainActor func clearManualOrderEntries(forTaskIds removed: Set<Int>) {
-    guard !removed.isEmpty else { return }
-    var changed = false
-    var updated = manualOrderByColumnId
-    for (key, ids) in updated {
-      let filtered = ids.filter { !removed.contains($0) }
-      if filtered.count != ids.count {
-        if filtered.isEmpty {
-          updated.removeValue(forKey: key)
-        } else {
-          updated[key] = filtered
-        }
-        changed = true
-      }
-    }
-    if changed { manualOrderByColumnId = updated }
+    guard let updated = KanbanManualOrder.removing(taskIds: removed, from: manualOrderByColumnId)
+    else { return }
+    manualOrderByColumnId = updated
   }
 
   private func subtreeTasks(in tasks: [CheckvistTask], rootId: Int, taskById: [Int: CheckvistTask])
@@ -221,11 +270,43 @@ enum KanbanMoveOutcome {
   /// Only a *specific* condition (tag or due bucket) claims a task; `.catchAll`
   /// answers false, so it collects what no earlier column took.
   func columnForTask(_ task: CheckvistTask, in columns: [KanbanColumn]) -> KanbanColumn? {
+    guard let inputs = membershipInputs() else { return nil }
+    return KanbanFilter.column(for: task, in: columns, inputs: inputs)
+  }
+
+  /// Assembled once per query rather than per condition. Three call sites used
+  /// to build their own argument list, which is how two of them would end up
+  /// answering the same question differently.
+  private func membershipInputs() -> KanbanFilter.MembershipInputs<CheckvistTask>? {
     guard let ds = dataSource else { return nil }
-    return KanbanFilter.column(
-      for: task, in: columns,
+    // Inherited coordinates count here exactly as they do on the matrix. If the
+    // board read only own-coordinates, placing a goal would fill the matrix and
+    // leave every quadrant column empty — two views disagreeing about where the
+    // same task is.
+    let ownById = Dictionary(
+      uniqueKeysWithValues: ds.tasks.compactMap { task in
+        ds.eisenhowerCoordinate(for: task).map { (task.id, $0) }
+      })
+    let resolved = EisenhowerInheritance.effectiveLevels(
+      for: ds.tasks, taskById: ds.cache.taskById, ownLevel: { ownById[$0] })
+    var eisenhower: [Int: (urgency: Double, importance: Double)] = [:]
+    for (taskId, level) in resolved {
+      eisenhower[taskId] = (urgency: level.urgency, importance: level.importance)
+    }
+    var priorities: [Int: Int] = [:]
+    for task in ds.tasks {
+      // Absolute rank wins where both exist, matching the board's sort.
+      if let rank = ds.absolutePriorityRank(for: task) ?? ds.priorityRank(for: task) {
+        priorities[task.id] = rank
+      }
+    }
+    return KanbanFilter.MembershipInputs(
       tagsByTaskId: ds.cache.tagsByTaskId,
-      dueBucket: { ds.rootDueBucket(for: $0) })
+      dueBucket: { ds.rootDueBucket(for: $0) },
+      eisenhowerByTaskId: eisenhower,
+      priorityRankByTaskId: priorities,
+      childCountByTaskId: ds.childCountByTaskId()
+    )
   }
 
   private func taskMatchesKanbanColumn(
@@ -233,19 +314,14 @@ enum KanbanMoveOutcome {
     column: KanbanColumn,
     includeCatchAll: Bool = true
   ) -> Bool {
-    guard let ds = dataSource else { return false }
+    guard let inputs = membershipInputs() else { return false }
     return KanbanFilter.matchesColumn(
-      task, column: column, includeCatchAll: includeCatchAll,
-      tagsByTaskId: ds.cache.tagsByTaskId,
-      dueBucket: { ds.rootDueBucket(for: $0) })
+      task, column: column, includeCatchAll: includeCatchAll, inputs: inputs)
   }
 
   func taskMatchesCondition(_ task: CheckvistTask, condition: KanbanColumnCondition) -> Bool {
-    guard let ds = dataSource else { return false }
-    return KanbanFilter.matches(
-      task, condition: condition,
-      tagsByTaskId: ds.cache.tagsByTaskId,
-      dueBucket: { ds.rootDueBucket(for: $0) })
+    guard let inputs = membershipInputs() else { return false }
+    return KanbanFilter.matches(task, condition: condition, inputs: inputs)
   }
 
   // Note: sortedForKanban implementation moved to extension at the bottom of this file.
@@ -307,6 +383,13 @@ enum KanbanMoveOutcome {
     guard columns.indices.contains(targetIndex) else { return nil }
     let targetColumn = columns[targetIndex]
 
+    if let placement = quadrantPlacement(for: task, targetColumn: targetColumn) {
+      kanbanFocusedColumnIndex = targetIndex
+      ds.currentSiblingIndex = 0
+      kanbanSelectedTaskId = task.id
+      return placement
+    }
+
     guard
       let (newContent, newDue) = applyColumnConditions(
         to: task, targetColumn: targetColumn, allColumns: columns)
@@ -336,6 +419,9 @@ enum KanbanMoveOutcome {
     guard let ds = dataSource else { return nil }
     let columns = kanbanColumns
     guard let task = ds.cache.taskById[taskId] else { return nil }
+    if let placement = quadrantPlacement(for: task, targetColumn: targetColumn) {
+      return placement
+    }
     guard
       let (newContent, newDue) = applyColumnConditions(
         to: task, targetColumn: targetColumn, allColumns: columns)
@@ -350,6 +436,23 @@ enum KanbanMoveOutcome {
       )
     }
     return nil
+  }
+
+  /// A move into a quadrant column, if that is what this column is.
+  ///
+  /// Answered before the content/due path because a placement cannot be
+  /// expressed as either — the coordinate lives in Priority's own store, not in
+  /// the task's text or its due date.
+  private func quadrantPlacement(
+    for task: CheckvistTask, targetColumn: KanbanColumn
+  ) -> KanbanMoveOutcome? {
+    let quadrant = targetColumn.conditions.compactMap { condition -> MatrixQuadrant? in
+      guard case .matrixQuadrant(let raw) = condition else { return nil }
+      return MatrixQuadrant(rawValue: raw)
+    }.first
+    guard let quadrant else { return nil }
+    let point = quadrant.representativeCoordinate
+    return .place(task: task, urgency: point.urgency, importance: point.importance)
   }
 
   /// Computes the new content and due string needed to make `task` satisfy `targetColumn`.
@@ -446,6 +549,12 @@ enum KanbanMoveOutcome {
     case .catchAll:
       // Strip the due date so the task doesn't accidentally match a due-bucket column.
       due = ""
+
+    case .matrixQuadrant, .priorityAtLeast, .leafOnly, .unplacedOnMatrix:
+      // A quadrant move is answered by `quadrantPlacement` before this runs, and
+      // the other three are not writable, so `isWritable` never selects them.
+      // Unreachable rather than unhandled.
+      return nil
     }
 
     return (content, due)
@@ -592,6 +701,17 @@ enum KanbanMoveOutcome {
         }
       }
     case .catchAll:
+      break
+
+    case .matrixQuadrant, .priorityAtLeast, .leafOnly, .unplacedOnMatrix:
+      // Inline-add into one of these columns creates an ordinary task, which
+      // then may not match the column it was typed into.
+      //
+      // A quadrant placement is keyed by task id, and at this point the task
+      // only has an optimistic one that `reconcileEisenhowerLevels` discards
+      // when the real id arrives — so placing here would look right for a
+      // second and then silently vanish. Better to create the task honestly and
+      // let it be dragged onto the board.
       break
     }
 

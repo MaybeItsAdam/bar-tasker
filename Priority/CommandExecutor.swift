@@ -174,6 +174,11 @@ final class CommandExecutor {
       manager.taskListViewModel.rootTaskView = .kanban
       manager.kanban.exitToParentScope()
       return
+    case .kanbanToggleSwimlanes:
+      manager.kanban.swimlanesByGoal.toggle()
+      manager.statusMessage =
+        manager.kanban.swimlanesByGoal
+        ? "Board grouped by goal." : "Board ungrouped."
     case .kanbanFocusMode:
       guard let task = manager.taskListViewModel.currentTask else {
         manager.repository.errorMessage = "No task selected."

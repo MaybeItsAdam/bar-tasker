@@ -351,7 +351,7 @@ import PriorityCore
 
   func eisenhowerBadgeLabel(for task: CheckvistTask) -> String? {
     guard let level = repository.taskEisenhowerLevels[task.id],
-      level.urgency != 0 || level.importance != 0
+      MatrixGeometry.isPlaced(urgency: level.urgency, importance: level.importance)
     else { return nil }
     return "M(\(formatEisenhowerCoordinate(level.urgency)),\(formatEisenhowerCoordinate(level.importance)))"
   }

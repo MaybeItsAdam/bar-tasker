@@ -125,14 +125,20 @@ struct KanbanColumnEditorView: View {
   @State private var pendingCondition: PendingCondition = .tag
   @State private var pendingTagName: String = ""
   @State private var pendingDueBucket: RootDueBucket = .today
+  @State private var pendingQuadrant: MatrixQuadrant = .doNow
+  @State private var pendingPriorityRank: Int = 3
 
   private enum PendingCondition: String, CaseIterable, Identifiable {
-    case tag, due, catchAll
+    case tag, due, quadrant, priority, leafOnly, unplaced, catchAll
     var id: String { rawValue }
     var title: String {
       switch self {
       case .tag: return "Tag"
       case .due: return "Due bucket"
+      case .quadrant: return "Matrix quadrant"
+      case .priority: return "Priority rank"
+      case .leafOnly: return "Has no subtasks"
+      case .unplaced: return "Not on the matrix"
       case .catchAll: return "Everything else (catch-all)"
       }
     }
@@ -158,6 +164,22 @@ struct KanbanColumnEditorView: View {
           }
           .pickerStyle(.menu)
           .frame(maxWidth: 240)
+        }
+
+        LabeledContent("WIP limit") {
+          HStack(spacing: 8) {
+            Picker("", selection: wipLimitBinding) {
+              Text("No limit").tag(0)
+              ForEach(1...20, id: \.self) { limit in
+                Text("\(limit) cards").tag(limit)
+              }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 160)
+            Text("Advisory — going over is shown, never blocked.")
+              .font(.system(size: 10))
+              .foregroundColor(.secondary)
+          }
         }
       }
 
@@ -223,6 +245,16 @@ struct KanbanColumnEditorView: View {
     .frame(height: 120)
   }
 
+  /// The picker speaks in a plain `Int` because SwiftUI tags an optional
+  /// selection badly; zero is the "no limit" sentinel on the way in and out,
+  /// and the model keeps storing `nil`.
+  private var wipLimitBinding: Binding<Int> {
+    Binding(
+      get: { column.wipLimit ?? 0 },
+      set: { column.wipLimit = $0 <= 0 ? nil : $0 }
+    )
+  }
+
   private var addConditionSection: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("Add condition")
@@ -250,7 +282,23 @@ struct KanbanColumnEditorView: View {
           }
           .pickerStyle(.menu)
           .frame(width: 160)
-        case .catchAll:
+        case .quadrant:
+          Picker("", selection: $pendingQuadrant) {
+            ForEach(MatrixQuadrant.allCases) { quadrant in
+              Text(quadrant.title).tag(quadrant)
+            }
+          }
+          .pickerStyle(.menu)
+          .frame(width: 160)
+        case .priority:
+          Picker("", selection: $pendingPriorityRank) {
+            ForEach(1...9, id: \.self) { rank in
+              Text("P\(rank) or higher").tag(rank)
+            }
+          }
+          .pickerStyle(.menu)
+          .frame(width: 160)
+        case .leafOnly, .unplaced, .catchAll:
           EmptyView()
         }
 
@@ -266,7 +314,7 @@ struct KanbanColumnEditorView: View {
   private var canAddPendingCondition: Bool {
     switch pendingCondition {
     case .tag: return !pendingTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    case .due, .catchAll: return true
+    case .due, .quadrant, .priority, .leafOnly, .unplaced, .catchAll: return true
     }
   }
 
@@ -282,6 +330,14 @@ struct KanbanColumnEditorView: View {
       pendingTagName = ""
     case .due:
       condition = .dueBucket(pendingDueBucket.rawValue)
+    case .quadrant:
+      condition = .matrixQuadrant(pendingQuadrant.rawValue)
+    case .priority:
+      condition = .priorityAtLeast(pendingPriorityRank)
+    case .leafOnly:
+      condition = .leafOnly
+    case .unplaced:
+      condition = .unplacedOnMatrix
     case .catchAll:
       condition = .catchAll
     }
@@ -295,6 +351,10 @@ struct KanbanColumnEditorView: View {
     case .tag: return "tag"
     case .dueBucket: return "calendar"
     case .catchAll: return "tray"
+    case .matrixQuadrant: return "square.grid.2x2"
+    case .priorityAtLeast: return "number"
+    case .leafOnly: return "leaf"
+    case .unplacedOnMatrix: return "questionmark.square.dashed"
     }
   }
 }

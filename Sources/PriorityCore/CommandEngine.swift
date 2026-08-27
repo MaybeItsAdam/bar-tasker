@@ -113,6 +113,7 @@ public enum Command: Equatable, Sendable {
   case kanbanDrillIn
   case kanbanPopOut
   case kanbanFocusMode
+  case kanbanToggleSwimlanes
   case toggleContext
   case toggleChildrenInMenus
   case editAtStart
@@ -443,6 +444,10 @@ public enum CommandEngine {
       preview: "Move column focus left without moving the task", keybind: nil,
       submitImmediately: true, boundActionRawValue: "kanbanFocusLeft"),
     .init(
+      label: "Kanban: rows per goal (swimlanes)", command: "kanban swimlanes",
+      preview: "Group the board into a row per top-level goal", keybind: nil,
+      submitImmediately: true),
+    .init(
       label: "Kanban: show selected in All view", command: "kanban show in all",
       preview: "Open the selected kanban task in the All-tab tree", keybind: nil,
       submitImmediately: true, boundActionRawValue: "kanbanShowInAll"),
@@ -538,6 +543,9 @@ public enum CommandEngine {
     }
     if cmd.hasPrefix("list ") {
       return .list(String(cmd.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+    }
+    if cmd == "kanban swimlanes" || cmd == "kanban lanes" || cmd == "swimlanes" {
+      return .kanbanToggleSwimlanes
     }
     if cmd.hasPrefix("matrix ") {
       let raw = String(cmd.dropFirst(7)).trimmingCharacters(in: .whitespaces)

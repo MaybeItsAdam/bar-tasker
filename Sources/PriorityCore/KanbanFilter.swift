@@ -26,6 +26,37 @@ public enum KanbanFilter {
     }
   }
 
+  /// Everything membership needs to know about a task beyond the task itself.
+  ///
+  /// Gathered into one value because the condition vocabulary grew past what
+  /// two parameters could carry. A column can now be defined by quadrant,
+  /// priority, leafness or matrix-absence as well as tag and due bucket, and
+  /// threading six arguments through three functions is how they drift apart.
+  public struct MembershipInputs<Task: VisibilityTask> {
+    public let tagsByTaskId: [Int: [String]]
+    public let dueBucket: (Task) -> RootDueBucket
+    /// `nil` for a task with no coordinate. `(0, 0)` is the unset sentinel and
+    /// is treated the same way, since the store discards it on save.
+    public let eisenhowerByTaskId: [Int: (urgency: Double, importance: Double)]
+    /// The better of the absolute and scoped ranks, already resolved.
+    public let priorityRankByTaskId: [Int: Int]
+    public let childCountByTaskId: [Int: Int]
+
+    public init(
+      tagsByTaskId: [Int: [String]] = [:],
+      dueBucket: @escaping (Task) -> RootDueBucket,
+      eisenhowerByTaskId: [Int: (urgency: Double, importance: Double)] = [:],
+      priorityRankByTaskId: [Int: Int] = [:],
+      childCountByTaskId: [Int: Int] = [:]
+    ) {
+      self.tagsByTaskId = tagsByTaskId
+      self.dueBucket = dueBucket
+      self.eisenhowerByTaskId = eisenhowerByTaskId
+      self.priorityRankByTaskId = priorityRankByTaskId
+      self.childCountByTaskId = childCountByTaskId
+    }
+  }
+
   /// Whether a task satisfies one column condition.
   ///
   /// `.catchAll` deliberately answers `false`. A column configured with only a
@@ -35,17 +66,32 @@ public enum KanbanFilter {
   public static func matches<Task: VisibilityTask>(
     _ task: Task,
     condition: KanbanColumnCondition,
-    tagsByTaskId: [Int: [String]],
-    dueBucket: (Task) -> RootDueBucket
+    inputs: MembershipInputs<Task>
   ) -> Bool {
     switch condition {
     case .tag(let name):
-      return hasTag(task, tag: name, tagsByTaskId: tagsByTaskId)
+      return hasTag(task, tag: name, tagsByTaskId: inputs.tagsByTaskId)
     case .dueBucket(let raw):
       guard let bucket = RootDueBucket(rawValue: raw) else { return false }
-      return dueBucket(task) == bucket
+      return inputs.dueBucket(task) == bucket
     case .catchAll:
       return false
+    case .matrixQuadrant(let raw):
+      guard let wanted = MatrixQuadrant(rawValue: raw),
+        let point = inputs.eisenhowerByTaskId[task.id],
+        MatrixGeometry.isPlaced(urgency: point.urgency, importance: point.importance)
+      else { return false }
+      return MatrixGeometry.quadrant(urgency: point.urgency, importance: point.importance)
+        == wanted
+    case .priorityAtLeast(let rank):
+      guard let actual = inputs.priorityRankByTaskId[task.id] else { return false }
+      // Rank 1 is the top, so "at least P3" is a rank *no greater than* 3.
+      return actual <= rank
+    case .leafOnly:
+      return (inputs.childCountByTaskId[task.id] ?? 0) == 0
+    case .unplacedOnMatrix:
+      guard let point = inputs.eisenhowerByTaskId[task.id] else { return true }
+      return !MatrixGeometry.isPlaced(urgency: point.urgency, importance: point.importance)
     }
   }
 
@@ -54,12 +100,11 @@ public enum KanbanFilter {
     _ task: Task,
     column: KanbanColumn,
     includeCatchAll: Bool = true,
-    tagsByTaskId: [Int: [String]],
-    dueBucket: (Task) -> RootDueBucket
+    inputs: MembershipInputs<Task>
   ) -> Bool {
     for condition in column.conditions {
       if !includeCatchAll, condition == .catchAll { continue }
-      if matches(task, condition: condition, tagsByTaskId: tagsByTaskId, dueBucket: dueBucket) {
+      if matches(task, condition: condition, inputs: inputs) {
         return true
       }
     }
@@ -70,11 +115,10 @@ public enum KanbanFilter {
   public static func column<Task: VisibilityTask>(
     for task: Task,
     in columns: [KanbanColumn],
-    tagsByTaskId: [Int: [String]],
-    dueBucket: (Task) -> RootDueBucket
+    inputs: MembershipInputs<Task>
   ) -> KanbanColumn? {
     columns.first { column in
-      matchesColumn(task, column: column, tagsByTaskId: tagsByTaskId, dueBucket: dueBucket)
+      matchesColumn(task, column: column, inputs: inputs)
     }
   }
 

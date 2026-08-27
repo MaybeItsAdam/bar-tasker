@@ -12,6 +12,22 @@ final class KanbanFilterTests: XCTestCase {
     { map[$0.id] ?? .noDueDate }
   }
 
+  private func inputs(
+    tags: [Int: [String]] = [:],
+    buckets: [Int: RootDueBucket] = [:],
+    eisenhower: [Int: (urgency: Double, importance: Double)] = [:],
+    priorities: [Int: Int] = [:],
+    childCounts: [Int: Int] = [:]
+  ) -> KanbanFilter.MembershipInputs<FixtureTask> {
+    KanbanFilter.MembershipInputs(
+      tagsByTaskId: tags,
+      dueBucket: bucket(buckets),
+      eisenhowerByTaskId: eisenhower,
+      priorityRankByTaskId: priorities,
+      childCountByTaskId: childCounts
+    )
+  }
+
   private func day(offset: Int) -> Date {
     let calendar = Calendar.current
     return calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: Date()))!
@@ -49,18 +65,18 @@ final class KanbanFilterTests: XCTestCase {
     XCTAssertTrue(
       KanbanFilter.matches(
         task, condition: .dueBucket(RootDueBucket.today.rawValue),
-        tagsByTaskId: [:], dueBucket: bucket([1: .today])))
+        inputs: inputs(tags: [:], buckets: [1: .today])))
     XCTAssertFalse(
       KanbanFilter.matches(
         task, condition: .dueBucket(RootDueBucket.today.rawValue),
-        tagsByTaskId: [:], dueBucket: bucket([1: .future])))
+        inputs: inputs(tags: [:], buckets: [1: .future])))
   }
 
   func testAnUnrecognisedDueBucketRawValueMatchesNothing() {
     XCTAssertFalse(
       KanbanFilter.matches(
         FixtureTask(id: 1), condition: .dueBucket(999),
-        tagsByTaskId: [:], dueBucket: bucket([1: .today])))
+        inputs: inputs(tags: [:], buckets: [1: .today])))
   }
 
   /// The catch-all deliberately claims nothing here. It is the caller's job to
@@ -70,7 +86,7 @@ final class KanbanFilterTests: XCTestCase {
     XCTAssertFalse(
       KanbanFilter.matches(
         FixtureTask(id: 1), condition: .catchAll,
-        tagsByTaskId: [1: ["#anything"]], dueBucket: bucket([1: .today])))
+        inputs: inputs(tags: [1: ["#anything"]], buckets: [1: .today])))
   }
 
   func testAColumnMatchesWhenAnyOneOfItsConditionsDoes() {
@@ -84,11 +100,11 @@ final class KanbanFilterTests: XCTestCase {
     XCTAssertTrue(
       KanbanFilter.matchesColumn(
         FixtureTask(id: 1), column: column,
-        tagsByTaskId: [:], dueBucket: bucket([1: .today])))
+        inputs: inputs(tags: [:], buckets: [1: .today])))
     XCTAssertFalse(
       KanbanFilter.matchesColumn(
         FixtureTask(id: 1), column: column,
-        tagsByTaskId: [:], dueBucket: bucket([1: .tomorrow])))
+        inputs: inputs(tags: [:], buckets: [1: .tomorrow])))
   }
 
   func testExcludingTheCatchAllSkipsOnlyThatCondition() {
@@ -98,8 +114,106 @@ final class KanbanFilterTests: XCTestCase {
     XCTAssertTrue(
       KanbanFilter.matchesColumn(
         FixtureTask(id: 1), column: column, includeCatchAll: false,
-        tagsByTaskId: [1: ["#waiting"]], dueBucket: bucket([:])),
+        inputs: inputs(tags: [1: ["#waiting"]], buckets: [:])),
       "the tag condition still applies")
+  }
+
+  // MARK: - The conditions a board of goals actually needs
+
+  /// The join between the two views: a board defined by quadrant is fed by the
+  /// matrix, which is the pairing that makes placing tasks worth the effort.
+  func testAQuadrantConditionMatchesOnlyThatQuadrant() {
+    let task = FixtureTask(id: 1)
+    let doNow = KanbanColumnCondition.matrixQuadrant(MatrixQuadrant.doNow.rawValue)
+    XCTAssertTrue(
+      KanbanFilter.matches(
+        task, condition: doNow, inputs: inputs(eisenhower: [1: (urgency: 5, importance: 5)])))
+    XCTAssertFalse(
+      KanbanFilter.matches(
+        task, condition: doNow, inputs: inputs(eisenhower: [1: (urgency: -5, importance: 5)])))
+  }
+
+  /// `(0, 0)` is the unset sentinel, so a task sitting on it belongs to no
+  /// quadrant column — otherwise every unplaced task would pile into Eliminate.
+  func testAnUnplacedTaskMatchesNoQuadrant() {
+    for quadrant in MatrixQuadrant.allCases {
+      XCTAssertFalse(
+        KanbanFilter.matches(
+          FixtureTask(id: 1),
+          condition: .matrixQuadrant(quadrant.rawValue),
+          inputs: inputs(eisenhower: [1: (urgency: 0, importance: 0)])),
+        "unplaced must not land in \(quadrant.title)")
+      XCTAssertFalse(
+        KanbanFilter.matches(
+          FixtureTask(id: 1),
+          condition: .matrixQuadrant(quadrant.rawValue),
+          inputs: inputs()))
+    }
+  }
+
+  func testTheMatrixInboxClaimsExactlyWhatTheQuadrantsDoNot() {
+    XCTAssertTrue(
+      KanbanFilter.matches(FixtureTask(id: 1), condition: .unplacedOnMatrix, inputs: inputs()))
+    XCTAssertTrue(
+      KanbanFilter.matches(
+        FixtureTask(id: 1), condition: .unplacedOnMatrix,
+        inputs: inputs(eisenhower: [1: (urgency: 0, importance: 0)])))
+    XCTAssertFalse(
+      KanbanFilter.matches(
+        FixtureTask(id: 1), condition: .unplacedOnMatrix,
+        inputs: inputs(eisenhower: [1: (urgency: 3, importance: 1)])))
+  }
+
+  /// Rank 1 is the top, so "at least P3" is a rank *no greater than* three —
+  /// the comparison reads backwards from how it is spelled.
+  func testPriorityAtLeastClaimsTheBetterRanks() {
+    let condition = KanbanColumnCondition.priorityAtLeast(3)
+    XCTAssertTrue(
+      KanbanFilter.matches(FixtureTask(id: 1), condition: condition, inputs: inputs(priorities: [1: 1])))
+    XCTAssertTrue(
+      KanbanFilter.matches(FixtureTask(id: 1), condition: condition, inputs: inputs(priorities: [1: 3])))
+    XCTAssertFalse(
+      KanbanFilter.matches(FixtureTask(id: 1), condition: condition, inputs: inputs(priorities: [1: 4])))
+    XCTAssertFalse(
+      KanbanFilter.matches(FixtureTask(id: 1), condition: condition, inputs: inputs()),
+      "an unranked task has no priority to be at least")
+  }
+
+  /// The board draws a card per matching task at every depth, so a six-level
+  /// tree puts a goal and its whole subtree on the board as peers.
+  func testLeafOnlyExcludesTasksWithSubtasks() {
+    XCTAssertTrue(
+      KanbanFilter.matches(FixtureTask(id: 1), condition: .leafOnly, inputs: inputs()))
+    XCTAssertTrue(
+      KanbanFilter.matches(
+        FixtureTask(id: 1), condition: .leafOnly, inputs: inputs(childCounts: [1: 0])))
+    XCTAssertFalse(
+      KanbanFilter.matches(
+        FixtureTask(id: 1), condition: .leafOnly, inputs: inputs(childCounts: [1: 4])))
+  }
+
+  // MARK: - Writability
+
+  /// A drop has to be able to *do* something. A quadrant column writes a
+  /// coordinate; the three descriptive conditions have no value the board could
+  /// infer, so a column of only those accepts no drops.
+  func testOnlyConditionsTheBoardCanWriteAreWritable() {
+    XCTAssertTrue(KanbanColumnCondition.matrixQuadrant(MatrixQuadrant.doNow.rawValue).isWritable)
+    XCTAssertTrue(KanbanColumnCondition.tag("waiting").isWritable)
+    XCTAssertFalse(KanbanColumnCondition.priorityAtLeast(3).isWritable)
+    XCTAssertFalse(KanbanColumnCondition.leafOnly.isWritable)
+    XCTAssertFalse(KanbanColumnCondition.unplacedOnMatrix.isWritable)
+  }
+
+  /// Old saved boards must survive the enum growing four cases.
+  func testTheStoredFormRoundTripsForEveryCondition() throws {
+    let all: [KanbanColumnCondition] = [
+      .tag("waiting"), .dueBucket(RootDueBucket.today.rawValue), .catchAll,
+      .matrixQuadrant(MatrixQuadrant.schedule.rawValue), .priorityAtLeast(2),
+      .leafOnly, .unplacedOnMatrix,
+    ]
+    let data = try JSONEncoder().encode(all)
+    XCTAssertEqual(try JSONDecoder().decode([KanbanColumnCondition].self, from: data), all)
   }
 
   // MARK: - Column assignment
@@ -112,7 +226,7 @@ final class KanbanFilterTests: XCTestCase {
 
     let assigned = KanbanFilter.column(
       for: FixtureTask(id: 1), in: columns,
-      tagsByTaskId: [1: ["#waiting"]], dueBucket: bucket([1: .today]))
+      inputs: inputs(tags: [1: ["#waiting"]], buckets: [1: .today]))
 
     XCTAssertEqual(
       assigned?.name, "Today",
@@ -125,13 +239,13 @@ final class KanbanFilterTests: XCTestCase {
     XCTAssertNil(
       KanbanFilter.column(
         for: FixtureTask(id: 1), in: columns,
-        tagsByTaskId: [:], dueBucket: bucket([1: .today])))
+        inputs: inputs(tags: [:], buckets: [1: .today])))
   }
 
   func testTheShippedDefaultColumnsPlaceATodayTaskInToday() {
     let assigned = KanbanFilter.column(
       for: FixtureTask(id: 1), in: KanbanColumn.defaults,
-      tagsByTaskId: [:], dueBucket: bucket([1: .today]))
+      inputs: inputs(tags: [:], buckets: [1: .today]))
 
     XCTAssertEqual(assigned?.name, "Today")
   }
@@ -139,7 +253,7 @@ final class KanbanFilterTests: XCTestCase {
   func testTheShippedDefaultColumnsPlaceAWaitingTaskInWaitingOn() {
     let assigned = KanbanFilter.column(
       for: FixtureTask(id: 1), in: KanbanColumn.defaults,
-      tagsByTaskId: [1: ["#waiting"]], dueBucket: bucket([1: .noDueDate]))
+      inputs: inputs(tags: [1: ["#waiting"]], buckets: [1: .noDueDate]))
 
     XCTAssertEqual(assigned?.name, "Waiting On")
   }
@@ -287,5 +401,36 @@ final class KanbanFilterTests: XCTestCase {
         sorted.map(\.id).sorted(), tasks.map(\.id).sorted(),
         "\(order.rawValue) dropped or duplicated a card")
     }
+  }
+}
+
+/// A board's first impression. Four columns keyed on due dates and tags show
+/// nothing at all to someone who has set neither, which reads as broken rather
+/// than empty.
+final class KanbanDefaultBoardTests: XCTestCase {
+
+  private func inputs() -> KanbanFilter.MembershipInputs<FixtureTask> {
+    KanbanFilter.MembershipInputs(dueBucket: { _ in .noDueDate })
+  }
+
+  func testATaskWithNoDueDateAndNoTagsStillLandsSomewhere() {
+    let columns = KanbanColumn.defaults
+    let task = FixtureTask(id: 1, content: "learn drums", position: 1)
+    let assigned = columns.first { column in
+      KanbanFilter.matchesColumn(task, column: column, inputs: inputs())
+    }
+    XCTAssertNil(assigned, "no specific condition should claim it")
+    XCTAssertEqual(
+      columns.last?.conditions, [.catchAll],
+      "so the last column must be the catch-all that does")
+  }
+
+  /// Order is the whole contract: a catch-all anywhere but last swallows the
+  /// board, since every task matches it.
+  func testTheCatchAllIsLastAndIsTheOnlyOne() {
+    let catchAllIndices = KanbanColumn.defaults.indices.filter { index in
+      KanbanColumn.defaults[index].conditions.contains(.catchAll)
+    }
+    XCTAssertEqual(catchAllIndices, [KanbanColumn.defaults.count - 1])
   }
 }

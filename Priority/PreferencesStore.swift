@@ -49,6 +49,8 @@ final class PreferencesStore {
     case focusDurationMinutes
     case focusBreakDurationMinutes
     case kanbanManualOrderByColumnId
+    /// Whether the board groups into a row per top-level goal.
+    case kanbanSwimlanesByGoal
     case appFontName
     case dailyLogIntegrationEnabled
     case dailyLogChartRangeRawValue

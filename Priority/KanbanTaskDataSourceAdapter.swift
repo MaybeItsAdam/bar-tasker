@@ -41,6 +41,7 @@ final class KanbanTaskDataSourceAdapter: KanbanTaskDataSource {
   }
 
   var hideFuture: Bool { taskListViewModel.hideFuture }
+  var showChildrenInMenus: Bool { taskListViewModel.showChildrenInMenus }
   var rootTaskView: RootTaskView { taskListViewModel.rootTaskView }
   var cache: CacheState { taskListViewModel.cache }
 
@@ -65,5 +66,14 @@ final class KanbanTaskDataSourceAdapter: KanbanTaskDataSource {
   func priorityPath(for task: CheckvistTask) -> String? {
     taskListViewModel.ensureVisibleTasksCacheValid()
     return taskListViewModel.cache.priorityPath[task.id]
+  }
+
+  func eisenhowerCoordinate(for task: CheckvistTask) -> (urgency: Double, importance: Double)? {
+    guard let level = repository.taskEisenhowerLevels[task.id] else { return nil }
+    return (urgency: level.urgency, importance: level.importance)
+  }
+
+  func childCountByTaskId() -> [Int: Int] {
+    taskListViewModel.childCountByTaskId()
   }
 }
