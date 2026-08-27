@@ -168,11 +168,26 @@ struct CelebrationStrike: View {
     Rectangle()
       .fill(color)
       .frame(height: 1.5)
+      // Measured *before* the scale, which is the whole point.
+      //
+      // Read after it — as this did — the geometry reported is the width the
+      // scale is in the middle of animating, and that width is fed straight
+      // back into the `Animation` driving the scale. So the rule started
+      // drawing, each frame wrote a new `width`, each new `width` substituted a
+      // different `Animation` into `.animation(_:value:)` mid-flight, and
+      // swapping the animation under a value still in flight restarts the
+      // interpolation. The visible result was a rule that drew, then drew a
+      // second time along the identical path.
+      //
+      // It reads as a doubled strikethrough on dailies in particular, because
+      // there `isDrawn` is the lasting done-ness: the rule stays up afterwards,
+      // so the redraw has something to land on. A task row retracts and
+      // vanishes before the second pass can register.
+      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
       .scaleEffect(x: isDrawn ? 1.0 : 0.001, y: 1, anchor: .leading)
       .animation(
         CelebrationMotion.strike(reduceMotion: reduceMotion, width: width),
         value: isDrawn
       )
-      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
   }
 }
