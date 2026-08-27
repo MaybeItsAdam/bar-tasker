@@ -75,7 +75,7 @@ Onboarding boxes guide the Checkvist, Obsidian and Google Calendar setup. Each o
 | `t` | Kanban view |
 | `y` | Matrix view |
 | `u` | Daily view |
-| `?` | Every shortcut, on your own bindings — the reference sheet |
+| `?` | Every shortcut, on your own bindings — led by what applies in the view you're in |
 | `Esc` | Cancel input / close popover |
 
 ### Task actions
@@ -107,6 +107,26 @@ Onboarding boxes guide the Checkvist, Obsidian and Google Calendar setup. Each o
 | `l` / `→` | Next column |
 | `Cmd+←` / `Cmd+→` | Move task between columns |
 | `f` | Show this task in the All view, entering its subtasks if it has any |
+| *drag* | Drop a card on another to place it above that card, or below the last card to send it to the end. Dropping inside the same column reorders it without touching its due date, priority or position |
+
+### Matrix
+
+Placement is two keystrokes. `m` on its own spells the rest out in the status
+bar, so the vocabulary is one keypress away rather than something to memorise.
+
+| Key | Action |
+| --- | --- |
+| `md` | Do — urgent and important |
+| `ms` | Schedule — important, not urgent |
+| `mg` | Delegate — urgent, not important (`g`, because `d` is Do) |
+| `me` | Eliminate — neither |
+| `m<u><i>` | An exact coordinate, each axis `-9` to `9`. `-` before a digit makes it negative: `m-3 5`, `m5-2`, `m-4-4` |
+| `m00` | Take the task off the matrix |
+| *drag* | Drop a task anywhere on the grid to place it there. Drag from the unplaced rail on the right, or drag a placed dot to move it. Dropping a dot back on the rail unplaces it |
+
+With the Matrix view open, placing a task steps the selection to the next
+unplaced one, so a backlog is sorted by typing `md` `ms` `me` down it without
+moving the cursor by hand. The rail shows how many are left.
 
 ### Dailies
 
@@ -159,6 +179,15 @@ the Checkvist spelling than the tab.
 | `O` | Open in a new Obsidian window |
 | `gc` | Add to Google Calendar |
 
+### Scope
+
+Every view except **All** answers the same question the same way: does it show
+only this level, or everything below it? One toggle decides — `toggle children`,
+or the chip in the breadcrumb bar, which also says which answer is in force.
+
+All is the exception on purpose. It's the navigator you drill through to *set*
+the scope the other views read, so it's always strictly parented.
+
 ## Command palette
 
 Open with `:`, `;` or `Cmd+K`. Most commands accept several spellings — `unrepeat`, `no repeat`, `remove repeat` and `clear repeat` all do the same thing.
@@ -171,8 +200,8 @@ Open with `:`, `;` or `Cmd+K`. Most commands accept several spellings — `unrep
 | **Repeat** | `repeat <rule>`, `repeat daily`, `repeat every <n> <unit>`, `clear repeat` |
 | **Tags** | `tag <name>`, `untag <name>` |
 | **Priority** | `priority <1-9>`, `priority back`, `clear priority` |
-| **Matrix** | `matrix <quadrant>`, `importance <value>`, `urgency <value>` |
-| **Kanban** | `kanban left` / `right`, `kanban move left` / `right`, `kanban enter`, `kanban exit`, `kanban show in all`, `kanban focus mode` |
+| **Matrix** | `matrix do` / `schedule` / `delegate` / `eliminate`, `matrix <u> <i>`, `importance <value>`, `urgency <value>`, `clear matrix` |
+| **Kanban** | `kanban left` / `right`, `kanban move left` / `right`, `kanban enter`, `kanban exit`, `kanban show in all`, `kanban focus mode`, `kanban swimlanes` |
 | **Outline** | `expand`, `collapse`, `expand all`, `collapse all`, `enter children`, `exit parent` |
 | **View** | `list <name>`, `tab <name>`, `cycle tab next` / `prev`, `cycle filter next` / `prev`, `toggle children`, `toggle subtree`, `toggle context`, `toggle hide future` |
 | **Timer** | `focus mode`, `toggle timer`, `pause timer` |
@@ -192,11 +221,29 @@ Due values understand natural language and times: `due today 14:30`, `due tomorr
 | **Due** | `w` | Due and overdue, soonest first |
 | **Tags** | `e` | Grouped by tag |
 | **Priority** | `r` | Your ranked queue |
-| **Kanban** | `t` | Configurable columns, filtered by tag or scoped to subtasks |
-| **Matrix** | `y` | Eisenhower quadrants by importance and urgency |
+| **Kanban** | `t` | Configurable columns, optionally in a row per goal |
+| **Matrix** | `y` | Eisenhower quadrants by importance and urgency, with everything still unplaced listed alongside |
 | **Daily** | `u` | Dailies, the chart, and what you finished |
 
-Kanban cards show the task text with tags stripped, a `P1`–`P9` priority badge, the due date with overdue/today highlighting, inline tags, and a subtask count. Columns are configured in Preferences and reorder by drag.
+Kanban cards show the task text with tags stripped, a `P1`–`P9` priority badge, the due date with overdue/today highlighting, inline tags, and a subtask count. Columns are configured in Preferences and reorder by drag. Cards drag between and within columns; a hairline marks where the card will land.
+
+A column is defined by one or more conditions, and claims a task if it matches **any** of them. Columns are evaluated in order, so a task lands in the first one that claims it.
+
+| Condition | Claims |
+| --- | --- |
+| Tag | Tasks carrying `#tag` |
+| Due bucket | Overdue, ASAP, Today, Tomorrow, Next 7 days, … |
+| Matrix quadrant | Whatever sits in Do / Schedule / Delegate / Eliminate |
+| Priority rank | `P3 or higher` claims P1, P2 and P3 |
+| Has no subtasks | Only the leaves — the things you actually do, not the goals above them |
+| Not on the matrix | The board's own inbox: everything still unplaced |
+| Everything else | Whatever no earlier column took |
+
+Each column header carries its card count. Give a column a **WIP limit** and the count reads `4/3` and turns amber when it's over — advisory only, nothing is ever blocked.
+
+`kanban swimlanes` turns the board into a **row per top-level goal**, columns per state. A single row of columns tells you what state a task is in but never what it's *for*; with a tree that's mostly goal structure, that's the more useful axis. Every lane draws all its columns, including the empty ones — that emptiness is the comparison.
+
+Dropping a card into a quadrant column places it on the matrix, the same write the Matrix view's drop makes. Columns defined only by priority, leafness or matrix-absence describe a task rather than ask something of it, so they accept no drops.
 
 ## The window
 
@@ -385,7 +432,9 @@ Every command is one of the MCP tools under a friendlier name, and the same bina
 
 ## MCP server
 
-Priority exposes **19 MCP tools** so an AI assistant can work with your lists directly — thirteen that reach the Checkvist API, and six for the local state Checkvist has no representation for (day log, dailies, priority ranks and recurrence).
+Priority exposes **20 MCP tools** so an AI assistant can work with your lists directly — thirteen that reach the Checkvist API, and seven for the local state Checkvist has no representation for (day log, dailies, priority ranks, recurrence, and the matrix).
+
+All but one are reads or Checkvist writes. `task_matrix_set` places tasks on the Eisenhower matrix in bulk, and refuses while Priority is running — the app holds those coordinates in memory and would overwrite them. Quit Priority, let the assistant do a first pass over the whole list, then reopen and correct it by dragging.
 
 Set it up from `Preferences → Plugins → Native MCP Integration`. It detects Claude Code, Claude Desktop, Cursor, Windsurf, VS Code and Zed, and adds Priority to the one you pick in a single click, preserving any servers already in that client's config.
 
