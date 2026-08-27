@@ -30,7 +30,7 @@ import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-EXPECTED_TOOL_COUNT = 19
+EXPECTED_TOOL_COUNT = 20
 PROTOCOL_VERSION = "2024-11-05"
 
 
@@ -49,7 +49,17 @@ def find_app() -> pathlib.Path | None:
     # under `build/`. Prefer one that actually carries the helper, so a leftover
     # from before this change doesn't shadow the build under test.
     with_helper = [c for c in binaries if (c / "Contents/Helpers/priority").exists()]
-    return max(with_helper or binaries, key=lambda p: p.stat().st_mtime)
+
+    def freshness(app: pathlib.Path) -> float:
+        # The *helper's* mtime, not the bundle directory's. A directory's mtime
+        # only moves when its own entries change, and a rebuild replaces files
+        # deeper inside — so keying on the bundle picked a months-old app over
+        # the one just built and reported it as passing.
+        helper = app / "Contents/Helpers/priority"
+        target = helper if helper.exists() else app / "Contents/MacOS/Priority"
+        return target.stat().st_mtime
+
+    return max(with_helper or binaries, key=freshness)
 
 
 def speak_mcp(argv: list[str], env: dict[str, str]) -> list[dict]:
