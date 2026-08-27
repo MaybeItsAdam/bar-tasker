@@ -58,6 +58,16 @@ pub enum Command {
         name: Vec<String>,
     },
 
+    /// Place tasks on the Eisenhower matrix.
+    ///
+    /// Each placement is `TASK_ID:URGENCY:IMPORTANCE`, both axes -9 to 9.
+    /// `0:0` removes a placement. Needs Priority to be closed.
+    Matrix {
+        /// One or more `TASK_ID:URGENCY:IMPORTANCE` triples.
+        #[arg(required = true, num_args = 1.., value_name = "TASK:U:I")]
+        placements: Vec<String>,
+    },
+
     /// Show a list's tasks as a tree.
     Tasks {
         /// Include closed and invalidated tasks.
@@ -468,6 +478,32 @@ pub fn resolve(cli: &Cli) -> Result<(String, Map<String, Value>)> {
         Command::Dailies => "dailies_list",
         Command::Metadata => "task_metadata",
 
+        Command::Matrix { placements } => {
+            let parsed = placements
+                .iter()
+                .map(|raw| {
+                    let parts: Vec<&str> = raw.split(':').collect();
+                    let [task, urgency, importance] = parts.as_slice() else {
+                        return Err(ToolError::new(format!(
+                            "expected TASK_ID:URGENCY:IMPORTANCE, got `{raw}`"
+                        )));
+                    };
+                    let number = |text: &str, field: &str| {
+                        text.parse::<f64>().map_err(|_| {
+                            ToolError::new(format!("`{text}` is not a number for {field}"))
+                        })
+                    };
+                    Ok(json!({
+                        "task_id": number(task, "task_id")? as i64,
+                        "urgency": number(urgency, "urgency")?,
+                        "importance": number(importance, "importance")?,
+                    }))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            arguments.insert("placements".into(), json!(parsed));
+            "task_matrix_set"
+        }
+
         Command::Daily { command } => match command {
             DailyCommand::Add {
                 title,
@@ -554,6 +590,7 @@ pub fn render(tool: &str, outcome: &ToolOutcome, as_json: bool) {
         "daily_log_fetch" => render_log(payload),
         "dailies_list" => render_dailies(payload),
         "task_metadata" => render_metadata(payload),
+        "task_matrix_set" => render_matrix_set(payload),
         "daily_add" | "daily_update" => render_daily(payload),
         "daily_tick" => render_tick(payload),
         _ => render_task(payload),
@@ -742,6 +779,15 @@ fn render_dailies(payload: &Value) {
         let schedule = daily.get("schedule").and_then(Value::as_str).unwrap_or("");
         let id = daily.get("id").and_then(Value::as_str).unwrap_or("");
         println!("  {marker} {title:<32}  {schedule:<16}  {id}");
+    }
+}
+
+fn render_matrix_set(payload: &Value) {
+    let count = |key: &str| payload.get(key).and_then(Value::as_u64).unwrap_or(0);
+    println!("  placed   {}", count("placed"));
+    println!("  cleared  {}", count("cleared"));
+    if let Some(note) = payload.get("note").and_then(Value::as_str) {
+        println!("\n{note}");
     }
 }
 

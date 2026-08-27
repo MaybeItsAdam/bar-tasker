@@ -1080,3 +1080,37 @@ fn the_matrix_write_is_declared_as_needing_the_app_closed() {
     let required = definition["inputSchema"]["required"].as_array().unwrap();
     assert!(required.iter().any(|value| value == "placements"));
 }
+
+/// `cli.rs`, `tui/` and `mcp.rs` are three front ends onto one tool table, so a
+/// tool only one of them can reach is a bug in the arrangement rather than a
+/// missing feature. `task_matrix_set` shipped MCP-only and needed a subcommand
+/// before it was reachable from a terminal at all.
+#[test]
+fn the_matrix_write_is_reachable_from_the_command_line() {
+    let (name, arguments) = resolve(&Cli::parse_from([
+        "priority",
+        "matrix",
+        "71981562:5:9",
+        "71981563:-3:4",
+    ]))
+    .expect("`priority matrix` should resolve");
+    assert_eq!(name, "task_matrix_set");
+    let placements = arguments["placements"].as_array().unwrap();
+    assert_eq!(placements.len(), 2);
+    assert_eq!(placements[0]["task_id"], 71_981_562_i64);
+    assert_eq!(placements[0]["urgency"], 5.0);
+    assert_eq!(placements[1]["urgency"], -3.0);
+    assert_eq!(placements[1]["importance"], 4.0);
+}
+
+/// A triple that does not parse must stop the command rather than quietly
+/// placing a subset — a partial write to the matrix is worse than none.
+#[test]
+fn a_malformed_placement_is_rejected_rather_than_guessed_at() {
+    for bad in ["not-a-triple", "1:2", "1:2:3:4", "x:2:3", "1:y:3"] {
+        assert!(
+            resolve(&Cli::parse_from(["priority", "matrix", bad])).is_err(),
+            "`{bad}` should be rejected"
+        );
+    }
+}

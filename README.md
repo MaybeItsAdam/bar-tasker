@@ -434,7 +434,7 @@ Every command is one of the MCP tools under a friendlier name, and the same bina
 
 Priority exposes **20 MCP tools** so an AI assistant can work with your lists directly — thirteen that reach the Checkvist API, and seven for the local state Checkvist has no representation for (day log, dailies, priority ranks, recurrence, and the matrix).
 
-All but one are reads or Checkvist writes. `task_matrix_set` places tasks on the Eisenhower matrix in bulk, and refuses while Priority is running — the app holds those coordinates in memory and would overwrite them. Quit Priority, let the assistant do a first pass over the whole list, then reopen and correct it by dragging.
+All but one are reads or Checkvist writes. `task_matrix_set` places tasks on the Eisenhower matrix in bulk (`priority matrix <id>:<urgency>:<importance> …` from a terminal), and refuses while Priority is running — the app holds those coordinates in memory and would overwrite them. Quit Priority, let the assistant do a first pass over the whole list, then reopen and correct it by dragging.
 
 Set it up from `Preferences → Plugins → Native MCP Integration`. It detects Claude Code, Claude Desktop, Cursor, Windsurf, VS Code and Zed, and adds Priority to the one you pick in a single click, preserving any servers already in that client's config.
 
