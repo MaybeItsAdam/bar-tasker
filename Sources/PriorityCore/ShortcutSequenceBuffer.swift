@@ -29,10 +29,18 @@ public enum ShortcutSequenceBuffer {
     case pass
     /// A starter was accepted; the next key completes it.
     case awaitSecondKey
-    /// `m` then a digit: half of a matrix coordinate, echoed to the status bar.
+    /// `m` then a signed digit: half of a matrix coordinate, echoed to the
+    /// status bar so a half-typed sequence is visible rather than silent.
     case reportMatrixUrgency(String)
-    /// `m` then two digits: the whole coordinate.
+    /// `m` then two signed digits: the whole coordinate.
     case applyMatrixCoordinate(urgency: Double, importance: Double)
+    /// `m` then a quadrant letter. Two keystrokes for a whole-box placement,
+    /// which is what makes sorting a backlog viable — the digit form is for
+    /// refining one task, not for triaging two hundred.
+    case applyMatrixQuadrant(MatrixQuadrant)
+    /// `m00`: back to unplaced. `(0, 0)` is the store's unset sentinel, so
+    /// typing it is a removal rather than a placement at the origin.
+    case clearMatrixCoordinate
     /// A complete two-key sequence for the router to look up.
     case attempt(sequence: String)
     /// A sequence was pending but the second key arrived while a text field
@@ -79,28 +87,129 @@ public enum ShortcutSequenceBuffer {
     return Outcome(buffer: "", effect: .attempt(sequence: pending + key))
   }
 
-  /// The matrix sequence is the only three-key one, so it advances the buffer a
-  /// second time instead of completing.
+  /// The matrix sequence, which is the only one that can run past two keys.
+  ///
+  /// Three shapes share the `m` starter:
+  ///
+  /// - `m` + quadrant letter (`d`/`s`/`g`/`e`) places in a whole box.
+  /// - `m` + signed digit + signed digit sets an exact coordinate.
+  /// - `m00` clears the placement.
+  ///
+  /// The signs are the reason this is not simply two digit reads. Coordinates
+  /// run -9...9, but the old sequence parsed one numeric character per axis and
+  /// so could only ever produce positive values — meaning the keyboard could
+  /// reach `Do` and nothing else, in a view whose whole point is four boxes.
   private static func matrixStep(
     _ pending: String, _ key: String, _ matrixStarters: Set<String>
   ) -> Outcome? {
-    guard key.count == 1, let digit = key.first, digit.isNumber else { return nil }
+    guard key.count == 1, let first = pending.first, matrixStarters.contains(String(first))
+    else { return nil }
+    // Everything after the starter: "", "-", "5", "-5", "5-" or "-5-".
+    let rest = String(pending.dropFirst())
 
-    if pending.count == 1, matrixStarters.contains(pending) {
+    switch matrixState(rest) {
+    case .awaitingUrgency:
+      if let quadrant = quadrantLetter(key) {
+        return Outcome(buffer: "", effect: .applyMatrixQuadrant(quadrant))
+      }
+      if key == "-" {
+        return Outcome(buffer: pending + key, effect: .awaitSecondKey)
+      }
+      guard key.first?.isNumber == true else { return nil }
       return Outcome(buffer: pending + key, effect: .reportMatrixUrgency(key))
+
+    case .awaitingUrgencyDigit:
+      guard key.first?.isNumber == true else { return nil }
+      return Outcome(buffer: pending + key, effect: .reportMatrixUrgency("-" + key))
+
+    case .awaitingImportance(let urgency):
+      if key == "-" {
+        return Outcome(buffer: pending + key, effect: .awaitSecondKey)
+      }
+      guard let magnitude = Double(key) else { return nil }
+      return Outcome(buffer: "", effect: completion(urgency: urgency, importance: magnitude))
+
+    case .awaitingImportanceDigit(let urgency):
+      guard let magnitude = Double(key) else { return nil }
+      return Outcome(buffer: "", effect: completion(urgency: urgency, importance: -magnitude))
+
+    case .notMatrix:
+      return nil
     }
-    if pending.count == 2,
-      let starter = pending.first.map(String.init),
-      matrixStarters.contains(starter),
-      let urgencyDigit = pending.last, urgencyDigit.isNumber,
-      let urgency = Double(String(urgencyDigit)),
-      let importance = Double(key)
-    {
-      return Outcome(
-        buffer: "",
-        effect: .applyMatrixCoordinate(urgency: urgency, importance: importance))
+  }
+
+  /// `(0, 0)` is the unset sentinel rather than a position, so typing it means
+  /// "take this off the board" — otherwise the one coordinate a user can name
+  /// exactly would silently do nothing.
+  private static func completion(urgency: Double, importance: Double) -> Effect {
+    if urgency == 0 && importance == 0 { return .clearMatrixCoordinate }
+    return .applyMatrixCoordinate(urgency: urgency, importance: importance)
+  }
+
+  private enum MatrixState {
+    case awaitingUrgency
+    case awaitingUrgencyDigit
+    case awaitingImportance(urgency: Double)
+    case awaitingImportanceDigit(urgency: Double)
+    case notMatrix
+  }
+
+  private static func matrixState(_ rest: String) -> MatrixState {
+    if rest.isEmpty { return .awaitingUrgency }
+    if rest == "-" { return .awaitingUrgencyDigit }
+
+    let negativeUrgency = rest.hasPrefix("-")
+    let afterSign = negativeUrgency ? String(rest.dropFirst()) : rest
+    guard let digit = afterSign.first, digit.isNumber, let magnitude = Double(String(digit))
+    else { return .notMatrix }
+    let urgency = negativeUrgency ? -magnitude : magnitude
+    let tail = String(afterSign.dropFirst())
+
+    if tail.isEmpty { return .awaitingImportance(urgency: urgency) }
+    if tail == "-" { return .awaitingImportanceDigit(urgency: urgency) }
+    return .notMatrix
+  }
+
+  /// `g` rather than `d` for Delegate: `d` is already Do, and the two words
+  /// starting with the same letter is exactly the collision a two-key sequence
+  /// cannot express.
+  private static func quadrantLetter(_ key: String) -> MatrixQuadrant? {
+    switch key {
+    case "d": return .doNow
+    case "s": return .schedule
+    case "g": return .delegate
+    case "e": return .eliminate
+    default: return nil
     }
-    return nil
+  }
+
+  /// What a half-typed matrix sequence should say in the status bar.
+  ///
+  /// This is the discoverability half of the feature. Pressing the starter
+  /// alone spells out the four quadrant letters, so the placement vocabulary is
+  /// reachable by pressing one key rather than by reading the manual — and it
+  /// costs no permanent chrome, because it is only on screen while a sequence
+  /// is pending.
+  ///
+  /// Lives here, beside the parser it describes, because the status bar used to
+  /// re-derive the starters and re-check the digits itself; two readings of the
+  /// same buffer drift the moment either changes.
+  public static func matrixHint(for buffer: String, matrixStarters: Set<String>) -> String? {
+    let pending = buffer.lowercased()
+    guard let first = pending.first, matrixStarters.contains(String(first)) else { return nil }
+
+    switch matrixState(String(pending.dropFirst())) {
+    case .awaitingUrgency:
+      return "Matrix — d Do · s Schedule · g Delegate · e Eliminate · or ±urgency ±importance"
+    case .awaitingUrgencyDigit:
+      return "Matrix: (-_, _)"
+    case .awaitingImportance(let urgency):
+      return "Matrix: (\(Int(urgency)), _)"
+    case .awaitingImportanceDigit(let urgency):
+      return "Matrix: (\(Int(urgency)), -_)"
+    case .notMatrix:
+      return nil
+    }
   }
 
   /// The first character of each configured binding. Tokens shorter than two

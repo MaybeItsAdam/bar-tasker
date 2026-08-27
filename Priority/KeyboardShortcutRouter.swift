@@ -780,14 +780,22 @@ struct KeyboardShortcutRouter {
       manager.statusMessage = "Matrix: (\(digit), _)"
       return true
     case .applyMatrixCoordinate(let urgency, let importance):
+      placeCurrentTaskOnMatrix(urgency: urgency, importance: importance)
+      return true
+    case .applyMatrixQuadrant(let quadrant):
+      let point = quadrant.representativeCoordinate
+      placeCurrentTaskOnMatrix(
+        urgency: point.urgency, importance: point.importance, quadrantName: quadrant.title)
+      return true
+    case .clearMatrixCoordinate:
       guard let task = manager.taskListViewModel.currentTask else {
         manager.repository.errorMessage = "No task selected."
         return true
       }
-      manager.repository.setUrgency(taskId: task.id, level: urgency)
-      manager.repository.setImportance(taskId: task.id, level: importance)
+      manager.repository.setUrgency(taskId: task.id, level: 0)
+      manager.repository.setImportance(taskId: task.id, level: 0)
       manager.repository.errorMessage = nil
-      manager.statusMessage = "Matrix: (\(Int(urgency)), \(Int(importance)))"
+      manager.statusMessage = "Removed from the matrix."
       updateTitle()
       return true
     case .abandon:
@@ -999,3 +1007,66 @@ struct KeyboardShortcutRouter {
 
 }
 // swiftlint:enable type_body_length function_body_length cyclomatic_complexity
+
+// MARK: - Matrix placement
+
+extension KeyboardShortcutRouter {
+  /// Place the selected task, then step to the next unplaced one.
+  ///
+  /// The advance is what turns two keystrokes per task into a sorting pass:
+  /// with the matrix open you hold position and type `md`, `ms`, `me` down a
+  /// backlog without ever moving the selection by hand. Outside the matrix
+  /// there is nothing to sort through, so the selection stays where it was and
+  /// the placement is just a placement.
+  @MainActor func placeCurrentTaskOnMatrix(
+    urgency: Double, importance: Double, quadrantName: String? = nil
+  ) {
+    guard let task = manager.taskListViewModel.currentTask else {
+      manager.repository.errorMessage = "No task selected."
+      return
+    }
+    manager.repository.setUrgency(taskId: task.id, level: urgency)
+    manager.repository.setImportance(taskId: task.id, level: importance)
+    manager.repository.errorMessage = nil
+
+    let coordinate = "(\(Int(urgency)), \(Int(importance)))"
+    let name =
+      quadrantName ?? MatrixGeometry.quadrant(urgency: urgency, importance: importance).title
+    manager.statusMessage = "Matrix: \(coordinate) — \(name)"
+
+    if manager.taskListViewModel.rootTaskView == .eisenhower {
+      advanceToNextUnplacedTask(after: task)
+    }
+    updateTitle()
+  }
+
+  /// The next task in the current scope with no coordinate, searched forward
+  /// from the one just placed and wrapping once.
+  ///
+  /// Wrapping matters: placements land tasks anywhere in the order, so a strict
+  /// forward search would strand the ones above the cursor and the pass would
+  /// look finished while the rail still had entries in it.
+  @MainActor private func advanceToNextUnplacedTask(after task: CheckvistTask) {
+    let levels = manager.repository.taskEisenhowerLevels
+    let scopeId = manager.navigationState.currentParentId
+    let showChildren = manager.taskListViewModel.showChildrenInMenus
+    let scoped = manager.repository.tasks.filter { candidate in
+      guard candidate.status == 0 else { return false }
+      if showChildren {
+        return manager.taskListViewModel.isDescendant(candidate, of: scopeId)
+      }
+      return (candidate.parentId ?? 0) == scopeId
+    }
+    guard let placedIndex = scoped.firstIndex(where: { $0.id == task.id }) else { return }
+
+    let following = scoped[(placedIndex + 1)...]
+    let preceding = scoped[..<placedIndex]
+    let isUnplaced: (CheckvistTask) -> Bool = { candidate in
+      let level = levels[candidate.id] ?? .zero
+      return !MatrixGeometry.isPlaced(urgency: level.urgency, importance: level.importance)
+    }
+    guard let next = following.first(where: isUnplaced) ?? preceding.first(where: isUnplaced)
+    else { return }
+    manager.taskNavigationService.navigate(to: next)
+  }
+}

@@ -202,16 +202,10 @@ extension PopoverView {
         guard token.count >= 2 else { return nil }
         return String(token.prefix(1))
       })
-    if buffer.count == 2,
-      let starter = buffer.first.map(String.init),
-      matrixStarters.contains(starter),
-      let urgency = buffer.last,
-      urgency.isNumber
+    if let hint = ShortcutSequenceBuffer.matrixHint(
+      for: buffer, matrixStarters: matrixStarters)
     {
-      return "Matrix input: (\(urgency), _)"
-    }
-    if buffer.count == 1, matrixStarters.contains(buffer) {
-      return "Matrix input: (_, _)"
+      return hint
     }
 
     let tagStarters: Set<String> = Set(

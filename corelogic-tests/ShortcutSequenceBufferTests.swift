@@ -85,14 +85,96 @@ final class ShortcutSequenceBufferTests: XCTestCase {
       .init(buffer: "", effect: .applyMatrixCoordinate(urgency: 3, importance: 7)))
   }
 
-  func testZeroIsAValidCoordinate() {
-    XCTAssertEqual(
-      advance(buffer: "m0", "0").effect,
-      .applyMatrixCoordinate(urgency: 0, importance: 0))
+  /// `(0, 0)` is the store's unset sentinel, not a position on the board, so
+  /// the one coordinate a user can name exactly has to mean removal. Typing it
+  /// used to produce a placement the store then silently discarded on save.
+  func testTypingTheOriginClearsThePlacement() {
+    XCTAssertEqual(advance(buffer: "m0", "0").effect, .clearMatrixCoordinate)
   }
 
-  /// A non-digit after the matrix starter is an ordinary two-key sequence, not
-  /// a broken coordinate.
+  // MARK: - Signs
+
+  /// The gap this closes. Coordinates run -9...9, but the sequence read one
+  /// numeric character per axis, so every keyboard placement was positive on
+  /// both — `Do` was reachable and the other three boxes were not.
+  func testAMinusBeforeTheFirstDigitMakesUrgencyNegative() {
+    XCTAssertEqual(
+      advance(buffer: "m", "-"),
+      .init(buffer: "m-", effect: .awaitSecondKey))
+    XCTAssertEqual(
+      advance(buffer: "m-", "3"),
+      .init(buffer: "m-3", effect: .reportMatrixUrgency("-3")))
+    XCTAssertEqual(
+      advance(buffer: "m-3", "5").effect,
+      .applyMatrixCoordinate(urgency: -3, importance: 5))
+  }
+
+  func testAMinusBeforeTheSecondDigitMakesImportanceNegative() {
+    XCTAssertEqual(
+      advance(buffer: "m3", "-"),
+      .init(buffer: "m3-", effect: .awaitSecondKey))
+    XCTAssertEqual(
+      advance(buffer: "m3-", "5").effect,
+      .applyMatrixCoordinate(urgency: 3, importance: -5))
+  }
+
+  func testBothAxesCanBeNegative() {
+    XCTAssertEqual(
+      advance(buffer: "m-4-", "4").effect,
+      .applyMatrixCoordinate(urgency: -4, importance: -4))
+  }
+
+  /// Each of the four boxes is reachable, which is the actual acceptance
+  /// criterion — the signs are only the means.
+  func testEveryQuadrantIsReachableByCoordinate() {
+    let placements: [(String, String, MatrixQuadrant)] = [
+      ("m5", "5", .doNow),
+      ("m-5", "5", .schedule),
+      ("m5-", "5", .delegate),
+      ("m-5-", "5", .eliminate),
+    ]
+    for (buffer, key, expected) in placements {
+      guard case .applyMatrixCoordinate(let urgency, let importance) =
+        advance(buffer: buffer, key).effect
+      else { return XCTFail("\(buffer)\(key) did not produce a coordinate") }
+      XCTAssertEqual(
+        MatrixGeometry.quadrant(urgency: urgency, importance: importance), expected)
+    }
+  }
+
+  func testALoneMinusThatIsNeverCompletedIsNotACoordinate() {
+    XCTAssertNil(advance(buffer: "m-", "t").effect.matrixCoordinate)
+  }
+
+  // MARK: - Quadrant letters
+
+  /// Two keystrokes per task is what makes triaging a backlog viable; four
+  /// digits with signs is for refining one.
+  func testAQuadrantLetterPlacesInOneGesture() {
+    XCTAssertEqual(
+      advance(buffer: "m", "d"),
+      .init(buffer: "", effect: .applyMatrixQuadrant(.doNow)))
+    XCTAssertEqual(advance(buffer: "m", "s").effect, .applyMatrixQuadrant(.schedule))
+    XCTAssertEqual(advance(buffer: "m", "g").effect, .applyMatrixQuadrant(.delegate))
+    XCTAssertEqual(advance(buffer: "m", "e").effect, .applyMatrixQuadrant(.eliminate))
+  }
+
+  /// A quadrant letter always clears the buffer, so a mistyped one cannot
+  /// swallow the following key.
+  func testAQuadrantLetterClearsTheBuffer() {
+    XCTAssertEqual(advance(buffer: "m", "d").buffer, "")
+  }
+
+  /// The letters only mean quadrants immediately after the starter. Once a
+  /// digit has been taken they are not coordinates and the sequence ends.
+  func testAQuadrantLetterAfterADigitIsNotAPlacement() {
+    XCTAssertEqual(
+      advance(buffer: "m3", "d"),
+      .init(buffer: "", effect: .attempt(sequence: "m3d")))
+  }
+
+  /// A non-digit, non-quadrant letter after the matrix starter is an ordinary
+  /// two-key sequence, not a broken coordinate.
   func testANonDigitAfterTheMatrixStarterCompletesNormally() {
     XCTAssertEqual(
       advance(buffer: "m", "t"),
@@ -126,5 +208,48 @@ final class ShortcutSequenceBufferTests: XCTestCase {
 
   func testBindingsAreTrimmedAndLowercasedBeforeUse() {
     XCTAssertEqual(ShortcutSequenceBuffer.starters(fromBindings: ["  DD "]), ["d"])
+  }
+
+}
+
+extension ShortcutSequenceBuffer.Effect {
+  /// The coordinate this effect carries, if it carries one. Only used to
+  /// assert the *absence* of one, where a full pattern match reads as noise.
+  var matrixCoordinate: (urgency: Double, importance: Double)? {
+    guard case .applyMatrixCoordinate(let urgency, let importance) = self else { return nil }
+    return (urgency, importance)
+  }
+}
+
+/// The status bar used to re-derive starters and re-check digits itself, so the
+/// hint and the parser were two readings of one buffer. These pin them together.
+final class ShortcutSequenceBufferHintTests: XCTestCase {
+
+  private func hint(_ buffer: String) -> String? {
+    ShortcutSequenceBuffer.matrixHint(for: buffer, matrixStarters: ["m"])
+  }
+
+  /// One keypress spells out the whole placement vocabulary, which is the
+  /// alternative to documenting it in permanent chrome.
+  func testTheStarterAloneNamesEveryQuadrantLetter() {
+    let text = hint("m")
+    XCTAssertNotNil(text)
+    for quadrant in MatrixQuadrant.allCases {
+      XCTAssertTrue(
+        text!.contains(quadrant.title),
+        "the hint should name \(quadrant.title)")
+    }
+  }
+
+  func testAPendingCoordinateShowsWhatHasBeenTakenSoFar() {
+    XCTAssertEqual(hint("m5"), "Matrix: (5, _)")
+    XCTAssertEqual(hint("m-5"), "Matrix: (-5, _)")
+    XCTAssertEqual(hint("m5-"), "Matrix: (5, -_)")
+    XCTAssertEqual(hint("m-"), "Matrix: (-_, _)")
+  }
+
+  func testABufferForAnotherSequenceHasNoMatrixHint() {
+    XCTAssertNil(hint("d"))
+    XCTAssertNil(hint(""))
   }
 }

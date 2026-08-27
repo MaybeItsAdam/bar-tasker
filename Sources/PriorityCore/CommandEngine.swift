@@ -174,9 +174,24 @@ public enum CommandEngine {
       label: "Remove tag", command: "untag ", preview: "Remove #tag from task", keybind: "gu",
       submitImmediately: false),
     .init(
+      label: "Matrix: Do", command: "matrix do",
+      preview: "Urgent and important", keybind: "md", submitImmediately: true),
+    .init(
+      label: "Matrix: Schedule", command: "matrix schedule",
+      preview: "Important, not urgent", keybind: "ms", submitImmediately: true),
+    .init(
+      label: "Matrix: Delegate", command: "matrix delegate",
+      preview: "Urgent, not important", keybind: "mg", submitImmediately: true),
+    .init(
+      label: "Matrix: Eliminate", command: "matrix eliminate",
+      preview: "Neither urgent nor important", keybind: "me", submitImmediately: true),
+    .init(
       label: "Set matrix coordinates", command: "matrix ",
-      preview: "Set urgency and importance (-9 to 9, e.g. matrix 5 -2)", keybind: nil,
+      preview: "Set urgency and importance (-9 to 9, e.g. matrix 5 -2)", keybind: "m",
       submitImmediately: false),
+    .init(
+      label: "Clear matrix placement", command: "clear matrix",
+      preview: "Take the task off the matrix", keybind: "m00", submitImmediately: true),
     .init(
       label: "Set urgency", command: "urgency ",
       preview: "Set Eisenhower urgency (-9 to 9, 0 is middle)", keybind: nil,
@@ -526,12 +541,25 @@ public enum CommandEngine {
     }
     if cmd.hasPrefix("matrix ") {
       let raw = String(cmd.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+      // `matrix do` has been in the README since the view shipped, but only the
+      // two-number form was ever parsed, so the documented spelling silently
+      // did nothing.
+      if let quadrant = MatrixQuadrant.named(raw) {
+        let point = quadrant.representativeCoordinate
+        return .matrix(point.urgency, point.importance)
+      }
+      if raw == "clear" || raw == "none" || raw == "off" {
+        return .matrix(0, 0)
+      }
       let parts = raw.split(separator: " ")
       if parts.count >= 2,
          let u = Double(parts[0]), u >= -9 && u <= 9,
          let i = Double(parts[1]), i >= -9 && i <= 9 {
         return .matrix(u, i)
       }
+    }
+    if cmd == "clear matrix" {
+      return .matrix(0, 0)
     }
     if cmd.hasPrefix("urgency ") {
       let raw = String(cmd.dropFirst(8)).trimmingCharacters(in: .whitespaces)
