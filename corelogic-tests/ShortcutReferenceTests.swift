@@ -40,7 +40,7 @@ final class ShortcutReferenceTests: XCTestCase {
     for entry in ShortcutReference.sections().flatMap(\.entries) {
       XCTAssertFalse(
         entry.keys.isEmpty,
-        "\(entry.action.rawValue) has binding \"\(entry.action.defaultBinding)\" and renders no keys")
+        "\(entry.id) has binding \"\(entry.action?.defaultBinding ?? "—")\" and renders no keys")
     }
   }
 
@@ -149,5 +149,61 @@ final class ShortcutReferenceTests: XCTestCase {
       option: false)
 
     XCTAssertEqual(token, ConfigurableShortcutAction.showShortcutReference.defaultBinding)
+  }
+}
+
+/// The reference lists everything, correctly, and everything is a lot to read
+/// when the question is "what can I do to this task, now".
+final class ShortcutReferenceContextTests: XCTestCase {
+
+  private func section(_ view: RootTaskView) -> ShortcutReference.Section? {
+    ShortcutReference.contextualSection(for: view)
+  }
+
+  func testEveryViewOffersSomething() {
+    for view in RootTaskView.allCases {
+      XCTAssertNotNil(section(view), "\(view.title) should say what applies in it")
+      XCTAssertFalse(section(view)!.entries.isEmpty)
+    }
+  }
+
+  func testTheSectionIsTitledAfterTheView() {
+    XCTAssertEqual(section(.eisenhower)?.title, "In Matrix")
+    XCTAssertEqual(section(.kanban)?.title, "In Kanban")
+  }
+
+  /// The matrix section is the reason this exists: four two-key placements that
+  /// are sub-forms of one binding, so they can never appear in the main list.
+  func testTheMatrixSectionNamesAllFourQuadrants() {
+    let entries = section(.eisenhower)?.entries ?? []
+    for quadrant in MatrixQuadrant.allCases {
+      XCTAssertTrue(
+        entries.contains { $0.title == "Place in \(quadrant.title)" },
+        "the matrix section should offer \(quadrant.title)")
+    }
+  }
+
+  func testTheQuadrantRowsCarryTheirKeys() {
+    let entries = section(.eisenhower)?.entries ?? []
+    let doNow = entries.first { $0.title == "Place in Do" }
+    XCTAssertEqual(doNow?.keys, ["M D"])
+    XCTAssertNil(doNow?.action, "a quadrant is a sub-form of a sequence, not its own action")
+  }
+
+  /// A rebound starter has to change the printed letters, or the reference is
+  /// back to describing someone else's keyboard.
+  func testARoundStarterIsReflectedInTheQuadrantKeys() {
+    let section = ShortcutReference.contextualSection(for: .eisenhower) { action in
+      action == .sequenceMatrixCoord ? "qq" : action.defaultBinding
+    }
+    let doNow = section?.entries.first { $0.title == "Place in Do" }
+    XCTAssertEqual(doNow?.keys, ["Q D"])
+  }
+
+  /// Contextual rows repeat actions from the main list by design, so they must
+  /// not be built by the function whose contract is one-appearance-each.
+  func testTheMainListIsUnaffectedByTheContextualSection() {
+    let titles = ShortcutReference.sections().map(\.title)
+    XCTAssertFalse(titles.contains { $0.hasPrefix("In ") })
   }
 }

@@ -16,7 +16,10 @@ import Foundation
 public enum ShortcutReference {
 
   public struct Entry: Identifiable, Equatable, Sendable {
-    public let action: ConfigurableShortcutAction
+    /// `nil` for a row that is not a rebindable action — the matrix quadrant
+    /// letters, for instance, are sub-forms of one sequence binding rather than
+    /// four separate actions.
+    public let action: ConfigurableShortcutAction?
     /// Display-ready alternatives — `["⌘↑", "⌘J"]` — in the order the binding
     /// lists them.
     public let keys: [String]
@@ -25,10 +28,10 @@ public enum ShortcutReference {
     /// or a Checkvist convention worth naming.
     public let note: String?
 
-    public var id: String { action.rawValue }
+    public var id: String { action?.rawValue ?? title }
 
     public init(
-      action: ConfigurableShortcutAction,
+      action: ConfigurableShortcutAction?,
       keys: [String],
       title: String,
       note: String?
@@ -79,6 +82,111 @@ public enum ShortcutReference {
           )
         }
       )
+    }
+  }
+
+  // MARK: - What applies right here
+
+  /// The actions worth naming first for the view currently on screen.
+  ///
+  /// The reference lists everything, correctly, and everything is a lot to read
+  /// when the question is "what can I do to this task, now". This is the answer
+  /// to that narrower question, shown above the full list rather than instead
+  /// of it.
+  ///
+  /// Kept separate from `sections(binding:)` on purpose: that function's
+  /// contract is that every action appears exactly once, and a contextual
+  /// section necessarily repeats some of them.
+  public static func contextualSection(
+    for view: RootTaskView,
+    binding: (ConfigurableShortcutAction) -> String = { $0.defaultBinding }
+  ) -> Section? {
+    let entries = contextualEntries(for: view, binding: binding)
+    guard !entries.isEmpty else { return nil }
+    return Section(title: "In \(view.title)", entries: entries)
+  }
+
+  private static func contextualEntries(
+    for view: RootTaskView,
+    binding: (ConfigurableShortcutAction) -> String
+  ) -> [Entry] {
+    func entry(_ action: ConfigurableShortcutAction) -> Entry {
+      Entry(
+        action: action,
+        keys: displayKeys(forBinding: binding(action)),
+        title: action.title,
+        note: notes[action]
+      )
+    }
+    /// A literal row for something that is not its own binding.
+    func literal(_ keys: String, _ title: String, _ note: String? = nil) -> Entry {
+      Entry(action: nil, keys: [display(token: keys)], title: title, note: note)
+    }
+
+    switch view {
+    case .eisenhower:
+      // Derived from the sequence's own binding, so a rebound starter still
+      // prints the right letters.
+      let starter = displayKeys(forBinding: binding(.sequenceMatrixCoord)).first?
+        .prefix(1).uppercased() ?? "M"
+      return MatrixQuadrant.allCases.map { quadrant in
+        Entry(
+          action: nil,
+          keys: ["\(starter) \(quadrantLetter(quadrant).uppercased())"],
+          title: "Place in \(quadrant.title)",
+          note: quadrantNote(quadrant)
+        )
+      } + [
+        literal("m00", "Take off the matrix"),
+        entry(.sequenceMatrixCoord),
+      ]
+
+    case .kanban:
+      return [
+        entry(.kanbanMoveLeft), entry(.kanbanMoveRight),
+        entry(.kanbanFocusLeft), entry(.kanbanFocusRight),
+        entry(.kanbanShowInAll),
+      ]
+
+    case .daily:
+      return [entry(.markDone), entry(.addSibling), entry(.editTaskAtEnd), entry(.deleteTask)]
+
+    case .priority:
+      return [
+        entry(.setPriorityRank), entry(.setAbsolutePriorityRank),
+        entry(.pushPriorityBack), entry(.clearPriority),
+        entry(.clearAbsolutePriority),
+      ]
+
+    case .due:
+      return [entry(.sequenceDue), entry(.sequenceDueToday), entry(.toggleHideFuture)]
+
+    case .tags:
+      return [entry(.sequenceTag), entry(.sequenceUntag)]
+
+    case .all:
+      return [
+        entry(.enterChildren), entry(.exitToParent),
+        entry(.zoomIntoTask), entry(.zoomOutOfTask),
+      ]
+    }
+  }
+
+  private static func quadrantLetter(_ quadrant: MatrixQuadrant) -> String {
+    switch quadrant {
+    case .doNow: return "d"
+    case .schedule: return "s"
+    case .delegate: return "g"
+    case .eliminate: return "e"
+    }
+  }
+
+  private static func quadrantNote(_ quadrant: MatrixQuadrant) -> String? {
+    switch quadrant {
+    case .doNow: return "Urgent and important"
+    case .schedule: return "Important, not urgent"
+    case .delegate: return "Urgent, not important — G, because D is Do"
+    case .eliminate: return "Neither"
     }
   }
 

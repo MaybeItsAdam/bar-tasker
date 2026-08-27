@@ -19,9 +19,16 @@ struct ShortcutReferenceOverlay: View {
   }
 
   private var sections: [ShortcutReference.Section] {
-    let all = ShortcutReference.sections { action in
+    let binding: (ConfigurableShortcutAction) -> String = { action in
       manager.preferences.shortcutBinding(for: action)
     }
+    // What applies right here, first. The full list still follows — this
+    // narrows the answer to "what can I do to this task, now" without hiding
+    // anything, and it costs no permanent chrome because it is only ever on
+    // screen while this overlay is.
+    let contextual = ShortcutReference.contextualSection(
+      for: manager.taskListViewModel.rootTaskView, binding: binding)
+    let all = (contextual.map { [$0] } ?? []) + ShortcutReference.sections(binding: binding)
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !trimmed.isEmpty else { return all }
     return all.compactMap { section in
