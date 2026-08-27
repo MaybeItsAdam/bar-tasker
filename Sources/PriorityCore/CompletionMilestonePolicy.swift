@@ -40,9 +40,27 @@ public enum CompletionMilestone: Equatable, Sendable {
   case dailyStreak(days: Int)
 
   /// Whether this occasion earns a post-mutation flourish on top of the inline
-  /// effect. Ordinary completions deliberately do not, so routine ticking stays
-  /// as fast as it is today.
-  public var earnsFlourish: Bool { self != .ordinary }
+  /// effect.
+  ///
+  /// Routine completions do not, so ordinary work stays as fast and as quiet as
+  /// it is today — and `dailyTicked` is routine, whatever its name suggests.
+  /// `milestone(for:…)` returns it for *every* tick of *every* daily, so a
+  /// flourish here fires several times each morning. The Strike preset draws
+  /// its flourish as a rule swept across the panel, which is deliberately the
+  /// same gesture as the row's own strikethrough — so what that actually looked
+  /// like was a second strikethrough appearing at a fixed point on the panel
+  /// after each tick, unrelated to the row you had just ticked.
+  ///
+  /// A tick keeps its inline celebration: the rule through the row, the glyph
+  /// pop, the tint. What it loses is the panel-wide echo of that same gesture.
+  /// The occasions that still earn one all say something a tick does not — a
+  /// streak, a tally, an emptied list.
+  public var earnsFlourish: Bool {
+    switch self {
+    case .ordinary, .dailyTicked: return false
+    case .dailyTally, .dailyStreak, .listCleared: return true
+    }
+  }
 
   /// How much room the flourish should take, `0...1`.
   ///

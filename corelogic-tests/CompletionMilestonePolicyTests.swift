@@ -105,12 +105,33 @@ final class CompletionMilestonePolicyTests: XCTestCase {
     )
   }
 
-  func testOnlyOrdinaryCompletionsSkipTheFlourish() {
+  /// The flourish is for occasions that say something the inline celebration
+  /// does not. A streak, a tally and an emptied list each carry a fact; a tick
+  /// carries none, and `milestone(for:…)` returns `dailyTicked` for every tick
+  /// of every daily — several times a morning.
+  ///
+  /// It mattered more than "one animation too many". Strike draws its flourish
+  /// as a rule swept across the panel, the same gesture as the row's own
+  /// strikethrough, so every tick put a second strikethrough on screen at a
+  /// fixed point unrelated to the row that caused it.
+  func testRoutineCompletionsSkipTheFlourish() {
     XCTAssertFalse(CompletionMilestone.ordinary.earnsFlourish)
+    XCTAssertFalse(
+      CompletionMilestone.dailyTicked.earnsFlourish,
+      "a daily tick is the most routine action in the app")
     XCTAssertTrue(CompletionMilestone.listCleared.earnsFlourish)
-    XCTAssertTrue(CompletionMilestone.dailyTicked.earnsFlourish)
     XCTAssertTrue(CompletionMilestone.dailyTally(count: 10).earnsFlourish)
     XCTAssertTrue(CompletionMilestone.dailyStreak(days: 4).earnsFlourish)
+  }
+
+  /// The day's first tick still earns its streak: `milestone(for:…)` checks the
+  /// streak *before* the `isDaily` short-circuit, so quietening the tick does
+  /// not quieten the one occasion a tick can legitimately mark.
+  func testTheDaysFirstTickStillEarnsItsStreak() {
+    let first = CompletionMilestonePolicy.milestone(
+      for: .daily(id: "habit"), remainingVisibleTaskCount: 4, ordinal: 1, streakDays: 9)
+    XCTAssertEqual(first, .dailyStreak(days: 9))
+    XCTAssertTrue(first.earnsFlourish)
   }
 
   // MARK: - Streaks
